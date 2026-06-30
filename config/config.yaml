@@ -1,0 +1,68 @@
+# Project parameters — single source of truth across all MS_ML notebooks.
+# Loaded in each notebook's params cell via yaml.safe_load + globals().update(),
+# so both `config.RAW_PROTEOMICS_PATH` and bare `RAW_PROTEOMICS_PATH` work.
+# Conflicting keys were unified to the MS_TargetML (most recent) values.
+
+# colors
+ACTIVE_C: '#008bfb'
+SILENT_C: '#ff0051'
+SERAC_C:                    # named palette: name -> hex (quote hex; '#' is a YAML comment otherwise)
+  azure: '#0EA5CE'
+  ember: '#E65D32'
+  terracotta: '#EEA090'
+  gold: '#E8B04B'
+  olive: '#74B24A'
+  sky_blue: '#A6C8E4'
+  paper: '#E3E0DA'
+
+# Files
+PATENTS_RAW: /mnt/c/Users/gtamo/Serac Biosciences Dropbox/Serac_team/5_Literature and Patents/0_Companies/Pharma_SmallMolecule_Patents_MASTER.xlsx
+DROPBOX_PROT: /mnt/c/Users/gtamo/Serac Biosciences Dropbox/Serac_team/12_Proteomics/5_Inventory/CDDVault/Proteomics/GiorgioTamo/
+DROPBOX_ML: /mnt/c/Users/gtamo/Serac Biosciences Dropbox/Serac_team/4_Data_Sciences/15_ML/
+DROPBOX_VALIDATION: /mnt/c/Users/gtamo/Serac Biosciences Dropbox/Serac_team/4_Data_Sciences/15_ML/Daniela/20260518_ML_selected_genes_DF.csv
+SRB_PNG_DIR: /home/gtamo/MS_ML/data/srb_png
+DOWNLOADS: /mnt/c/Users/gtamo/Downloads
+GTLOCAL: /mnt/c/Users/gtamo/Desktop/GT/
+
+RAW_PROTEOMICS_PATH: /home/gtamo/MS_ML/data/MS/20260424_Proteomics_Database_CSV_Export.csv
+CLEAN_PROTEOMICS_PATH: /home/gtamo/MS_ML/data/MS/20260429_CDD_MS_SilentActive.csv
+
+PX_20260520_CDDVAULT: /mnt/c/Users/gtamo/Serac Biosciences Dropbox/Serac_team/4_Data_Sciences/15_ML/Daniela/20260519_FBXOscreening/20260520_Proteomics_CDDVault_Export.csv
+PX_20260520_DB: /mnt/c/Users/gtamo/Serac Biosciences Dropbox/Serac_team/4_Data_Sciences/15_ML/Daniela/20260519_FBXOscreening/20260520_Proteomics_Database_CSV_Export.csv
+PX_20260529_CDDVAULT: /mnt/c/Users/gtamo/Serac Biosciences Dropbox/Serac_team/4_Data_Sciences/15_ML/Daniela/20260529_FBXOscreening/20260529_Proteomics_CDDVault_Export.csv
+PX_20260529_DB: /mnt/c/Users/gtamo/Serac Biosciences Dropbox/Serac_team/4_Data_Sciences/15_ML/Daniela/20260529_FBXOscreening/20260529_Proteomics_Database_CSV_Export.csv
+PX_SCREEN_LIB: data/MS/20260513_CDD_FBXO31_PxScreen_Source.csv
+
+FBX_DIR: /mnt/c/Users/gtamo/Serac Biosciences Dropbox/Serac_team/4_Data_Sciences/15_ML/Daniela/AdvantEidge Platform/Data_Prototype # data/advanteidge
+# tranches are auto-discovered: every date-named subdir (YYYYMMDD…) of FBX_DIR holding *FBX_<KIND>*.csv
+# is loaded + concatenated, and its plate date comes from the folder name — drop in a new folder, nothing to edit.
+PLATE_DATE_OVERRIDES: {}              # plate -> 'YYYY-MM-DD' for plates absent from source exports
+                                      # (Pw58/60/61/62 now resolve via the 0520 DB export -> 2026-05-20)
+
+
+OT_ROOT: data/external/opentarget
+PHARMA_PATENT_CSV: /home/gtamo/MS_ML/data/patent/20260528_pharma_sm.csv
+BMS_GENES: /home/gtamo/MS_ML/data/patent/BMS_Pipeline_genes.csv
+OT_CACHE: /home/gtamo/MS_ML/output/MS/opentargets_target_disease.parquet
+GENE_SAR_OUT: /home/gtamo/MS_ML/output/MS/20260529_geneSAR_R2_full_genome.csv
+MCS_CSV: output/MS/20260505_target_final_mcs.csv
+ML_MODEL_OUTPUT: output/ML/trained_models/20260617_select_genes # date should match that of last MS tranche
+
+PHARMA_R2_CUTOFF: 0.08
+CHEMLIB_OVERWRITE: false
+DFRAW_OVERWRITE: false
+CHEMLIB_PATH: /home/gtamo/MS_ML/data/chemical_libs/SERAC_lib.csv
+DFRAW_PATH: /home/gtamo/Px_interface/output/MS/df_raw.parquet
+MS_PATH: /home/gtamo/Px_interface/output/MS/MS.parquet
+
+IFACE_OVERWRITE: true                 # true -> rebuild + save the interface inputs; false -> load them from IFACE_DIR + free RAM
+IFACE_DIR: output/interface            # iface_df / compounds_df / meas / plate2date checkpoint for the 3D interface
+
+CONTAMINANTS: /home/gtamo/MS_ML/data/MS/20260611_contaminants.csv
+CONTROLS: 
+- SRB-0000692
+- SRB-0000615
+
+# disease association research:
+GENE_RESEARCH: /mnt/c/Users/gtamo/Desktop/GT/disease_association/20260623_10Kgenes_research.json
+FUNC_ENRICH_PATH: output/cell_signature/compound_function_enrichment.parquet

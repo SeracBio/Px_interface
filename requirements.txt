@@ -1,0 +1,17 @@
+# Px interface — pinned for a reproducible local environment (offline once installed).
+# Create a dedicated env, e.g.:  conda create -n px python=3.12 && pip install -r requirements.txt
+numpy==1.26.4
+pandas==3.0.2
+scipy==1.17.1
+scikit-learn==1.8.0
+matplotlib==3.7.5
+seaborn==0.13.2
+plotly==6.7.0
+rdkit==2025.9.3
+joblib==1.5.3
+tqdm==4.67.3
+PyYAML==6.0.3
+ipykernel==7.2.0
+requests==2.33.1
+# get_df (serac_df in the build cell) comes from the sibling CDD_Vault_API repo
+# (~/CDD_Vault_API/python on sys.path) — not a pip package.

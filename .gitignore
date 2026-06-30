@@ -1,0 +1,19 @@
+# Local-only data & outputs — never commit (chemistry data stays on this machine)
+data/
+output/
+interfaces/
+*.parquet
+*.iface
+srb_png/
+volcanoes_px/
+
+# Python / Jupyter
+__pycache__/
+*.py[cod]
+.ipynb_checkpoints/
+.venv/
+px/
+*.egg-info/
+
+# OS
+.DS_Store
