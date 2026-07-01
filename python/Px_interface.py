@@ -466,6 +466,7 @@ class OUTPUT():
 # ~~~~~~~~~~~~~~~~~~~~~~
 
 if __name__ == "__main__":
+    
     ap = argparse.ArgumentParser(description="Build/update the Px 3D interface.")
     ap.add_argument('--config', default='config/config.yaml', help="path to the YAML config")
     ap.add_argument('--output_dir', default='output', help="base dir for the HTML + volcanoes (interfaces/ is created under it)")
