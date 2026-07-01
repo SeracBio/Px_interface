@@ -15,6 +15,43 @@ _Durable, aggregate memory of this repo — read at session start. Aggregate onl
   `plate2date`) from source tables + FBX tranches and saves them to `IFACE_DIR`; `False` loads them
   and renders only (fast). Output dir switched by the `interface_output` knob (`GTLOCAL`/`DROPBOX_ML`).
 
+## Command-line build (`python/Px_interface.py`) — complete port (2026-06-30)
+Full `.py` port of the notebook so the interface rebuilds from the CLI without running cells. Runs
+end-to-end (data → combine → iface → render) and is verified on the synthetic fixture.
+Run: `python python/Px_interface.py --config config/config.yaml --output_dir <dir>`.
+- `--config` (default `config/config.yaml`); `--output_dir` (default `output`) is the base for the
+  HTML + volcanoes (`<output_dir>/interfaces/…`). The script self-locates repo root (`sys.path` +
+  `os.chdir`) so it works from any cwd.
+- **`PARAMS(config_path)`** → `load_params()` reads the YAML and sets every key as an attribute
+  (`params.DFRAW_PATH`, …); returns `self`.
+- **`DATA()`** — methods take `params`, store on `self`, return None: `load_chemical_lib_df` (serac_df:
+  CDD pull if `CHEMLIB_OVERWRITE` else cached csv; yes/no→1/0/NaN), `load_old_df` (df_raw + ms_score +
+  df_ms; MS), `load_new_df` (FBX MEASURE/MSSCORE/REPORT auto-discovered tranches, target2R2_df,
+  uc2compound), `get_contaminants_and_controls` (control_compounds, contaminants), `get_gene_research`
+  (gene_research list).
+- **`OUTPUT()`** — methods take `(data, params)`: `combine_datasets` (§0.3: measure/mscore/report +
+  plate2date; FBX source-of-truth on shared keys), `get_de_validated` (validated/devalidated
+  targets+compounds from serac_df Px_Ligase_dependent), `get_iface` (builds/saves the four render inputs
+  iface_df/compounds_df/meas/plate2date to `IFACE_DIR`; `IFACE_OVERWRITE=False` loads + frees heavy
+  frames; keeps only compounds present in serac_df), `build_interface(data, params, output_dir)` (calls
+  `fn.plot_3d_interface`, writes HTML + volcanoes + thumbnails under `output_dir`, caches panels.json).
+- Convention: classes in CLASSES section; MAIN wires params→data→output. Method bodies use `self.*` /
+  `data.*` / `params.*` — no bare globals (that's the #1 porting bug when moving a cell in).
+
+## Test fixture — `tests/make_synthetic.py` → `tmp/` (2026-06-30)
+Fast synthetic dataset mirroring the real schema (fake `C_`/`G_`/`PG_` ids, public SMILES `CCO`; built
+from real **headers only**) so the whole DATA + combine flow runs in ~1.3s vs the 24.6M-row real df_raw.
+`python tests/make_synthetic.py` writes `tmp/` and a **minimal leak-free `tmp/config.yaml`** (only the
+keys the pipeline reads, relative paths — no real Dropbox paths or control compound ids): df_raw/MS
+parquet, gene_sar.csv, 2 FBX tranches, chemlib (`SRB-#######` compounds, `CCO` smiles) + 5 proteomics
+source csvs, contaminants.csv, gene_research.json, ot_cache.parquet, pharma_patent/bms_genes csvs.
+Compounds use real `SRB-` format so `get_iface`'s `startswith('SRB-')` filter passes. `tmp/` is gitignored
+— regenerate after a clone/reboot. Full run incl. render (~20s):
+`python python/Px_interface.py --config tmp/config.yaml --output_dir tmp/out`. Known fidelity gaps (fine
+for structure tests): synthetic `df_raw.uniquecontrast` is per-compound not per (compound,plate);
+FBX/df_raw uniquecontrasts are disjoint so the MEASURE/REPORT source-of-truth dedup path isn't exercised
+(MS-SCORE's (gene,plate) dedup is); no real PNGs so thumbnails are RDKit-rendered from `CCO`.
+
 ## Interface conventions (the render engine)
 - **Axes:** x = R2 (SAR predictability, full-genome), y = OpenTargets association, z = MS score.
   Dots = one per gene over the mscore universe; missing R2 / association → 0.0 (still plotted).
@@ -32,6 +69,12 @@ _Durable, aggregate memory of this repo — read at session start. Aggregate onl
   **Selector** (orange) pins, a **Hide** (red) hides. Pinning a compound pins its target genes;
   hiding a **gene** drops its dot, hiding a **compound** drops only that compound (gates at
   `cmpAllowed`), its target genes stay. Hide supersedes pin. Click-to-select on the plot/panel.
+  - **Pins are gated by current filters (2026-06-30):** a pinned gene renders (dot/label/count) only
+    if it has ≥1 compound on the ticked plates+activities (`geneHasVisibleCompound` via new
+    `visiblePinSet()`); the pin chip is retained, so re-ticking the plate brings the dot back.
+    `applyRanges` now repaints the pin overlay (`buildPinTraceHook`) on every filter change, not just
+    pin/unpin. Note this also suppresses pins whose only compounds are filtered out by class/dep/conf/
+    lof/validation, and genes with no compounds at all (single-volcano/non-plate entries still count).
 - **Compound-validation filter** (COMPOUND FILTERS): FBXO31 dependent/independent tickboxes keyed to
   `validated_compounds`/`devalidated_compounds`; mirror of the target-centric Validation filter.
 - **Session save/load** (SESSION subsection): `.iface` JSON captures pins, hides, all filter
@@ -71,3 +114,13 @@ _Durable, aggregate memory of this repo — read at session start. Aggregate onl
   exists but older mtime than the stale render, so the mtime-only copy skipped them). Made the copy
   **size-aware** (refresh when `getsize(source) != getsize(dst)`) so it self-heals on the next
   `IFACE_OVERWRITE=true` rebuild — no manual deletion needed.
+- 2026-06-30 — started the CLI port `python/Px_interface.py` (PARAMS / DATA / OUTPUT / MAIN, `--config`
+  arg) covering the chemical-lib load, df_raw+MS load, FBX load, and the §0.3 combine. Added
+  `tests/make_synthetic.py` generating a fast synthetic fixture in `tmp/` (+ minimal leak-free config);
+  full DATA + combine_datasets flow runs end-to-end on it in ~1.3s. See the two new wiki sections above.
+- 2026-06-30 — **CLI port complete**: added `get_de_validated`, `get_iface`, and `build_interface` (the
+  render) to `Px_interface.py`; `--output_dir` CLI arg drives HTML + volcano output location. Extended
+  the fixture (SRB-format compounds, OT cache, pharma/BMS lists, gene_research, contaminants, +config
+  keys) so the whole pipeline incl. render runs on synthetic in ~20s. Added a serac_df-membership filter
+  to the interface build (compounds absent from serac_df excluded from the viz). Capped the render tqdm
+  bars at `ncols=80`. `tmp/` gitignored.

@@ -1,19 +1,30 @@
-# Local-only data & outputs — never commit (chemistry data stays on this machine)
+# Heavy / generated / private data — never committed (chemistry data stays on this machine)
 data/
 output/
+ml/
 interfaces/
+autoresearch/
+__MACOSX/
 *.parquet
 *.iface
 srb_png/
 volcanoes_px/
+tmp/
 
-# Python / Jupyter
+# Python build / cache artifacts
 __pycache__/
 *.py[cod]
+*.egg-info/
 .ipynb_checkpoints/
+
+# Virtual environments
 .venv/
 px/
-*.egg-info/
 
-# OS
+# Local editor / OS junk
 .DS_Store
+.vscode/
+.idea/
+
+# Claude Code per-machine settings
+.claude/settings.local.json

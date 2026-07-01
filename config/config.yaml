@@ -55,7 +55,7 @@ CHEMLIB_PATH: /home/gtamo/MS_ML/data/chemical_libs/SERAC_lib.csv
 DFRAW_PATH: /home/gtamo/Px_interface/output/MS/df_raw.parquet
 MS_PATH: /home/gtamo/Px_interface/output/MS/MS.parquet
 
-IFACE_OVERWRITE: true                 # true -> rebuild + save the interface inputs; false -> load them from IFACE_DIR + free RAM
+IFACE_OVERWRITE: true               # true -> rebuild + save the interface inputs; false -> load them from IFACE_DIR + free RAM
 IFACE_DIR: output/interface            # iface_df / compounds_df / meas / plate2date checkpoint for the 3D interface
 
 CONTAMINANTS: /home/gtamo/MS_ML/data/MS/20260611_contaminants.csv
@@ -65,4 +65,3 @@ CONTROLS:
 
 # disease association research:
 GENE_RESEARCH: /mnt/c/Users/gtamo/Desktop/GT/disease_association/20260623_10Kgenes_research.json
-FUNC_ENRICH_PATH: output/cell_signature/compound_function_enrichment.parquet

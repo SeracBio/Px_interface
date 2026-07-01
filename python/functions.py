@@ -1867,6 +1867,7 @@ _INTERFACE_INJECT = '''
     var updateCountHook = function() {};          // set in the range block; refreshes the protein/compound tally
     var exportCSVHook = function() { return null; };  // set in the range block; builds the selection CSV
     var applyPinHideHook = function() {};         // set in the pin/hide block; re-renders pins/hides from the arrays
+    var buildPinTraceHook = function() {};        // set in the pin block; repaints the pin overlay under current filters
 
     // A gene is "active" under the current Plate + Activity ticks if it has at
     // least one compound whose plate AND activity are both ticked. Used to grey
@@ -1890,6 +1891,15 @@ _INTERFACE_INJECT = '''
         }
       }
       return false;
+    }
+
+    // Pinned genes that currently have a compound on the ticked plates/activities.
+    // A pin with nothing visible on the selected plate is suppressed from the view
+    // (dot, label, count) — the chip stays, so re-ticking the plate brings it back.
+    function visiblePinSet() {
+      var out = {}, s = effectivePinSet();
+      Object.keys(s).forEach(function(g) { if (geneHasVisibleCompound(g)) out[g] = 1; });
+      return out;
     }
 
     // Collect this gene's DISTINCT visible compound ids (passing class+plate+activity)
@@ -2455,7 +2465,7 @@ _INTERFACE_INJECT = '''
             protSet[o.text[k]] = 1; collectVisibleCompounds(o.text[k], cmpSet);
           }
         });
-        Object.keys(effectivePinSet()).forEach(function(g) { protSet[g] = 1; collectVisibleCompounds(g, cmpSet); });
+        Object.keys(visiblePinSet()).forEach(function(g) { protSet[g] = 1; collectVisibleCompounds(g, cmpSet); });
         document.getElementById("rp-count").textContent =
           Object.keys(protSet).length + " proteins — " + Object.keys(cmpSet).length + " compounds";
       }
@@ -2507,7 +2517,7 @@ _INTERFACE_INJECT = '''
           cand = picked;
         }
         var _gx = window.__GENE_XYZ__ || {};   // pinned genes: always labelled (exempt from cap), same 11px font
-        Object.keys(pinSet).forEach(function(g) {
+        Object.keys(visiblePinSet()).forEach(function(g) {
           var c = _gx[g]; if (c) cand.push({x: c[0], y: c[1], z: c[2], text: g});
         });
         Plotly.relayout(gd, {"scene.annotations": cand.map(function(c) {
@@ -2565,6 +2575,7 @@ _INTERFACE_INJECT = '''
         // visible-traces + top-N-by-MS logic. Stash the masks/total so a later legend
         // toggle can re-derive labels without recomputing the range filter.
         lastMasks = masks; lastTotal = total;
+        buildPinTraceHook();   // refresh pin overlay: drop pins with no compound on the ticked plates
         Plotly.redraw(gd);
         refreshLabels();
         updateCount();
@@ -2626,20 +2637,28 @@ _INTERFACE_INJECT = '''
       var hideBoxEl = document.getElementById("hidden-box");
       if (!searchEl || !boxEl || PIN_TRACE == null) return;
 
-      function redrawPins() {
-        var genes = Object.keys(effectivePinSet());
+      // Mutate the pin overlay trace from the currently-VISIBLE pin set (pins with no
+      // compound on the ticked plates/activities are dropped). No redraw — the caller
+      // repaints, so applyRanges can fold this into its single Plotly.redraw.
+      function buildPinTrace() {
+        var genes = Object.keys(visiblePinSet());
         var xs = [], ys = [], zs = [], ts = [], cds = [], hov = [], cols = [];
         genes.forEach(function(g) {
           var c = GENE_XYZ[g]; if (!c) return;
           xs.push(c[0]); ys.push(c[1]); zs.push(c[2]); ts.push(g); cds.push(g); hov.push(g);
           cols.push(GENE_COLOR[g] || "#1D3557");   // colour by disease/pharma category
         });
-        if (typeof Plotly !== "undefined" && gd.data && gd.data[PIN_TRACE]) {
+        if (gd.data && gd.data[PIN_TRACE]) {
           var tr = gd.data[PIN_TRACE];
           tr.x = xs; tr.y = ys; tr.z = zs; tr.text = ts; tr.customdata = cds; tr.hovertext = hov;
           tr.marker.color = cols;
-          Plotly.redraw(gd);
+          return true;
         }
+        return false;
+      }
+      buildPinTraceHook = buildPinTrace;   // let applyRanges refresh pins on plate/activity changes
+      function redrawPins() {
+        if (typeof Plotly !== "undefined" && buildPinTrace()) Plotly.redraw(gd);
         refreshLabelsHook();   // pinned genes label via scene.annotations (dedup with range labels)
         updateCountHook();     // pinned proteins + their compounds enter the tally
       }
@@ -3229,7 +3248,7 @@ def plot_target_3d(
             # ----- serial path -----
             import matplotlib.pyplot as plt
             pbar = tqdm(total=n_expected, desc='volcanoes',
-                        unit='cmp', mininterval=0.5)
+                        unit='cmp', mininterval=0.5, ncols=80)
             for g, compound, i in tasks:
                 fig_v, ax_v = plt.subplots(
                     figsize=(volcano_size_px / 100, volcano_size_px / 100),
@@ -3280,7 +3299,7 @@ def plot_target_3d(
                     pbar.close()
 
             pbar = tqdm(total=n_expected, desc='volcanoes',
-                        unit='cmp', mininterval=0.5)
+                        unit='cmp', mininterval=0.5, ncols=80)
             with _tqdm_joblib(pbar):
                 results = Parallel(n_jobs=volcano_n_jobs, backend='loky')(
                     delayed(_volcano_render_worker)(
@@ -3821,7 +3840,7 @@ def plot_3d_interface(
                 cdf = cdf.sort_values(['gene', '_best', 'compound', 'logfc'],
                                       ascending=True)
                 for gene, gdf in tqdm(cdf.groupby('gene', sort=False), total=cdf['gene'].nunique(),
-                                      desc='compound panels', unit='gene', mininterval=0.5):
+                                      desc='compound panels', unit='gene', mininterval=0.5, ncols=80):
                     entries = [['__META__', '', _meta_str(gene), '', '', '']]
                     for compound, cg in gdf.groupby('compound', sort=False):
                         lab = str(compound)
@@ -3862,7 +3881,7 @@ def plot_3d_interface(
                 # one entry per (gene, compound), single volcano, no plate filter
                 cdf = cdf.sort_values(['gene', 'logfc'], ascending=[True, True])
                 for gene, grp in tqdm(cdf.groupby('gene', sort=False), total=cdf['gene'].nunique(),
-                                      desc='compound panels', unit='gene', mininterval=0.5):
+                                      desc='compound panels', unit='gene', mininterval=0.5, ncols=80):
                     entries = [['__META__', '', _meta_str(gene), '', '', '']]
                     for _, r in grp.iterrows():
                         lab = str(r['compound']) if pd.notna(r['compound']) else ''
@@ -3955,7 +3974,7 @@ def plot_3d_interface(
                 _existing = set(os.listdir(volcano_dir))
                 render = []
                 for (g, vk, ei, pi) in tqdm(tasks, desc='volcano cache scan',
-                                            unit='task', mininterval=0.5):
+                                            unit='task', mininterval=0.5, ncols=80):
                     fn_ = _vfname(g, vk)
                     if fn_ in _existing:
                         _set_volcano(g, ei, pi, fn_)   # base prepended client-side
@@ -3991,7 +4010,7 @@ def plot_3d_interface(
                 pass
             elif volcano_n_jobs == 1:
                 import matplotlib.pyplot as plt
-                pbar = tqdm(total=n_render, desc='volcanoes', unit='cmp', mininterval=0.5)
+                pbar = tqdm(total=n_render, desc='volcanoes', unit='cmp', mininterval=0.5, ncols=80)
                 for g, vk, ei, pi, fn_ in render:
                     try:
                         if _sig:
@@ -4044,7 +4063,7 @@ def plot_3d_interface(
                         _joblib.parallel.BatchCompletionCallBack = prev
                         pbar.close()
 
-                pbar = tqdm(total=n_render, desc='volcanoes', unit='cmp', mininterval=0.5)
+                pbar = tqdm(total=n_render, desc='volcanoes', unit='cmp', mininterval=0.5, ncols=80)
                 with _tqdm_joblib(pbar):
                     results = Parallel(n_jobs=volcano_n_jobs, backend='loky')(
                         delayed(_volcano_render_worker)(
