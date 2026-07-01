@@ -37,6 +37,9 @@ Run: `python python/Px_interface.py --config config/config.yaml --output_dir <di
   `fn.plot_3d_interface`, writes HTML + volcanoes + thumbnails under `output_dir`, caches panels.json).
 - Convention: classes in CLASSES section; MAIN wires params→data→output. Method bodies use `self.*` /
   `data.*` / `params.*` — no bare globals (that's the #1 porting bug when moving a cell in).
+- **Notebook debugging:** the notebook's params cell now does `from python.Px_interface import PARAMS,
+  DATA, OUTPUT` (+ plain `CONFIG` / `OUTPUT_DIR` vars, no argparse — `parse_args()` breaks under Jupyter)
+  and steps through the same classes, with `%autoreload 2` picking up edits to `Px_interface.py`.
 
 ## Test fixture — `tests/make_synthetic.py` → `tmp/` (2026-06-30)
 Fast synthetic dataset mirroring the real schema (fake `C_`/`G_`/`PG_` ids, public SMILES `CCO`; built
@@ -79,6 +82,13 @@ FBX/df_raw uniquecontrasts are disjoint so the MEASURE/REPORT source-of-truth de
   `validated_compounds`/`devalidated_compounds`; mirror of the target-centric Validation filter.
 - **Session save/load** (SESSION subsection): `.iface` JSON captures pins, hides, all filter
   tickboxes, the 3 range sliders, 2D/3D mode + camera; Load restores them faithfully.
+- **Shareable deep-link (URL hash, 2026-07-01):** the **Link** button in the SESSION subsection copies
+  a URL whose hash carries plates + pinned/hidden genes & compounds
+  (`#p=Pw50,Pw63&pg=…&pc=…&hg=…&hc=…`); opening such a URL reproduces that view on load. Reuses the
+  session `apply()` (a hash is just a partial session in the URL); a `p=` list means *exact* plate view
+  (only listed plates ticked). Hash chosen over query/path so it never hits the server (no round-trip,
+  stays out of access logs). Clipboard needs a secure context (HTTPS/localhost); else the URL is shown
+  in the note. Aimed at the planned FastAPI/EC2 webapp so `seracbio.com/…#p=…` links share a view.
 - **Download selection** → CSV (`Batch Molecule-Batch ID, genes, Plate, Activity`); batch id from
   `molecule_batch_id`, reconstructed from `uniquecontrast` (`split('_vs_')[0]`, dots→dashes) for
   experiments absent from `df_raw` (the `…WT/KO/Eval` plates).

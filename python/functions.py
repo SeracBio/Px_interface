@@ -1595,7 +1595,7 @@ _INTERFACE_INJECT = '''
   <div class="fp-group" id="download-group">
     <div id="dl-note"></div>
   </div>
-  <div class="fp-section fp-sec2" id="sec-session">Session<span class="sess-btns"><button id="sess-save-btn" title="Save the whole interface state (pins, hides, filters, ranges, view) to a .iface file">Save</button><button id="sess-load-btn" title="Load a previously saved .iface session and restore its state">Load</button></span></div>
+  <div class="fp-section fp-sec2" id="sec-session">Session<span class="sess-btns"><button id="sess-save-btn" title="Save the whole interface state (pins, hides, filters, ranges, view) to a .iface file">Save</button><button id="sess-load-btn" title="Load a previously saved .iface session and restore its state">Load</button><button id="sess-link-btn" title="Copy a shareable link (URL hash) that reproduces the current plates + pinned/hidden genes & compounds">Link</button></span></div>
   <div class="fp-group" id="session-group">
     <input type="file" id="sess-file" accept=".iface,.json,application/json" style="display:none">
     <div id="sess-note"></div>
@@ -1868,6 +1868,7 @@ _INTERFACE_INJECT = '''
     var exportCSVHook = function() { return null; };  // set in the range block; builds the selection CSV
     var applyPinHideHook = function() {};         // set in the pin/hide block; re-renders pins/hides from the arrays
     var buildPinTraceHook = function() {};        // set in the pin block; repaints the pin overlay under current filters
+    var applySessionHook = function() {};         // set in the session block; applies a (partial) session/hash state
 
     // A gene is "active" under the current Plate + Activity ticks if it has at
     // least one compound whose plate AND activity are both ticked. Used to grey
@@ -2984,6 +2985,59 @@ _INTERFACE_INJECT = '''
         };
         r.readAsText(file);
       });
+      applySessionHook = apply;   // expose the session-apply for the shareable-hash module below
+    })();
+
+    // --- shareable deep-link via URL hash: plates + pinned/hidden genes & compounds -------
+    // Reuses the session apply(): a hash is just a partial session in the URL. On load an
+    // incoming hash reproduces the view; the Link button copies the current state as a hash.
+    (function() {
+      var linkBtn = document.getElementById("sess-link-btn");
+      var note = document.getElementById("sess-note");
+      var enc = function(a) { return (a || []).map(encodeURIComponent).join(','); };
+      var dec = function(s) { return s ? s.split(',').map(decodeURIComponent).filter(Boolean) : []; };
+
+      function buildHash() {
+        var on = Object.keys(ticked).filter(function(p) { return ticked[p]; });
+        var parts = [];
+        if (on.length)              parts.push('p='  + enc(on));
+        if (pinnedGenes.length)     parts.push('pg=' + enc(pinnedGenes));
+        if (pinnedCompounds.length) parts.push('pc=' + enc(pinnedCompounds));
+        if (hiddenGenes.length)     parts.push('hg=' + enc(hiddenGenes));
+        if (hiddenCompounds.length) parts.push('hc=' + enc(hiddenCompounds));
+        return parts.join('&');
+      }
+
+      function parseHash() {
+        var h = (location.hash || '').replace(/^#/, '');
+        if (!h) return null;
+        var q = {};
+        h.split('&').forEach(function(kv) {
+          var i = kv.indexOf('='); if (i > 0) q[kv.slice(0, i)] = kv.slice(i + 1);
+        });
+        if (!('p' in q || 'pg' in q || 'pc' in q || 'hg' in q || 'hc' in q)) return null;  // unrecognised -> keep default view
+        var sess = {pinnedGenes: dec(q.pg), pinnedCompounds: dec(q.pc),
+                    hiddenGenes: dec(q.hg), hiddenCompounds: dec(q.hc)};
+        if ('p' in q) {   // exact plate view: only the listed plates ticked on
+          var want = {}; dec(q.p).forEach(function(p) { want[p] = 1; });
+          var plates = {}; Object.keys(ticked).forEach(function(p) { plates[p] = !!want[p]; });
+          sess.filters = {plates: plates};
+        }
+        return sess;
+      }
+
+      if (linkBtn) linkBtn.addEventListener("click", function() {
+        location.hash = buildHash();   // reflect current state in the address bar
+        var url = location.href;
+        if (navigator.clipboard && navigator.clipboard.writeText) {
+          navigator.clipboard.writeText(url).then(
+            function() { if (note) note.textContent = "✓ link copied"; },
+            function() { if (note) note.textContent = url; });
+        } else if (note) { note.textContent = url; }
+      });
+
+      var incoming = parseHash();   // reproduce an incoming deep-link on first load
+      if (incoming) applySessionHook(incoming);
     })();
   });
 </script>
