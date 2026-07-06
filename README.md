@@ -26,6 +26,32 @@ build branch. The load branch (`IFACE_OVERWRITE=False`) does not need it.
 
 ## Run
 
+### CLI
+
+The build/render pipeline runs headless via [`python/Px_interface.py`](python/Px_interface.py).
+The script self-locates the repo root and `chdir`s there, so it can be launched from **any**
+working directory:
+
+```bash
+conda activate px
+python python/Px_interface.py
+```
+
+| Flag | Default | Purpose |
+|---|---|---|
+| `--config` | `config/config.yaml` | path to the YAML config |
+| `--output_dir` | `output` | base dir for the HTML + volcanoes (`interfaces/` is created under it) |
+
+Whether it rebuilds or just loads is set by `IFACE_OVERWRITE` in the config (see below), same as the notebook.
+
+To write the interface into the Dropbox ML folder (quote the path — it contains spaces):
+
+```bash
+python python/Px_interface.py --config config/config.yaml --output_dir "/mnt/c/Users/gtamo/Serac Biosciences Dropbox/Serac_team/4_Data_Sciences/15_ML/"
+```
+
+### Notebook
+
 Launch Jupyter **from the repo root** (the notebook's first cell `%cd ../.` sets the
 working dir to the root so `import python.functions` resolves):
 
