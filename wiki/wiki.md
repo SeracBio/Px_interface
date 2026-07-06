@@ -104,6 +104,39 @@ FBX/df_raw uniquecontrasts are disjoint so the MEASURE/REPORT source-of-truth de
   copy runs only inside the panel build, so it needs an `IFACE_OVERWRITE=true` rebuild to take effect.
   The CDD structure fetcher is a separate repo: `CDD_Vault_API/python/download_cdd_structures.py`.
 
+## Deployment / webapp architecture (planned, 2026-07-01)
+Goal: serve the interface as an internal webapp on AWS, auto-refreshing when new FBX data lands.
+Decided direction (not yet built — RDS not functional; MVP starts with synthetic data + basic-auth):
+
+- **Serve vs rebuild are decoupled.** The render is slow (~15 min on real data) so it never runs in
+  a web request. A small always-on box **serves** pre-built static artifacts; a big box **rebuilds**
+  them occasionally and publishes to the serving box.
+- **Serving box:** one **t3.small** (~$15/mo, ~2 GB RAM is plenty for static). nginx serves the
+  rendered `interfaces/` dir off its **root EBS** volume. Storage is tiny (srb_png + volcanoes +
+  df_raw.parquet **< 1 GB**) → 20–30 GB gp3 root, **no separate data volume**; S3 as ~free backup.
+  The interface is fully self-contained static (HTML + `_data.js` + plotly + volcano SVGs + srb_png),
+  and deep-links work over any real HTTP server (the earlier 404 was a stray trailing slash).
+- **Rebuild (target, RDS phase):** ephemeral **Fargate/Batch** job (or start/stop EC2 2xlarge, ~32 GB
+  for the 24.6M-row df_raw in memory — RAM need is *transient*, not disk) triggered **weekly by an
+  EventBridge cron** (add an ETL-emitted event later for true push; RDS can't natively signal row
+  changes). Job reads FBX from RDS → runs the Px pipeline → writes `interfaces/` to **S3** → serving
+  t3.small `aws s3 sync`s to its nginx root (atomic swap). Compute cost ≈ pennies/mo (15 min/week);
+  total ≈ **$15–16/mo**. Requires `DATA.load_new_df` to gain an RDS source mode (config toggle, keep
+  the CSV/synthetic path for tests).
+- **Network + auth — chosen MVP (2026-07-03): private EC2 + FortiGate↔VPC Site-to-Site VPN + nginx
+  basic-auth.** A machine scan found **FortiClient VPN installed** → Serac likely already runs a
+  **FortiGate**, so reuse it: box has **no public IP**, reachable only over the IPsec tunnel = zero
+  public attack surface (most secure, no ~$72/mo AWS Client VPN). Behind the VPN a **shared password
+  (via 1Password)** is solid — you must already be on Serac's network to reach the login. TLS not
+  load-bearing (tunnel encrypts transit); self-signed cert for hygiene, no certbot (no public DNS).
+  Provision the box before the tunnel via **SSM Session Manager** (no inbound ports). **Eventual
+  upgrade:** M365 SSO (ALB + Entra OIDC) for per-user identity/audit — additive. Rejected as
+  *starting* points: public+basic-auth (weak for a remote team) and Tailscale (needs a client on
+  every device + still M365 for its own SSO). Open item: confirm FortiGate + who owns each S2S side.
+- **Privacy:** keep the MVP on **synthetic** data (fake ids, `CCO`); no public exposure means real
+  data would also be safe behind the VPN later, but gate real-data serving on M365 SSO for per-user
+  *audit*. RDS + EC2 sit in Serac's VPC, encrypted, non-public. Full runbook: `docs/aws_docs.md`.
+
 ## Decisions & conventions
 - All parameters/paths live in `config/config.yaml`; data paths are absolute (Dropbox/local).
 - Local-only data policy (see CLAUDE.md): chemistry data never leaves the machine.
@@ -134,3 +167,34 @@ FBX/df_raw uniquecontrasts are disjoint so the MEASURE/REPORT source-of-truth de
   keys) so the whole pipeline incl. render runs on synthetic in ~20s. Added a serac_df-membership filter
   to the interface build (compounds absent from serac_df excluded from the viz). Capped the render tqdm
   bars at `ncols=80`. `tmp/` gitignored.
+- 2026-07-01 — settled the **webapp deployment architecture** (see the new section above): decoupled
+  t3.small serving + ephemeral weekly rebuild → S3 → sync; auth is M365 SSO (ALB + Entra OIDC) with a
+  shared-password + synthetic-data basic-auth MVP to start. Next: write the t3.small EC2 + nginx +
+  basic-auth deploy steps targeting the synthetic build.
+- 2026-07-03 — **security direction changed to VPN-first**: machine scan found FortiClient VPN
+  installed → reuse a probable FortiGate via a **FortiGate↔VPC Site-to-Site VPN**, private EC2 (no
+  public IP) + nginx basic-auth (1Password). Drops the public endpoint entirely; M365 SSO becomes a
+  later per-user upgrade. Rewrote the `docs/aws_docs.md` runbook for the private/SSM-bootstrap variant.
+- 2026-07-03 — **AWS deployment underway** as a Terraform stack (Kiro-generated), in-repo at
+  `aws-vpn/` (moved there 2026-07-06; secrets kept out of git by `aws-vpn/.gitignore`). Region
+  `eu-north-1`, acct `620423424620`: AL2023 t3.micro private,
+  VPC endpoints (no NAT), self-signed TLS via SSM, S3+DynamoDB remote state. Steps 1–3 done (bootstrap
+  applied, state bucket + auth hash). **Step 4 apply held for IT** to confirm the VPC CIDR. Networking
+  finalised with IT: VPC moved off 10.x → **172.20.0.0/16** (10.x collides with Ridgeline + the
+  FortiClient pool `10.0.14.0/24`); VPN routes/SG now lists = office LAN `192.168.146.0/24` + pool
+  `10.0.14.0/24` so remote users reach it. Full detail + live progress tracker in `docs/aws_docs.md`.
+- 2026-07-06 — **AWS stack deployed & healthy** (`terraform apply` complete, 29 resources): EC2
+  `i-04965b616b4415778` @ `172.20.2.125`, VPN `vpn-02994f99eeacd59fd`. Box verified via
+  `aws-vpn/healthcheck.sh` = 6 ok / 1 warn (VPN tunnels 0/2, expected) / 0 fail — nginx active, SSM
+  reachable, 4/4 endpoints up. **Only remaining milestone: IT configures the FortiGate side** (route
+  `172.20.0.0/16` over the tunnel, local selectors incl. both `192.168.146.0/24` + `10.0.14.0/24`),
+  then upload the interface via SSM + browser-test `https://172.20.2.125/`. Apply hit four fixable
+  snags (all logged in `docs/aws_docs.md`): Ctrl+C state-checksum mismatch, orphaned ssm/ec2messages
+  endpoints (imported), AL2023 needing ≥30 GB root, and a boot-time race where `user_data` ran before
+  the endpoints were ready (fixed by re-running the boot script; retry-loop hardening recommended).
+- 2026-07-06 — validated the stack against the AWS contact's hybrid-connectivity reference — our
+  single-VPC **VGW** S2S design matches it (static routing acceptable; hybrid DNS/Route 53 Resolver
+  not needed until name-based or RDS-by-name access). Added **boot-retry hardening** to `user_data`
+  and **CloudWatch VPN tunnel alarms** (`monitoring.tf`, SNS `vpn-project-alarms`) — both pending the
+  next `terraform apply` (which replaces the EC2). Open Qs for AWS contact: BGP vs static, and whether
+  to attach to an existing Transit Gateway / shared-network landing zone.

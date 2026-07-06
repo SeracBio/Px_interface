@@ -1,0 +1,34 @@
+# Copy this file to terraform.tfvars and fill in your values.
+# terraform.tfvars is gitignored to avoid leaking sensitive data.
+
+aws_region   = "eu-north-1"
+project_name = "vpn-project"
+
+# Networking
+vpc_cidr            = "10.0.0.0/16"
+public_subnet_cidr  = "10.0.1.0/24"
+private_subnet_cidr = "10.0.2.0/24"
+availability_zone   = "eu-north-1a"
+
+# Customer Gateway — public IP of your on-premises VPN device
+customer_gateway_ip      = "203.0.113.1"   # replace with real IP
+customer_gateway_bgp_asn = 65000
+
+# On-premises network reachable over the VPN
+on_premises_cidr = "192.168.0.0/24"
+
+# "static" or "dynamic" (BGP)
+vpn_routing_type = "static"
+
+# EC2
+ec2_instance_type = "t3.micro"
+ec2_ami_id        = ""   # leave empty to use latest Amazon Linux 2023
+key_pair_name     = ""   # no SSH needed — use SSM Session Manager
+
+# CIDR allowed to reach the webapp over the VPN (HTTP/HTTPS/ICMP)
+# Should match on_premises_cidr in most cases
+allowed_cidr = "192.168.0.0/24"
+
+# DO NOT set webapp_htpasswd_hash here — inject at apply time via env var:
+#   export TF_VAR_webapp_htpasswd_hash='serac_user:$2y$10$...'
+#   terraform apply
