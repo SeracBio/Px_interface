@@ -1553,7 +1553,7 @@ _INTERFACE_INJECT = '''
     <div class="disp-row">
       <span class="disp-label">Axes</span>
       <span class="disp-toggle" id="disp-toggle" role="switch" title="3D = SAR predictability × association × MS score; 2D = a flat association × MS view (SAR axis hidden; SAR range slider still filters).">
-        <span class="seg seg2d" data-mode="2D">2D</span><span class="seg seg3d active" data-mode="3D">3D</span>
+        <span class="seg seg2d active" data-mode="2D">2D</span><span class="seg seg3d" data-mode="3D">3D</span>
       </span>
     </div>
   </div>
@@ -1825,6 +1825,9 @@ _INTERFACE_INJECT = '''
                     : !tg.querySelector(".seg2d").classList.contains("active"));
       });
       setMode2DHook = setMode;   // let session-load switch the view
+      // Default view = 2D (orthographic, centred) on load; session/hash load can still override.
+      // Poll until the plot has rendered (_fullLayout) so the relayout lands.
+      (function initTwoD() { if (gd._fullLayout) setMode(true); else setTimeout(initTwoD, 30); })();
     })();
 
     var pinned = false;
@@ -4294,9 +4297,15 @@ def plot_3d_interface(
               f'gene labels shown while ≤ {ranges_cfg["labelMax"]} in range '
               f'(drag handles to widen/narrow)')
 
+    # The #filter-panel is a fixed ~460px overlay pinned top-left. Give the gl3d scene a
+    # right-hand paper domain (not a left margin) so the whole scene — axes, ticks, grid —
+    # shifts clear of the panel intact; a left margin instead squeezes the scene and clips
+    # the vertical axis. 460 = 12 offset + 415 width + padding/border + gap.
+    _panel_frac = min(0.5, 460.0 / (width or 1500))
     fig.update_layout(
         height=height, width=width, title=title,
         scene=dict(
+            domain=dict(x=[_panel_frac, 1.0]),
             xaxis=dict(title=x_label, showbackground=False,
                        gridcolor='lightgrey', zeroline=False),
             yaxis=dict(title=y_label, showbackground=False,

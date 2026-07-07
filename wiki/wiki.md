@@ -92,8 +92,16 @@ FBX/df_raw uniquecontrasts are disjoint so the MEASURE/REPORT source-of-truth de
 - **Download selection** → CSV (`Batch Molecule-Batch ID, genes, Plate, Activity`); batch id from
   `molecule_batch_id`, reconstructed from `uniquecontrast` (`split('_vs_')[0]`, dots→dashes) for
   experiments absent from `df_raw` (the `…WT/KO/Eval` plates).
-- **Filter panel** fixed `width: 415px` so chip boxes wrap (3 compound chips per row). Labels:
-  `labelMax` floor 800, sampled evenly across the MS range (not top-N) so they spread across the cloud.
+- **Filter panel** fixed `width: 415px` (a `position:fixed` overlay, top-left) so chip boxes wrap
+  (3 compound chips per row). Labels: `labelMax` floor 800, sampled evenly across the MS range (not
+  top-N) so they spread across the cloud.
+- **Default view is 2D + plot cleared of the panel (2026-07-06, refined 2026-07-07):** the Axes toggle
+  starts on **2D** (`seg2d active` + an on-load `setMode(true)` via `initTwoD`), and the scene is shifted
+  clear of the fixed ~460px `#filter-panel` via **`scene.domain.x=[frac, 1]`** (with `margin=dict(l=0,…)`),
+  where `frac = min(0.5, 460/width)` (~0.31 at the default `width=1500`). This moves the *whole* gl3d scene
+  — axes, ticks, grid — to the right of the panel intact. **Do not use `margin.l` for this:** a left margin
+  squeezes the scene and clips the vertical (MS-score) axis (tried l=440→600, axis dropped off). Verified
+  with the headless-chromium QA below on synthetic. Session/hash loads still override the 2D/3D mode.
 - **Thumbnails:** source PNGs preferred (copied to `srb_png/` next to the HTML), else RDKit from
   SMILES. Source dir is `config.SRB_PNG_DIR` (`/home/gtamo/MS_ML/data/srb_png`, ~12.5K PNGs),
   **passed explicitly as `png_dir=SRB_PNG_DIR` in the cell-20 `plot_3d_interface` call** — the
@@ -136,6 +144,20 @@ Decided direction (not yet built — RDS not functional; MVP starts with synthet
 - **Privacy:** keep the MVP on **synthetic** data (fake ids, `CCO`); no public exposure means real
   data would also be safe behind the VPN later, but gate real-data serving on M365 SSO for per-user
   *audit*. RDS + EC2 sit in Serac's VPC, encrypted, non-public. Full runbook: `docs/aws_docs.md`.
+
+## Local visual QA — headless chromium screenshots (2026-07-06)
+To visually check the rendered interface without a browser, screenshot it with the **cached Playwright
+chromium** (no install needed): `~/.cache/ms-playwright/chromium-1223/chrome-linux64/chrome`.
+- **Serve over HTTP** (the deferred `_data.js` won't load over `file://`): from the interface dir,
+  `python -m http.server 8137 --bind 127.0.0.1`.
+- **Shoot with software WebGL** (Scatter3d — incl. the 2D ortho view — needs WebGL; `--disable-gpu`
+  breaks it): `chrome --headless=new --no-sandbox --use-gl=angle --use-angle=swiftshader
+  --enable-unsafe-swiftshader --ignore-gpu-blocklist --window-size=1900,1000
+  --virtual-time-budget=15000 --screenshot=/tmp/x.png http://127.0.0.1:8137/Serac_Px_interface.html`.
+- **SYNTHETIC RENDERS ONLY.** Never screenshot a real-data render (Desktop/output dirs) — the PNG
+  would carry structures/thumbnails and cross the wire. Screenshot `tmp/out*/interfaces/…` only.
+- Caveat: some saved synthetic renders come up `0 proteins — 0 compounds` (empty dots), so they show
+  layout/axes but not point framing — re-render fresh if dot placement needs checking.
 
 ## Decisions & conventions
 - All parameters/paths live in `config/config.yaml`; data paths are absolute (Dropbox/local).
