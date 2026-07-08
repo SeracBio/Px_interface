@@ -220,3 +220,11 @@ chromium** (no install needed): `~/.cache/ms-playwright/chromium-1223/chrome-lin
   and **CloudWatch VPN tunnel alarms** (`monitoring.tf`, SNS `vpn-project-alarms`) — both pending the
   next `terraform apply` (which replaces the EC2). Open Qs for AWS contact: BGP vs static, and whether
   to attach to an existing Transit Gateway / shared-network landing zone.
+- 2026-07-08 — **VPN live & end-to-end verified.** IT finished the FortiGate side; `healthcheck.sh` now
+  reads **7 ok / 0 fail, tunnels 1/2 UP** (1/2 is normal: one active + one standby). From a remote laptop
+  on FortiClient, `https://172.20.2.125/` loaded the placeholder through the tunnel behind `serac_user` +
+  shared password — full chain confirmed (FortiClient → FortiGate → S2S → VPC → private EC2 → nginx). **Only
+  remaining functional milestone: Step 6** — upload the real (2D-default) interface HTML to `/var/www/webapp/`
+  (transfer via S3-gateway-endpoint or base64-over-SSM; scp/SSH closed by design). Do **not** `terraform apply`
+  before Step 6 — the staged boot-retry + `monitoring.tf` changes replace the EC2 and wipe the hand-installed
+  nginx + any upload.

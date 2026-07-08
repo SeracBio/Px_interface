@@ -247,17 +247,22 @@ runbook is in git history if ever needed.
 - [x] **Step 4** — `terraform apply` **complete** (29 resources). EC2 `i-04965b616b4415778` @
       `172.20.2.125`; VPN `vpn-02994f99eeacd59fd` (tunnels `13.50.154.69` / `13.61.135.201`).
       Box is **healthy**: nginx active, TLS pulled, SSM reachable, 4/4 endpoints available.
-- [~] **Step 5** — handing tunnel config to IT (best: AWS Console → Download Configuration →
-      Fortinet FortiGate, **FortiOS 6.4.4+ (GUI)**, sample type **recommended/IKEv2**). FortiGate must
-      route **`172.20.0.0/16`** over the tunnel with local selectors **both** `192.168.146.0/24` and
-      `10.0.14.0/24`; static routing, IKEv2/AES-256/SHA-256/DH14. PSKs via `terraform output -raw` /
-      Console (never in the repo). Tunnels read `0/2 UP` until IT's side is configured.
-- [ ] **Steps 6–7** — upload synthetic interface (via SSM) + browser test once the tunnel is up.
+- [x] **Step 5 — DONE (2026-07-08):** IT configured the FortiGate side; **tunnel is UP** (`1/2`, which is
+      normal — AWS runs one active + one standby, so a single UP tunnel = a working VPN). Config was
+      Fortinet FortiGate FortiOS 6.4.4+ IKEv2, routing `172.20.0.0/16` with local selectors both
+      `192.168.146.0/24` and `10.0.14.0/24`.
+- [x] **Step 7 connectivity — DONE (2026-07-08):** from a remote laptop on FortiClient, `https://172.20.2.125`
+      loaded the placeholder page through the tunnel, prompting for `serac_user` + shared password. Full chain
+      verified: FortiClient → FortiGate → S2S tunnel → VPC → private EC2 → nginx HTTPS + basic-auth. No public
+      exposure. (Cosmetic: placeholder shows a mojibake em-dash `â€"` — no `<meta charset>` in the placeholder;
+      goes away once the real interface is uploaded. "Not secure" = self-signed cert, expected.)
+- [ ] **Step 6 — pending:** upload the real (2D-default) interface HTML to `/var/www/webapp/` (needs a transfer
+      method: S3-via-gateway-endpoint or base64-over-SSM; SSH/scp is closed by design).
 
 **Health check:** `bash aws-vpn/healthcheck.sh` — read-only (AWS `describe` + one SSM
 `systemctl is-active nginx`); auto-discovers IDs from Terraform outputs; checks EC2 state/status, SSM
-reachability, all 4 endpoints, VPN connection + tunnel UP count, and nginx. Current: **6 ok / 1 warn
-(tunnels 0/2, expected) / 0 fail**. Re-run after IT's config — tunnels should flip to UP.
+reachability, all 4 endpoints, VPN connection + tunnel UP count, and nginx. Current (2026-07-08): **7 ok /
+0 warn / 0 fail — tunnels 1/2 UP.**
 
 **Note — two VPCs in the account is normal:** `vpn-project-vpc` (`172.20.0.0/16`, ours) + the
 unnamed AWS **default VPC** (`172.31.0.0/16`, auto-created per region, empty, free). Leave it, or
