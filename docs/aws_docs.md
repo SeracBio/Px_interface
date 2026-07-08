@@ -284,8 +284,26 @@ delete for hygiene.
   `dnf` + `aws ssm get-parameter` calls in a retry/wait loop so boot self-heals.
 
 ## TODO / pending
-- [ ] IT: confirm VPC `172.20.0.0/16` is free + route `192.168.146.0/24` and `10.0.14.0/24` over the tunnel.
-- [ ] Run Step 4 apply; hand tunnel outputs to IT (Step 5).
+**Done:** bootstrap + apply (29 resources), IT's FortiGate side, tunnel UP, end-to-end browser test.
+Next-session pickup:
+- [ ] **Step 6 — upload the real interface.** Re-render locally first (`python python/Px_interface.py
+      --config config/config.yaml --output_dir output` — picks up the 2D-default + `scene.domain.x` panel-
+      clearance fix). Then get the HTML onto the box (SSH/scp closed by design):
+      - **Option 1 (recommended):** S3 bucket in `eu-north-1` + `s3:GetObject` on the instance role →
+        on the box `aws s3 cp s3://…/Serac_Px_interface.html /var/www/webapp/` (private via S3 gateway
+        endpoint; scales to a large HTML; becomes the future publish path). *Additive TF change, but
+        applying it also pulls in the staged EC2 replacement — see warning below.*
+      - **Option 2:** base64-over-SSM (`aws ssm send-command`) — no IAM change, but ~100 KB payload cap,
+        so only for a small HTML.
+- [ ] ⚠️ **Before any `terraform apply`:** the staged `monitoring.tf` + boot-retry `user_data` changes
+      REPLACE the EC2 (`user_data_replace_on_change`), wiping the hand-installed nginx and any uploaded
+      interface. Plan for one deliberate re-provision, then re-upload. Don't apply casually.
+- [ ] Optional: silence the browser "Not secure" warning — `terraform output tls_cert_pem >
+      serac-internal.crt`, install as a trusted root on each machine (Step 7 in `aws-vpn/instructions.md`).
 - [ ] Later: M365 SSO (ALB + Entra OIDC) for per-user identity/audit; gate real-data serving on it.
 - [ ] RDS phase: `DATA.load_new_df` RDS source mode; Fargate/Batch rebuild job; EventBridge trigger;
       S3 publish + serving-box sync.
+
+**Key IDs (region `eu-north-1`):** EC2 `i-04965b616b4415778` @ `172.20.2.125`; VPN
+`vpn-02994f99eeacd59fd`. Health check any time: `bash aws-vpn/healthcheck.sh`. SSM shell:
+`aws ssm start-session --target i-04965b616b4415778 --region eu-north-1`.
