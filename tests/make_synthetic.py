@@ -70,8 +70,11 @@ def make_fbx_gene_sar(out, rng):
                 meas.append({'id': next(rid), 'pg': PG_OF[g], 'genes': g, 'uniquecontrast': uc,
                              'logfc': lf, 'pvalue': pv, 'adjpval': float(min(pv * rng.uniform(1, 5), 1.0)),
                              'significant': int(pv < 0.05 and abs(lf) > 1), 'plate': pl})
+                # realistic MS score: bottom-heavy cluster (most 0-25) with a rare high outlier,
+                # so the auto z-axis range mimics real data (~0-210) instead of a flat 0-100.
+                _ms = float(min(rng.uniform(150, 210) if rng.uniform() < 0.02 else rng.exponential(12), 212))
                 msc.append({'id': next(rid), 'uniquecontrast': uc, 'plate': pl, 'genes': g, 'pg': PG_OF[g],
-                            'ms_score': float(rng.uniform(0, 100)), 'ms_score_percent': float(rng.uniform(0, 1)),
+                            'ms_score': _ms, 'ms_score_percent': float(rng.uniform(0, 1)),
                             'activity': rng.choice(ACTS), 'association_score': float(rng.uniform(0, 1)),
                             'genetic_score': float(rng.uniform(0, 1)), 'literature_score': float(rng.uniform(0, 1))})
         pd.DataFrame(meas).to_csv(os.path.join(d, f'{date}_FBX_MEASURE.csv'), index=False)

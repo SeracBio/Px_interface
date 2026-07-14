@@ -1327,6 +1327,14 @@ _INTERFACE_INJECT = '''
   #hover-img .volcano .vobj { width: 360px; height: 360px; max-width: 100%;
                               border: 1px solid #eee; border-radius: 4px; display: block;
                               margin: 0 auto; }
+  /* Pin the Plotly plot to a bounded box to the RIGHT of the filter panel and ABOVE the
+     range panel, instead of letting the responsive plot fill the whole window. This makes
+     the plot fit + stay centred on ANY viewport (incl. short laptop screens) — a window-
+     filling plot overflowed vertically on short viewports. left clears the 415px panel;
+     bottom clears the range panel. Plotly (responsive) resizes to fill this box. */
+  .plotly-graph-div { position: fixed !important; left: 455px !important; right: 8px !important;
+                      top: 8px !important; bottom: 205px !important;
+                      width: auto !important; height: auto !important; }
   /* Plate filter — tick boxes choosing which plates' compounds + volcanoes show. */
   #filter-panel { position: fixed; top: 12px; left: 12px; z-index: 9998;
                   background: white; border: 1px solid #bbb; border-radius: 6px;
@@ -1803,11 +1811,10 @@ _INTERFACE_INJECT = '''
       if (!tg || !gd || typeof Plotly === "undefined") return;
       var CAM3D = {eye: {x: 1.25, y: 1.25, z: 1.25}, up: {x: 0, y: 0, z: 1},
                    center: {x: 0, y: 0, z: 0}, projection: {type: "perspective"}};
-      // pre-panned toward screen-centre: eye & center share the y/z offset so the look
-      // stays axis-aligned (flat); without the shift the ortho view sits bottom-right.
-      // User can drag further from here (dragmode 'pan').
-      var CAM2D = {eye: {x: 2.5, y: 0.30, z: -0.35}, up: {x: 0, y: 0, z: 1},
-                   center: {x: 0, y: 0.30, z: -0.35}, projection: {type: "orthographic"}};
+      // Orthographic view; z=-0.40 (eye & center) looks slightly below centre so the plot's top
+      // rises to align with the panel top. Viewport-independent, so it holds on any screen.
+      var CAM2D = {eye: {x: 2.5, y: 0.0, z: -0.40}, up: {x: 0, y: 0, z: 1},
+                   center: {x: 0, y: 0.0, z: -0.40}, projection: {type: "orthographic"}};
       function setMode(two) {
         tg.querySelector(".seg2d").classList.toggle("active", two);
         tg.querySelector(".seg3d").classList.toggle("active", !two);
@@ -1821,13 +1828,50 @@ _INTERFACE_INJECT = '''
       }
       tg.addEventListener("click", function (e) {
         var seg = e.target.closest(".seg");
-        setMode(seg ? seg.getAttribute("data-mode") === "2D"
-                    : !tg.querySelector(".seg2d").classList.contains("active"));
+        var two = seg ? seg.getAttribute("data-mode") === "2D"
+                      : !tg.querySelector(".seg2d").classList.contains("active");
+        setMode(two);
+        if (two) fitBox();   // re-apply the 2D camera pan / domain / legend after the mode switch
       });
       setMode2DHook = setMode;   // let session-load switch the view
+      // The plot div starts at Plotly's inline size; the CSS box (.plotly-graph-div) then
+      // resizes it — fire a resize so Plotly fills the box, and again on every window resize.
+      // fitBox left-aligns the square scene at the box edge (next to the panel), pans the data
+      // cube left toward the panel, and places the legend just right of the data (see fitBox).
+      function fitBox() {
+        if (!(window.Plotly && Plotly.Plots)) return;
+        Plotly.Plots.resize(gd);
+        var w = gd.clientWidth, h = gd.clientHeight;
+        if (!(w && h)) return;
+        // Square domain (fx = h/w) left-aligns the plot in the box, right next to the panel;
+        // aspectratio 1.15 fills the gl3d scene's internal padding. The gl3d scene still reserves
+        // a large internal left margin (the "MS score" title strip) that can't be removed with
+        // domain tricks, so the DATA floats ~200px from the panel by default. A camera pan
+        // (camera.y) slides the data cube left inside the box (safely clipped at the panel edge).
+        // The pan is height-adaptive: bigger plots (tall boxes) have a wider gl3d margin so we
+        // can pan more; small/short plots have almost none, so we nudge right (negative) to keep
+        // the title from clipping. Legend tracks the data's right edge (which shifts with the pan)
+        // so panel|plot|legend stay a tight group; capped so its text never runs off-screen.
+        var fx  = Math.min(1, h / w);
+        var pan = Math.max(-0.05, Math.min(0.12, (h - 640) * 0.0007));
+        var legx = Math.min(fx * 0.90 - pan * 0.30 + 0.02, (w - 235) / w);
+        var relayout = {
+          "scene.domain.x": [0, fx],
+          "scene.aspectmode": "manual", "scene.aspectratio": {x: 1, y: 1.15, z: 1.15},
+          "legend.x": legx, "legend.xanchor": "left", "legend.y": 1, "legend.yanchor": "top"};
+        // The pan is a 2D-only camera move; only apply it in 2D so a window resize in 3D
+        // doesn't clobber the turntable camera with the flat ortho view.
+        if (tg.querySelector(".seg2d").classList.contains("active")) {
+          relayout["scene.camera.eye"] = {x: 2.5, y: pan, z: -0.40};
+          relayout["scene.camera.center"] = {x: 0, y: pan, z: -0.40};
+        }
+        Plotly.relayout(gd, relayout);
+      }
+      window.addEventListener("resize", fitBox);
       // Default view = 2D (orthographic, centred) on load; session/hash load can still override.
-      // Poll until the plot has rendered (_fullLayout) so the relayout lands.
-      (function initTwoD() { if (gd._fullLayout) setMode(true); else setTimeout(initTwoD, 30); })();
+      // Poll until the plot has rendered (_fullLayout) so the relayout + resize land.
+      (function initTwoD() { if (gd._fullLayout) { setMode(true); fitBox(); }
+                             else setTimeout(initTwoD, 30); })();
     })();
 
     var pinned = false;
@@ -4297,15 +4341,13 @@ def plot_3d_interface(
               f'gene labels shown while ≤ {ranges_cfg["labelMax"]} in range '
               f'(drag handles to widen/narrow)')
 
-    # The #filter-panel is a fixed ~460px overlay pinned top-left. Give the gl3d scene a
-    # right-hand paper domain (not a left margin) so the whole scene — axes, ticks, grid —
-    # shifts clear of the panel intact; a left margin instead squeezes the scene and clips
-    # the vertical axis. 460 = 12 offset + 415 width + padding/border + gap.
-    _panel_frac = min(0.5, 460.0 / (width or 1500))
+    # Plot placement/sizing is handled by CSS: `.plotly-graph-div` is pinned to a fixed box to
+    # the right of the filter panel and above the range panel (see the style block), and Plotly
+    # (responsive) fills that box. So the scene uses the full paper domain + auto aspect here —
+    # the box keeps it centred and fully visible on any viewport without domain/aspect hacks.
     fig.update_layout(
         height=height, width=width, title=title,
         scene=dict(
-            domain=dict(x=[_panel_frac, 1.0]),
             xaxis=dict(title=x_label, showbackground=False,
                        gridcolor='lightgrey', zeroline=False),
             yaxis=dict(title=y_label, showbackground=False,

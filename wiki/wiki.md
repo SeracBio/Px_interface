@@ -95,13 +95,38 @@ FBX/df_raw uniquecontrasts are disjoint so the MEASURE/REPORT source-of-truth de
 - **Filter panel** fixed `width: 415px` (a `position:fixed` overlay, top-left) so chip boxes wrap
   (3 compound chips per row). Labels: `labelMax` floor 800, sampled evenly across the MS range (not
   top-N) so they spread across the cloud.
-- **Default view is 2D + plot cleared of the panel (2026-07-06, refined 2026-07-07):** the Axes toggle
-  starts on **2D** (`seg2d active` + an on-load `setMode(true)` via `initTwoD`), and the scene is shifted
-  clear of the fixed ~460px `#filter-panel` via **`scene.domain.x=[frac, 1]`** (with `margin=dict(l=0,…)`),
-  where `frac = min(0.5, 460/width)` (~0.31 at the default `width=1500`). This moves the *whole* gl3d scene
-  — axes, ticks, grid — to the right of the panel intact. **Do not use `margin.l` for this:** a left margin
-  squeezes the scene and clips the vertical (MS-score) axis (tried l=440→600, axis dropped off). Verified
-  with the headless-chromium QA below on synthetic. Session/hash loads still override the 2D/3D mode.
+- **Default view is 2D + plot in a bounded box next to the panel (2026-07-06, redone 2026-07-13):** the Axes
+  toggle starts on **2D** (`seg2d active` + an on-load `setMode(true)` via `initTwoD`). The plot is **pinned by
+  CSS to a fixed box** immediately to the right of the filter panel and above the range panel —
+  `.plotly-graph-div { position:fixed; left:455px; right:8px; top:8px; bottom:205px }` — and Plotly (responsive)
+  fills that box. `CAM2D` is orthographic with **`eye/center z=-0.40`** — looking slightly below centre lifts
+  the plot's **top to align with the panel top** (viewport-independent, so it holds on any screen). **`fitBox`**
+  (run by `initTwoD` on load, on the 2D toggle, + on every window `resize`) calls `Plotly.Plots.resize` and, via
+  one relayout: (a) **square domain** `scene.domain.x=[0, fx]`, `fx=min(1, h/w)` — left-aligns the plot in the
+  box next to the panel; (b) **`aspectmode='manual', aspectratio={x:1,y:1.15,z:1.15}`**; (c) **camera pan** —
+  `camera.eye/center.y = pan` slides the data cube **left toward the panel** (see below); and (d) **legend
+  tracks the data's right edge**: `legend.x = min(fx*0.90 − pan*0.30 + 0.02, (w−235)/w)` (xanchor left) — the
+  `−pan*0.30` follows the data as the pan shifts it, the `(w−235)/w` cap keeps the legend text on-screen; the
+  default `legend.x≈1.02` sits off the wide div and vanishes. **Why the pan is the key lever (2026-07-14):** the
+  gl3d scene reserves a large *internal* left margin (the vertical "MS score" title strip) that domain/aspect
+  tricks CANNOT remove — so the data floats ~200px from the panel by default. Only a **camera pan** moves the
+  data cube itself (safely clipped at the panel edge by the CSS box — the old "pan drifts into panel" failure
+  was pre-box). The pan is **height-adaptive**: `pan = clamp((h−640)*0.0007, −0.05, 0.12)` — tall boxes have a
+  wider gl3d margin so we pan more (tight left); short boxes have almost none, so we nudge *right* (negative) to
+  keep the title from clipping. Result on 1912×1018: panel→plot ≈56px, plot→legend ≈133px (was ~210 / ~240).
+  Removing the old `×1.10` on `fx` was also part of the fix — it *added* horizontal centring pad that pushed the
+  plot away. **Aspect/pan are safe ONLY because the CSS box bounds the plot.** So: box bounds size; pan+domain do
+  horizontal tightness; camera-z does vertical position. The camera relayout is applied **only when 2D is
+  active** (else a resize in 3D would clobber the turntable camera). Verified 1912×1018, 1920×800, 1366×768,
+  2560×1330. **Known edge case:** 2560×**1030** (ultra-wide monitor + unusually short window) clips the title —
+  that geometry has a near-zero gl3d left margin; realistic ultra-wide (2560×1330) is fine.
+  **Why the box, not domain/aspect/camera tuning:** the plot is `responsive:true` (fills the window), so a
+  fixed `scene.aspectratio` (tried 1.45) made it too **tall** and it overflowed short viewports (0-tick below
+  the fold, only "50" visible) — exactly the bug reported. Hand-tuned domain/camera/aspect only looked right at
+  the one window size they were tuned at. The CSS box decouples the plot from window size entirely. Also learned:
+  **orthographic zoom ignores camera distance** (`eye.x`), and `scene.aspectmode:'manual'` frame geometry is
+  data-range-independent (0-100 vs 0-212 MS render identically). **Do not use `margin.l`** to clear the panel —
+  it squeezes the scene and clips the vertical axis. Session/hash loads still override the 2D/3D mode.
 - **Thumbnails:** source PNGs preferred (copied to `srb_png/` next to the HTML), else RDKit from
   SMILES. Source dir is `config.SRB_PNG_DIR` (`/home/gtamo/MS_ML/data/srb_png`, ~12.5K PNGs),
   **passed explicitly as `png_dir=SRB_PNG_DIR` in the cell-20 `plot_3d_interface` call** — the
@@ -150,14 +175,57 @@ To visually check the rendered interface without a browser, screenshot it with t
 chromium** (no install needed): `~/.cache/ms-playwright/chromium-1223/chrome-linux64/chrome`.
 - **Serve over HTTP** (the deferred `_data.js` won't load over `file://`): from the interface dir,
   `python -m http.server 8137 --bind 127.0.0.1`.
-- **Shoot with software WebGL** (Scatter3d — incl. the 2D ortho view — needs WebGL; `--disable-gpu`
-  breaks it): `chrome --headless=new --no-sandbox --use-gl=angle --use-angle=swiftshader
-  --enable-unsafe-swiftshader --ignore-gpu-blocklist --window-size=1900,1000
-  --virtual-time-budget=15000 --screenshot=/tmp/x.png http://127.0.0.1:8137/Serac_Px_interface.html`.
+### How to actually drive chrome here — the working recipe (chrome 148 / WSL2, 2026-07-14)
+The old one-liner (`chrome --headless=new … --screenshot=…`) **NO LONGER WORKS on this box** — the one-shot
+`--screenshot` mode **hangs forever and never exits**, even on a trivial `data:text/html` page (it stalls on
+GCM/background-network registration + swiftshader teardown; a `timeout` kill then SIGTERMs it before the PNG is
+flushed → no output). The **Playwright python package is not installed** in any conda env (only the browser
+*binary* is cached), and per CLAUDE.md we don't silently `pip install`. So drive chrome over the **DevTools
+Protocol (CDP)** with a tiny stdlib-only client. Exact procedure that worked:
+
+1. **Serve the interface** (deferred `_data.js` needs HTTP, not `file://`): `python -m http.server 8765
+   --directory tmp/out/interfaces` — launch via the **Bash `run_in_background:true`** flag (a plain `&` gets
+   reported "completed" but keeps serving; either way it survives). `curl -s -o /dev/null -w "%{http_code}"` to
+   confirm 200.
+2. **Launch ONE persistent chrome with the debug port**, via Bash **`run_in_background:true` AND
+   `dangerouslyDisableSandbox:true`** — this combo is the crux. The Bash sandbox **blocks the remote-debug port
+   from binding** (chrome exits 1); the `dangerously…` flag is what lets the port come up. Flags that matter:
+   `--headless=new --no-sandbox --remote-debugging-port=9222 --use-gl=angle --use-angle=swiftshader
+   --enable-unsafe-swiftshader --ignore-gpu-blocklist --disable-background-networking --disable-component-update
+   --disable-sync --user-data-dir=<scratch> about:blank`. Software WebGL (swiftshader) is mandatory — Scatter3d
+   incl. the 2D ortho view needs WebGL, and `--disable-gpu` breaks it. `--disable-background-networking` stops
+   the GCM phone-home that hung the one-shot (also our no-telemetry policy). Poll
+   `curl -s http://127.0.0.1:9222/json/version` until it returns JSON (~4–5s).
+3. **Screenshot via CDP** with a ~60-line stdlib client (no pip deps): open a raw `socket`, do the WebSocket
+   upgrade handshake by hand (client→server frames MUST be masked; server→client are not), then JSON-RPC over
+   it. Sequence: `Page.enable`, `Runtime.enable`, `Emulation.setDeviceMetricsOverride`
+   `{width,height,deviceScaleFactor,mobile:false}` (this sets the exact viewport — no `--window-size` needed and
+   DPR is controllable), `Page.navigate`, `time.sleep(~8s)` for gl3d/data.js, optional `Runtime.evaluate` to
+   inject JS, then `Page.captureScreenshot {format:"png"}` → base64 in the JSON result → decode to file.
+   **Gotcha:** in chrome 148 `/json/new` needs an **HTTP `PUT`** (a GET returns `405 Method Not Allowed`); open
+   the tab with `PUT /json/new?about:blank` then close it with `GET /json/close/<id>`.
+4. **Cleanup:** the harness may report the background chrome task "failed exit 1" yet leave chrome + its child
+   procs (zygote/gpu/renderer) running; `pkill -f` is flaky here (WSL2). Reliable: `ps -eo pid,ppid,cmd | grep
+   chrome-linux64`, then `kill -9 <pid>`; likewise the `http.server`.
+
+**Measuring layout from a screenshot:** gl3d draws axis titles/ticks on the **WebGL canvas, not SVG** (the
+`svgContainer` overlay is empty; DOM `getBoundingClientRect` on labels returns nothing), and `axesPixels` only
+gives data *ranges* not screen px — so **DOM measurement of the plot box is impossible**. Use **PIL on the PNG**:
+mask colored (`max−min channel > 40`) pixels, ignore `x<452` (panel) and `y<30` (toolbar), then cluster columns
+with a >55px gap → the clusters are `[data]` and `[legend]`; their edges give panel→plot and plot→legend gaps,
+and a *merged* cluster means either a <55px (tight, good) gap or an overlap (look at the image to disambiguate).
 - **SYNTHETIC RENDERS ONLY.** Never screenshot a real-data render (Desktop/output dirs) — the PNG
   would carry structures/thumbnails and cross the wire. Screenshot `tmp/out*/interfaces/…` only.
-- Caveat: some saved synthetic renders come up `0 proteins — 0 compounds` (empty dots), so they show
-  layout/axes but not point framing — re-render fresh if dot placement needs checking.
+- **Render synthetic** in the `ML` conda env (base python lacks numpy): `conda run -n ML python
+  tests/make_synthetic.py --out tmp` then `conda run -n ML python python/Px_interface.py --config
+  tmp/config.yaml --output_dir tmp/out`. The synthetic `ms_score` is now bottom-heavy 0–~208 (mimics real).
+- **The default view shows `0 proteins`** (the default activity/plate filters exclude the random synthetic
+  compounds) — the frame/axes still render, but to see **points** for layout QA, inject a tiny script before
+  `</body>` that checks every `#filter-panel input[type=checkbox]` and dispatches `change`.
+- **TEST AT MULTIPLE VIEWPORT SIZES, especially SHORT ones** (`--window-size=1920,800` as well as
+  `1920,1080`, `2560,1080`). The plot is `responsive:true`; a layout bug that fits a tall window can overflow
+  a short laptop window — that's exactly how the fixed-aspect regression slipped through (looked fine at
+  1900×1000, broke at 1920×800). Also fire a `resize` event ~0.6s after load so the CSS-boxed plot re-fits.
 
 ## Decisions & conventions
 - All parameters/paths live in `config/config.yaml`; data paths are absolute (Dropbox/local).
