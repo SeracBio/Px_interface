@@ -1520,6 +1520,12 @@ _INTERFACE_INJECT = '''
   #range-panel .rp-val  { display: block; float: none; color: #555;
                           font-family: ui-monospace, monospace; font-size: 10px;
                           margin: 1px 0 3px 0; }
+  /* the lo/hi numbers are edited in place — click and type to set the range */
+  #range-panel .rp-edit { cursor: text; padding: 0 2px; border-radius: 2px;
+                          border-bottom: 1px dotted #aab; outline: none; }
+  #range-panel .rp-edit:hover  { background: #eef1f6; }
+  #range-panel .rp-edit:focus  { background: #fff; color: #1D3557;
+                                 border-bottom: 1px solid #1D3557; }
   /* one dual-handle slider per axis: two range inputs overlaid on one track */
   #range-panel .rp-dual { position: relative; height: 20px; margin-top: 7px; }
   #range-panel .rp-dual .rp-track { position: absolute; top: 8px; left: 0; right: 0;
@@ -2578,7 +2584,9 @@ _INTERFACE_INJECT = '''
         AX.forEach(function(a) {
           var loV = parseFloat(els[a].lo.value), hiV = parseFloat(els[a].hi.value);
           if (loV > hiV) { var t = loV; loV = hiV; hiV = t; }
-          els[a].val.textContent = fmt(loV) + " – " + fmt(hiV);
+          // write the numbers into the editable spans (skip the one being typed in)
+          if (document.activeElement !== els[a].loTxt) els[a].loTxt.textContent = fmt(loV);
+          if (document.activeElement !== els[a].hiTxt) els[a].hiTxt.textContent = fmt(hiV);
           // A range <input> snaps to `step`, so a handle at the very end can land
           // just shy of the data extreme and drop a boundary gene. Treat a handle
           // within one step of its limit as unbounded (filter below is >= / <=).
@@ -2643,9 +2651,36 @@ _INTERFACE_INJECT = '''
         lo.value = (cfg.lo !== undefined ? cfg.lo : cfg.min);   // default = focused corner box
         hi.value = (cfg.hi !== undefined ? cfg.hi : cfg.max);
         document.getElementById(a + "-name").textContent = cfg.label;
-        els[a] = {lo: lo, hi: hi, val: document.getElementById(a + "-val")};
+        // turn the "lo – hi" readout into two click-to-edit numbers
+        var val = document.getElementById(a + "-val");
+        val.innerHTML = '<span class="rp-edit rp-lo" contenteditable="true" ' +
+          'inputmode="decimal" spellcheck="false"></span> – ' +
+          '<span class="rp-edit rp-hi" contenteditable="true" inputmode="decimal" spellcheck="false"></span>';
+        els[a] = {lo: lo, hi: hi, val: val,
+                  loTxt: val.querySelector(".rp-lo"), hiTxt: val.querySelector(".rp-hi")};
         lo.addEventListener("input", applyRanges);
         hi.addEventListener("input", applyRanges);
+        // commit a hand-typed number: clamp to [min,max], keep lo <= hi, then re-filter.
+        // Editing the lo number moves the lo handle (and vice-versa); invalid input reverts.
+        function commitEdit(isLo, span) {
+          var v = parseFloat((span.textContent || "").replace(/[^0-9.eE+-]/g, ""));
+          if (!isFinite(v)) { applyRanges(); return; }   // revert display to current value
+          v = Math.max(cfg.min, Math.min(cfg.max, v));
+          if (isLo) { els[a].lo.value = Math.min(v, parseFloat(els[a].hi.value)); }
+          else      { els[a].hi.value = Math.max(v, parseFloat(els[a].lo.value)); }
+          applyRanges();
+        }
+        [[true, els[a].loTxt], [false, els[a].hiTxt]].forEach(function (p) {
+          p[1].addEventListener("blur", function () { commitEdit(p[0], p[1]); });
+          p[1].addEventListener("keydown", function (e) {
+            if (e.key === "Enter") { e.preventDefault(); p[1].blur(); }        // Enter commits
+            else if (e.key === "Escape") {                                     // Esc reverts
+              e.preventDefault();
+              p[1].textContent = fmt(parseFloat((p[0] ? els[a].lo : els[a].hi).value));
+              p[1].blur();   // blur then commits this restored (unchanged) value = no-op
+            }
+          });
+        });
       });
       document.getElementById("rp-reset").addEventListener("click", function() {
         AX.forEach(function(a) {

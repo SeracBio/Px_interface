@@ -127,6 +127,13 @@ FBX/df_raw uniquecontrasts are disjoint so the MEASURE/REPORT source-of-truth de
   **orthographic zoom ignores camera distance** (`eye.x`), and `scene.aspectmode:'manual'` frame geometry is
   data-range-independent (0-100 vs 0-212 MS render identically). **Do not use `margin.l`** to clear the panel —
   it squeezes the scene and clips the vertical axis. Session/hash loads still override the 2D/3D mode.
+- **Range readouts are edit-in-place (2026-07-14):** each axis's `lo – hi` readout (`#x-val` etc.) is two
+  `contenteditable` `.rp-edit` spans (dotted underline = editable hint). Click a number, type, and **Enter/blur
+  commits** (Esc reverts): `commitEdit` clamps to `[min,max]`, keeps `lo ≤ hi` (editing lo can't exceed hi and
+  vice-versa), writes the slider `.value`, and calls `applyRanges` — same path as dragging, so the filter/labels/
+  count all update. Invalid input reverts. `applyRanges` writes the numbers back into the spans but **skips the
+  one that is `document.activeElement`** so it never clobbers mid-type. No new fields were added — the existing
+  readout became editable (user's explicit ask).
 - **Thumbnails:** source PNGs preferred (copied to `srb_png/` next to the HTML), else RDKit from
   SMILES. Source dir is `config.SRB_PNG_DIR` (`/home/gtamo/MS_ML/data/srb_png`, ~12.5K PNGs),
   **passed explicitly as `png_dir=SRB_PNG_DIR` in the cell-20 `plot_3d_interface` call** — the
