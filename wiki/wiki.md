@@ -343,7 +343,10 @@ and a *merged* cluster means either a <55px (tight, good) gap or an overlap (loo
   the identifiers still exist in **git history** (only a history rewrite removes those). **Diagrams updated
   (2026-07-16):** both `docs/aws_architecture_mermaid.md` + `.shared.md` now show the CloudWatch/SNS monitoring
   (previously missing from the map), the EC2-SG egress lockdown, and the same-account state-bucket policy —
-  topology unchanged; kept the two files in sync. **Operational:** next `terraform init` needs `-backend-config=backend.hcl`
+  topology unchanged; kept the two files in sync. **Internal diagram now local-only (2026-07-16):**
+  `docs/aws_architecture_mermaid.md` (real internal CIDRs) is gitignored + `git rm --cached` (untracked, local
+  copy kept) so only the redacted `docs/aws_architecture_mermaid.shared.md` lives in git going forward. Takes
+  effect on the remote after commit+push; the file still exists in **git history** (history rewrite to remove). **Operational:** next `terraform init` needs `-backend-config=backend.hcl`
   (`-reconfigure` if migrating from the old hard-coded backend); applying H1 changes the SG in place (no EC2
   replace), but a full `apply` still triggers the pending boot/monitoring EC2 replacement — same "not before
   Step 6" caveat as above. The bootstrap bucket-policy apply is independent and safe anytime.

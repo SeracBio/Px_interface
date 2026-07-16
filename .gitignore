@@ -28,3 +28,7 @@ px/
 
 # Claude Code per-machine settings
 .claude/settings.local.json
+
+# Internal AWS architecture diagram with real internal IPs/CIDRs — keep local only.
+# The redacted docs/aws_architecture_mermaid.shared.md is the version that lives in git.
+docs/aws_architecture_mermaid.md
