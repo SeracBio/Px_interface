@@ -303,3 +303,22 @@ and a *merged* cluster means either a <55px (tight, good) gap or an overlap (loo
   (transfer via S3-gateway-endpoint or base64-over-SSM; scp/SSH closed by design). Do **not** `terraform apply`
   before Step 6 — the staged boot-retry + `monitoring.tf` changes replace the EC2 and wipe the hand-installed
   nginx + any upload.
+- 2026-07-14 — **shareable AWS architecture diagram** added at `docs/aws_architecture_mermaid.shared.md` for
+  external (AWS-contact) review: same topology as `docs/aws_architecture_mermaid.md` but with the account ID,
+  the globally-unique TF state-bucket name, and all IPs/CIDRs redacted to generic labels (region `eu-north-1`
+  kept). The original stays intact for internal use. IT flagged the account ID + bucket as world-wide-unique.
+- 2026-07-16 — **moving the repo from personal → org (GitHub transfer).** Origin was
+  `git@github.com:gtamo39/Px_interface.git` (personal). **Pre-flight (clean):** no chemistry data tracked
+  (`.gitignore` covers `data/`, `tmp/`, `output/`, `*.parquet`, `srb_png/`, `volcanoes_px/`); no passwords/PSKs
+  committed (PSKs live only in encrypted TF remote state; htpasswd/tfvars examples use placeholders). **Caveat:**
+  the AWS account ID + state-bucket name ARE committed in `aws-vpn/main.tf:24`
+  (`vpn-project-tf-state-620423424620`), plus internal CIDR defaults in `aws-vpn/variables.tf` — acceptable for a
+  trusted org repo, but they travel with history (parameterize the backend bucket via `-backend-config` if that
+  ever needs scrubbing). Confirmed local `main` == `origin/main` (0 ahead/behind) before moving. **Transfer
+  procedure** (chose GitHub *transfer* over new-repo-push, to keep history + issues + PRs + stars + URL
+  redirects; `gh` CLI is not installed, so via web UI): (1) `github.com/gtamo39/Px_interface` → **Settings** →
+  **Danger Zone** → **Transfer** → type repo name to confirm → new owner = the org slug → confirm (needs org
+  membership with repo-create rights; authorize SAML SSO if prompted). (2) Old path redirects to
+  `github.com/<ORG>/Px_interface`. (3) Re-point the local clone:
+  `git remote set-url origin git@github.com:<ORG>/Px_interface.git` then `git remote -v` + `git fetch origin`.
+  Fill in `<ORG>` with the actual slug once known; update this entry when the transfer is confirmed done.
