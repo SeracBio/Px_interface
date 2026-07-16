@@ -16,12 +16,13 @@ resource "aws_security_group" "vpc_endpoints" {
     cidr_blocks = [var.vpc_cidr]
   }
 
+  # Interface endpoints only answer in-VPC requests (stateful); no internet egress needed.
   egress {
-    description = "All outbound"
+    description = "Responses within the VPC"
     from_port   = 0
     to_port     = 0
     protocol    = "-1"
-    cidr_blocks = ["0.0.0.0/0"]
+    cidr_blocks = [var.vpc_cidr]
   }
 
   tags = {

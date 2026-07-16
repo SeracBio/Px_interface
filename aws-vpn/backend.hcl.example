@@ -1,0 +1,13 @@
+# Backend config for the main stack — copy to backend.hcl (gitignored) and fill in real values.
+#
+# Get the values from the bootstrap outputs:
+#   terraform -chdir=bootstrap output
+#
+# Then initialise the main stack with:
+#   terraform init -backend-config=backend.hcl
+#
+# (Kept out of main.tf / version control because the bucket name embeds the AWS account ID,
+#  which is globally unique.)
+
+bucket         = "REPLACE-with-your-tf-state-bucket"   # e.g. vpn-project-tf-state-<account-id>
+dynamodb_table = "vpn-project-tf-lock"

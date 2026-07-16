@@ -20,6 +20,12 @@ locals {
   ami_id = var.ec2_ami_id != "" ? var.ec2_ami_id : data.aws_ami.amazon_linux_2023.id
 }
 
+# Managed prefix list for S3 in this region — used to scope egress to the S3 gateway
+# endpoint (dnf) instead of opening 0.0.0.0/0.
+data "aws_ec2_managed_prefix_list" "s3" {
+  name = "com.amazonaws.${var.aws_region}.s3"
+}
+
 # -------------------------------------------------------
 # Security Group for the EC2 instance
 # -------------------------------------------------------
@@ -55,13 +61,44 @@ resource "aws_security_group" "ec2" {
     cidr_blocks = var.allowed_cidr
   }
 
-  # Allow all outbound traffic (VPC endpoints handle the actual routing)
+  # Egress is locked to only what user_data / the SSM agent actually initiate.
+  # SGs are stateful, so inbound webapp requests are answered WITHOUT an egress rule;
+  # removing 0.0.0.0/0 closes the path a compromised instance would use to pivot back
+  # into the office LAN / VPN client pool over the VPN-propagated routes.
   egress {
-    description = "All outbound"
-    from_port   = 0
-    to_port     = 0
-    protocol    = "-1"
-    cidr_blocks = ["0.0.0.0/0"]
+    description = "HTTPS to interface VPC endpoints (SSM/ssmmessages/ec2messages) in-VPC"
+    from_port   = 443
+    to_port     = 443
+    protocol    = "tcp"
+    cidr_blocks = [var.vpc_cidr]
+  }
+  egress {
+    description     = "HTTPS to S3 via the gateway endpoint (AL2023 dnf repos)"
+    from_port       = 443
+    to_port         = 443
+    protocol        = "tcp"
+    prefix_list_ids = [data.aws_ec2_managed_prefix_list.s3.id]
+  }
+  egress {
+    description = "DNS (UDP) to the VPC resolver — resolve endpoint private hostnames"
+    from_port   = 53
+    to_port     = 53
+    protocol    = "udp"
+    cidr_blocks = [var.vpc_cidr]
+  }
+  egress {
+    description = "DNS (TCP) to the VPC resolver"
+    from_port   = 53
+    to_port     = 53
+    protocol    = "tcp"
+    cidr_blocks = [var.vpc_cidr]
+  }
+  egress {
+    description = "NTP to Amazon Time Sync (avoid clock skew -> SigV4 failures)"
+    from_port   = 123
+    to_port     = 123
+    protocol    = "udp"
+    cidr_blocks = ["169.254.169.123/32"]
   }
 
   tags = {
@@ -106,12 +143,12 @@ resource "aws_iam_role_policy" "ssm_tls" {
         aws_ssm_parameter.tls_cert.arn,
         aws_ssm_parameter.tls_key.arn
       ]
-    },
-    {
-      # Allow use of the default SSM KMS key to decrypt SecureString params
-      Effect   = "Allow"
-      Action   = ["kms:Decrypt"]
-      Resource = ["arn:aws:kms:${var.aws_region}:*:alias/aws/ssm"]
+      },
+      {
+        # Allow use of the default SSM KMS key to decrypt SecureString params
+        Effect   = "Allow"
+        Action   = ["kms:Decrypt"]
+        Resource = ["arn:aws:kms:${var.aws_region}:*:alias/aws/ssm"]
     }]
   })
 }

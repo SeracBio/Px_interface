@@ -22,3 +22,15 @@ variable "lock_table_name" {
   type        = string
   default     = "vpn-project-tf-lock"
 }
+
+variable "allowed_state_principals" {
+  description = <<-EOT
+    Optional least-privilege allow-list of IAM principal ARNs (StringLike, so wildcards are
+    allowed, e.g. "arn:aws:iam::ACCT:role/deployer*") permitted to access the state bucket.
+    Leave empty to rely on account IAM + the TLS/same-account denies (no lock-out risk).
+    When set, all OTHER same-account principals are denied; the account root is auto-appended
+    so a wrong ARN can never permanently lock the account out.
+  EOT
+  type        = list(string)
+  default     = []
+}

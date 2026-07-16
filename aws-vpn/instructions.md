@@ -56,7 +56,12 @@ terraform init
 terraform apply
 ```
 
-Take the `state_bucket_name` value from the output and paste it into the `bucket = "..."` line inside the `backend "s3"` block in `aws-vpn/main.tf`.
+Then create the backend config for the main stack (kept out of git — the bucket name embeds your account ID):
+```bash
+cd aws-vpn
+cp backend.hcl.example backend.hcl
+# edit backend.hcl: set bucket = the state_bucket_name from the bootstrap output
+```
 
 ---
 
@@ -78,10 +83,13 @@ Copy the full output line. You will pass it as an environment variable in the ne
 ```bash
 cd aws-vpn
 export TF_VAR_webapp_htpasswd_hash='serac_user:$2y$10$...'   # paste from step 3
-terraform init
+terraform init -backend-config=backend.hcl
 terraform plan
 terraform apply
 ```
+
+> If you previously ran `terraform init` with the old hard-coded backend, re-run
+> `terraform init -backend-config=backend.hcl -reconfigure` to pick up the new partial config.
 
 Review the plan, then type `yes` when prompted.
 

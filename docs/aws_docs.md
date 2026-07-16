@@ -108,7 +108,7 @@ The MVP is built as a **Terraform stack** (generated with Kiro), living **in-rep
 (moved here 2026-07-06; its `terraform.tfvars` + `.terraform/` + state are kept out of git by
 `aws-vpn/.gitignore` — verified only `.tf`/`.sh`/`.md` get committed). Canonical step-by-step is
 `aws-vpn/instructions.md`; run Terraform with `terraform -chdir=aws-vpn …`. Key facts:
-- **Region `eu-north-1`** (EU data residency), dedicated AWS account `620423424620`.
+- **Region `eu-north-1`** (EU data residency), dedicated AWS account (ID via `aws sts get-caller-identity`).
 - **Compute:** t3.micro **Amazon Linux 2023**, private subnet, **no public IP**; IMDSv2; encrypted
   gp3 root. **No NAT** — outbound for `dnf`/SSM via **VPC endpoints** (`ssm`, `ssmmessages`,
   `ec2messages` interface + **S3 gateway**). Admin via **SSM Session Manager** (no SSH, no key pair).
@@ -222,8 +222,9 @@ runs use `terraform -chdir=<aws-vpn>` (region `eu-north-1`). The earlier hand-ro
 runbook is in git history if ever needed.
 
 1. **Prereqs** — Terraform ≥1.5 + AWS CLI configured for `eu-north-1`.
-2. **Bootstrap** (`aws-vpn/bootstrap/`, once) — creates the S3 state bucket + DynamoDB lock; paste the
-   bucket name into `main.tf`'s `backend "s3"` block, then `terraform init` the main stack.
+2. **Bootstrap** (`aws-vpn/bootstrap/`, once) — creates the S3 state bucket + DynamoDB lock; copy
+   `backend.hcl.example` → `backend.hcl` (gitignored) with the bucket/table names, then
+   `terraform init -backend-config=backend.hcl` the main stack.
 3. **Auth hash** (local, keep off the wire) — `htpasswd -nB serac_user` → store password in 1Password,
    keep the `serac_user:$2y$…` line.
 4. **Apply** (from `aws-vpn/`, same shell):
@@ -240,18 +241,18 @@ runbook is in git history if ever needed.
    unreachable, by design). Deep-link: `…/Serac_Px_interface.html#p=Pw01` (no trailing slash).
 
 ### Live progress (2026-07-03)
-- [x] **Step 1** — Terraform v1.15.7 installed; AWS CLI on `eu-north-1`, account `620423424620`.
-- [x] **Step 2** — bootstrap applied: bucket `vpn-project-tf-state-620423424620` + lock table
-      `vpn-project-tf-lock`; backend wired into `main.tf`; main stack `init` done.
+- [x] **Step 1** — Terraform v1.15.7 installed; AWS CLI on `eu-north-1` (account ID via `aws sts get-caller-identity`).
+- [x] **Step 2** — bootstrap applied: state bucket (`vpn-project-tf-state-<ACCOUNT_ID>`) + lock table
+      `vpn-project-tf-lock`; backend supplied via `backend.hcl`; main stack `init` done.
 - [x] **Step 3** — auth hash generated for `serac_user` (password in 1Password).
-- [x] **Step 4** — `terraform apply` **complete** (29 resources). EC2 `i-04965b616b4415778` @
-      `172.20.2.125`; VPN `vpn-02994f99eeacd59fd` (tunnels `13.50.154.69` / `13.61.135.201`).
+- [x] **Step 4** — `terraform apply` **complete** (29 resources). Live resource IDs (EC2 instance, private
+      IP, VPN connection, tunnel addresses) are in the Terraform outputs — `terraform -chdir=aws-vpn output`.
       Box is **healthy**: nginx active, TLS pulled, SSM reachable, 4/4 endpoints available.
 - [x] **Step 5 — DONE (2026-07-08):** IT configured the FortiGate side; **tunnel is UP** (`1/2`, which is
       normal — AWS runs one active + one standby, so a single UP tunnel = a working VPN). Config was
       Fortinet FortiGate FortiOS 6.4.4+ IKEv2, routing `172.20.0.0/16` with local selectors both
       `192.168.146.0/24` and `10.0.14.0/24`.
-- [x] **Step 7 connectivity — DONE (2026-07-08):** from a remote laptop on FortiClient, `https://172.20.2.125`
+- [x] **Step 7 connectivity — DONE (2026-07-08):** from a remote laptop on FortiClient, `https://<ec2_private_ip>`
       loaded the placeholder page through the tunnel, prompting for `serac_user` + shared password. Full chain
       verified: FortiClient → FortiGate → S2S tunnel → VPC → private EC2 → nginx HTTPS + basic-auth. No public
       exposure. (Cosmetic: placeholder shows a mojibake em-dash `â€"` — no `<meta charset>` in the placeholder;
@@ -304,6 +305,8 @@ Next-session pickup:
 - [ ] RDS phase: `DATA.load_new_df` RDS source mode; Fargate/Batch rebuild job; EventBridge trigger;
       S3 publish + serving-box sync.
 
-**Key IDs (region `eu-north-1`):** EC2 `i-04965b616b4415778` @ `172.20.2.125`; VPN
-`vpn-02994f99eeacd59fd`. Health check any time: `bash aws-vpn/healthcheck.sh`. SSM shell:
-`aws ssm start-session --target i-04965b616b4415778 --region eu-north-1`.
+**Resource IDs (region `eu-north-1`):** not hard-coded here — fetch live from Terraform:
+`terraform -chdir=aws-vpn output` (e.g. `ec2_instance_id`, `ec2_private_ip`, `vpn_connection_id`,
+`tunnel1_address`). Health check any time: `bash aws-vpn/healthcheck.sh` (auto-discovers IDs from
+outputs). SSM shell:
+`aws ssm start-session --target "$(terraform -chdir=aws-vpn output -raw ec2_instance_id)" --region eu-north-1`.

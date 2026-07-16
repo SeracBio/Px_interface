@@ -322,3 +322,25 @@ and a *merged* cluster means either a <55px (tight, good) gap or an overlap (loo
   `github.com/<ORG>/Px_interface`. (3) Re-point the local clone:
   `git remote set-url origin git@github.com:<ORG>/Px_interface.git` then `git remote -v` + `git fetch origin`.
   Fill in `<ORG>` with the actual slug once known; update this entry when the transfer is confirmed done.
+- 2026-07-16 — **security review of `aws-vpn/` + `docs/`** (defensive; own infra). Baseline is strong (private
+  EC2, no public ingress, SSM-not-SSH, IMDSv2 required, encrypted EBS, IKEv2/AES-256/SHA2-256/DH14, state bucket
+  encrypted+versioned+public-blocked+TLS-only+`prevent_destroy`); no internet-facing unauth path. **Fixes
+  implemented** (code only — NOT yet `apply`d): **H1 egress lockdown** — `ec2-sg` egress was `0.0.0.0/0` (a
+  compromised EC2 could pivot into the office LAN / VPN pool over the propagated VPN routes); replaced with just
+  443→`vpc_cidr` (interface endpoints), 443→S3 managed-prefix-list (dnf via gateway endpoint), 53 udp/tcp→
+  `vpc_cidr` (VPC resolver), 123 udp→`169.254.169.123/32` (Amazon Time Sync); `vpce-sg` egress tightened to
+  `vpc_cidr`. **H2 state-bucket policy** — state holds the webapp TLS private key + VPN PSKs; added
+  `DenyOutsideAccount` (via `aws:PrincipalAccount` = caller account) + an OPTIONAL `allowed_state_principals`
+  allow-list (default empty = no lock-out; account root auto-appended when set) on top of the existing
+  `DenyNonTLS`. **M1** — moved the account-id-bearing state bucket + lock table OUT of `main.tf` into a
+  partial backend: `terraform init -backend-config=backend.hcl` (`backend.hcl.example` committed, `backend.hcl`
+  gitignored). Both stacks `terraform validate` clean. **Deferred (documented, not done):** rest of H2
+  (MFA-delete, access logging, dedicated CMK), M2 (single shared Basic-Auth cred, no rate-limit → per-user
+  SSO + `limit_req`), M3 (self-signed cert + HSTS-off → distribute CA then enable HSTS), L1 KMS-decrypt ARN
+  pin, L3 pin AMI. **Docs sanitized (2026-07-16):** account ID, EC2 instance ID, VPN ID, private host IP, and
+  tunnel public IPs removed from `docs/aws_docs.md` + `docs/aws_architecture_mermaid.md` (replaced with
+  placeholders / `terraform output` retrieval; internal RFC1918 CIDRs kept). Current tracked files are clean;
+  the identifiers still exist in **git history** (only a history rewrite removes those). **Operational:** next `terraform init` needs `-backend-config=backend.hcl`
+  (`-reconfigure` if migrating from the old hard-coded backend); applying H1 changes the SG in place (no EC2
+  replace), but a full `apply` still triggers the pending boot/monitoring EC2 replacement — same "not before
+  Step 6" caveat as above. The bootstrap bucket-policy apply is independent and safe anytime.

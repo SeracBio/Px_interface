@@ -21,7 +21,7 @@ flowchart TB
     end
 
     %% ===================== AWS side =====================
-    subgraph AWS["AWS account 620423424620 - region eu-north-1"]
+    subgraph AWS["AWS account - region eu-north-1"]
         CGW["Customer Gateway<br/>(record of FortiGate public IP)"]
         VGW["Virtual Private Gateway<br/>(AWS side of the VPN)"]
         VPN["Site-to-Site VPN connection<br/>2 x IPsec IKEv2 tunnels<br/>static routes: 192.168.146.0/24 + 10.0.14.0/24"]
@@ -47,7 +47,7 @@ flowchart TB
         IAM["IAM role + instance profile<br/>SSM core, read TLS params, KMS decrypt"]
 
         subgraph BACKEND["Terraform backend (management plane)"]
-            S3B["S3 bucket - encrypted + versioned<br/>vpn-project-tf-state-620423424620"]
+            S3B["S3 bucket - encrypted + versioned<br/>(Terraform state)"]
             DDB["DynamoDB - state lock"]
         end
     end

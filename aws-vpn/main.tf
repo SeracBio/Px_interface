@@ -13,19 +13,20 @@ terraform {
   }
 
   # -------------------------------------------------------
-  # Remote backend — encrypted S3 state + DynamoDB locking
+  # Remote backend — encrypted S3 state + DynamoDB locking.
   #
-  # BEFORE running terraform init here, run the bootstrap:
-  #   cd bootstrap && terraform init && terraform apply
+  # BEFORE init: run the bootstrap once (cd bootstrap && terraform init && terraform apply).
   #
-  # Then fill in the bucket name from bootstrap's output.
+  # `bucket` and `dynamodb_table` are supplied at init time via -backend-config so the
+  # account-id-bearing bucket name stays OUT of version control:
+  #   cp backend.hcl.example backend.hcl   # fill in real names from `terraform -chdir=bootstrap output`
+  #   terraform init -backend-config=backend.hcl
+  # (backend.hcl is gitignored.)
   # -------------------------------------------------------
   backend "s3" {
-    bucket         = "vpn-project-tf-state-620423424620"
-    key            = "vpn/terraform.tfstate"
-    region         = "eu-north-1"
-    encrypt        = true
-    dynamodb_table = "vpn-project-tf-lock"
+    key     = "vpn/terraform.tfstate"
+    region  = "eu-north-1"
+    encrypt = true
   }
 }
 
