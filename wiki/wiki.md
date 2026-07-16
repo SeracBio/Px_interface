@@ -340,7 +340,27 @@ and a *merged* cluster means either a <55px (tight, good) gap or an overlap (loo
   pin, L3 pin AMI. **Docs sanitized (2026-07-16):** account ID, EC2 instance ID, VPN ID, private host IP, and
   tunnel public IPs removed from `docs/aws_docs.md` + `docs/aws_architecture_mermaid.md` (replaced with
   placeholders / `terraform output` retrieval; internal RFC1918 CIDRs kept). Current tracked files are clean;
-  the identifiers still exist in **git history** (only a history rewrite removes those). **Operational:** next `terraform init` needs `-backend-config=backend.hcl`
+  the identifiers still exist in **git history** (only a history rewrite removes those). **Diagrams updated
+  (2026-07-16):** both `docs/aws_architecture_mermaid.md` + `.shared.md` now show the CloudWatch/SNS monitoring
+  (previously missing from the map), the EC2-SG egress lockdown, and the same-account state-bucket policy —
+  topology unchanged; kept the two files in sync. **Operational:** next `terraform init` needs `-backend-config=backend.hcl`
   (`-reconfigure` if migrating from the old hard-coded backend); applying H1 changes the SG in place (no EC2
   replace), but a full `apply` still triggers the pending boot/monitoring EC2 replacement — same "not before
   Step 6" caveat as above. The bootstrap bucket-policy apply is independent and safe anytime.
+  **`backend.hcl` gotcha (2026-07-16):** `terraform init -backend-config=backend.hcl` FAILS with "file could
+  not be read" until you create `backend.hcl` — only `backend.hcl.example` is committed. Create it locally
+  (gitignored): `bucket = "vpn-project-tf-state-<ACCOUNT_ID>"` + `dynamodb_table = "vpn-project-tf-lock"`, or
+  generate from the bootstrap outputs (`terraform -chdir=bootstrap output -raw state_bucket_name` /
+  `lock_table_name`). Same bucket/key as before, so `-reconfigure` re-inits without a state migration prompt.
+- 2026-07-16 — **remaining next steps (ordered, for the operator).** (1) **Review + commit** the staged
+  hardening + doc-sanitization changes (nothing committed yet). (2) **Git history** still contains the old
+  account ID / bucket / instance-VPN IDs — decide whether to `git filter-repo` BEFORE the org transfer or accept
+  it (org = trusted). (3) **Transfer repo → org** (web UI Settings → Danger Zone → Transfer), then re-point
+  `origin`. (4) **Apply infra fixes in order:** (a) bootstrap bucket policy — `cd aws-vpn/bootstrap &&
+  terraform init && terraform apply` (safe anytime; optionally set `allowed_state_principals`); (b) re-init main
+  stack — `terraform init -backend-config=backend.hcl -reconfigure`; (c) main `apply` ONLY together with Step 6,
+  since it REPLACES the EC2 (staged `monitoring.tf` + boot-retry) — `terraform plan` (expect: egress rules, SG,
+  alarms, boot retry), `apply`, re-upload interface, then `bash aws-vpn/healthcheck.sh` to confirm the hardened
+  box booted (this is the real test that the H1 egress lockdown didn't break `dnf`/SSM; expect 7 ok, nginx
+  active, 4/4 endpoints). (5) **Step 6** — upload the real interface (S3-via-gateway-endpoint recommended, or
+  base64-over-SSM for a small file).

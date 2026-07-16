@@ -39,15 +39,20 @@ flowchart TB
             end
             S3GW["S3 gateway endpoint<br/>(dnf package installs)"]
             RT["Private route table<br/>VPN-propagated routes + S3 endpoint"]
-            SG1["SG ec2-sg<br/>allow 443/80/ICMP from<br/>192.168.146.0/24 + 10.0.14.0/24"]
+            SG1["SG ec2-sg<br/>ingress: 443/80/ICMP from<br/>192.168.146.0/24 + 10.0.14.0/24<br/>egress: locked to endpoints + S3 only"]
             SG2["SG vpce-sg<br/>allow 443 from VPC"]
         end
 
         SSM["SSM Parameter Store - SecureString<br/>TLS cert + private key (KMS-encrypted)"]
         IAM["IAM role + instance profile<br/>SSM core, read TLS params, KMS decrypt"]
 
+        subgraph MON["Monitoring"]
+            CW["CloudWatch alarms<br/>VPN TunnelState (both / one down)"]
+            SNS["SNS topic - email alert"]
+        end
+
         subgraph BACKEND["Terraform backend (management plane)"]
-            S3B["S3 bucket - encrypted + versioned<br/>(Terraform state)"]
+            S3B["S3 bucket - encrypted + versioned<br/>(Terraform state)<br/>TLS-only + same-account policy"]
             DDB["DynamoDB - state lock"]
         end
     end
@@ -73,6 +78,9 @@ flowchart TB
 
     IAM -. attached .-> EC2
     EC2 -. reads at boot .-> SSM
+
+    VPN -. tunnel telemetry .-> CW
+    CW --> SNS
 
     DEV == SSM Session Manager ==> EC2
     DEV -. state .-> S3B
