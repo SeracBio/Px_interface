@@ -1332,10 +1332,17 @@ _INTERFACE_INJECT = '''
                                    text-align: left; }
   #hover-img .volcano .vstem { display: flex; flex-direction: row; gap: 8px;
                                align-items: flex-start; flex-wrap: nowrap; overflow-x: auto;
-                               padding-bottom: 4px; }
+                               padding-bottom: 4px; position: relative; }
   #hover-img .volcano .vstem .vcell { flex: 0 0 auto; text-align: center; }
   #hover-img .volcano .vstem .vcell .vlabel { text-align: center; }
   #hover-img .volcano .vstem .vcell.vcomp { opacity: 0.85; }
+  /* overlay tracing the hovered gene's marker across a stem's WT/MLN/KO volcanoes */
+  #hover-img .volcano .vstem .vstem-trace { position: absolute; left: 0; top: 0;
+                                            pointer-events: none; overflow: visible; z-index: 4; }
+  /* invisible hover-targets over each significant-down gene point (drive the trace on hover) */
+  #hover-img .volcano .vstem .vhot { position: absolute; width: 14px; height: 14px;
+                                     border-radius: 50%; cursor: pointer; z-index: 5; }
+  #hover-img .volcano .vstem .vhot:hover { box-shadow: 0 0 0 2px #1D6FB8 inset; }
   #hover-img .volcano .vns { color: #b8860b; font-style: italic; }
   /* Pin the Plotly plot to a bounded box to the RIGHT of the filter panel and ABOVE the
      range panel, instead of letting the responsive plot fill the whole window. This makes
@@ -1483,25 +1490,6 @@ _INTERFACE_INJECT = '''
             text-transform: none; letter-spacing: 0; color: #fff; background: #1D3557; border: none; border-radius: 4px; }
   #sess-save-btn:hover, #sess-load-btn:hover { background: #16324f; }
   #sess-note { margin-top: 5px; font: 11px sans-serif; color: #2A9D8F; word-break: break-all; }
-  #hover-patents {
-    position: fixed; top: 12px; right: 660px; z-index: 9999;
-    background: white; border: 1px solid #bbb; border-radius: 6px;
-    padding: 6px 8px; box-shadow: 0 2px 8px rgba(0,0,0,0.15);
-    font: 11px sans-serif; color: #333; max-width: 320px;
-    max-height: 92vh; overflow-y: auto; user-select: text; display: none;
-  }
-  #hover-patents.pinned { border-color: #1D3557; border-width: 2px; padding: 5px 7px;
-                          box-shadow: 0 4px 14px rgba(0,0,0,0.25); }
-  #hover-patents .pat-header { display: flex; align-items: baseline; gap: 6px;
-                                font-weight: 700; padding-bottom: 4px;
-                                border-bottom: 1px solid #eee; margin-bottom: 4px; }
-  #hover-patents .pat-gene   { font-size: 12px; }
-  #hover-patents .pat-depmap { font-size: 10px; color: #1D3557; text-decoration: none; }
-  #hover-patents .pat-depmap:hover { text-decoration: underline; }
-  #hover-patents .pat-table  { border-collapse: collapse; width: 100%; font-size: 11px; }
-  #hover-patents .pat-table td { padding: 2px 4px; vertical-align: top; }
-  #hover-patents .pat-table tr:nth-child(even) td { background: #f8f8f8; }
-  #hover-patents .pat-empty  { color: #999; font-style: italic; padding: 4px 0; }
   #axis-legend {            /* bottom-left, immediately above the slider box */
     position: fixed; bottom: 104px; left: 12px; z-index: 9998;
     background: white; border: 1px solid #bbb; padding: 6px 8px;
@@ -1660,7 +1648,6 @@ _INTERFACE_INJECT = '''
   <div class="row" id="ifx-row"></div>
   <div class="volcano" id="ifx-volcano"></div>
 </div>
-<div id="hover-patents"></div>
 <div id="axis-legend"></div>
 <div id="pin-toggle" title="Show or hide pinned genes (double-click to show ONLY pinned genes)">
   <label><input type="checkbox" id="pin-toggle-cb" checked> ★ pinned <span id="pin-toggle-n">0</span><span id="pin-toggle-solo"></span></label>
@@ -1699,7 +1686,6 @@ _INTERFACE_INJECT = '''
     var nextB = document.getElementById("ifx-next");
     var indEl = document.getElementById("ifx-ind");
     var volBox = document.getElementById("ifx-volcano");
-    var patBox = document.getElementById("hover-patents");
     var researchBox = document.getElementById("research-box");
     var research = window.__GENE_RESEARCH__ || {};
     var legEl  = document.getElementById("axis-legend");
@@ -1711,8 +1697,6 @@ _INTERFACE_INJECT = '''
     var lfBoxes = document.getElementById("lf-boxes");
     var vfBoxes = document.getElementById("vf-boxes");
     var vcfBoxes = document.getElementById("vcf-boxes");
-    var patents = window.__GENE_PATENTS__ || {};
-    var depmapTpl = window.__DEPMAP_URL__ || "https://depmap.org/portal/gene/{gene}";
     var pageSize = window.__PAGE_SIZE__ || 5;
     var axis = window.__AXIS_LABELS__ || {x: "X", y: "Y", z: "Z"};
     var axisHelp = window.__AXIS_HELP__ || {};
@@ -2128,33 +2112,6 @@ _INTERFACE_INJECT = '''
       researchBox.style.display = "block";
     }
 
-    function positionPatBox() {
-      if (!patBox || !box) return;
-      var gap = 8;
-      var prevDisp = box.style.display;
-      if (prevDisp === "none" || !prevDisp) box.style.display = "block";
-      var boxRect = box.getBoundingClientRect();
-      box.style.display = prevDisp;
-      var rightPx = Math.max(8, window.innerWidth - boxRect.left + gap);
-      patBox.style.left = "auto";
-      patBox.style.right = rightPx + "px";
-    }
-    function renderPatents(gene) {
-      if (!patBox) return;
-      var html = patents[gene];
-      if (!html) {
-        var depmap = depmapTpl.replace("{gene}", encodeURIComponent(gene));
-        html = '<div class="pat-header"><span class="pat-gene">' + gene + '</span>'
-             + ' <a class="pat-depmap" href="' + depmap + '" target="_blank" '
-             + 'rel="noopener" title="open in DepMap">DepMap ↗</a></div>'
-             + '<div class="pat-empty">no patent entries for this gene</div>';
-      }
-      patBox.innerHTML = html;
-      patBox.style.display = "block";
-      positionPatBox();
-    }
-    window.addEventListener("resize", positionPatBox);
-
     function renderPage() {
       // Filter to compounds visible under the currently-ticked plates (Option B:
       // the list itself shrinks/grows with the plate selection).
@@ -2205,7 +2162,6 @@ _INTERFACE_INJECT = '''
       volPinIdx = null;          // re-render (page/plate change) clears the volcano pin
       volBox.style.display = "none";
       volBox.innerHTML = "";
-      positionPatBox();
     }
 
     var GENE_COMPOUNDS = window.__GENE_COMPOUNDS__ || {};
@@ -2234,7 +2190,6 @@ _INTERFACE_INJECT = '''
       gn.textContent = gene;
       meta.textContent = metaTxt;
       renderPage();
-      renderPatents(gene);
       renderResearch(gene);
       return true;
     }
@@ -2244,7 +2199,6 @@ _INTERFACE_INJECT = '''
       box.classList.remove("pinned");
       box.style.display = "none";
       volBox.style.display = "none";
-      if (patBox) { patBox.classList.remove("pinned"); patBox.style.display = "none"; }
       if (researchBox) { researchBox.classList.remove("pinned"); researchBox.style.display = "none"; }
     }
     function goPage(delta) {
@@ -2271,7 +2225,7 @@ _INTERFACE_INJECT = '''
       // External modes store only the filename; prepend the shared base here.
       if (VMODE === "svg") {
         var d = VBASE ? VBASE + "/" + v : v;
-        return '<object class="vobj" type="image/svg+xml" data="' + d + '"></object>';
+        return '<object class="vobj" type="image/svg+xml" data="' + d + '" data-vfn="' + v + '"></object>';
       }
       if (VMODE === "path") {
         var p = VBASE ? VBASE + "/" + v : v;
@@ -2306,7 +2260,7 @@ _INTERFACE_INJECT = '''
           groups[st].forEach(function(pl) {
             var act = pl[3] ? ' · ' + pl[3] : '';
             var ns = pl[6] ? ' <span class="vns">not significant</span>' : '';
-            html += '<div class="vcell' + (pl[6] ? ' vcomp' : '') + '"><div class="vlabel">'
+            html += '<div class="vcell' + (pl[6] ? ' vcomp' : '') + '" data-vk="' + (pl[7] || '') + '"><div class="vlabel">'
                   + (valSufOf(pl[0]) || pl[0]) + ' (logfc ' + pl[1] + ')' + act + ns + '</div>'
                   + (pl[2] ? vimg(pl[2]) : '<div class="vmiss">(no volcano)</div>') + '</div>';
           });
@@ -2332,7 +2286,109 @@ _INTERFACE_INJECT = '''
       if (!html) { volBox.style.display = "none"; return; }
       volBox.innerHTML = html;
       volBox.style.display = "block";
+      traceStems();
     }
+    // Hover-any-gene trace across a WT/MLN/KO stem. Every significant-down gene point in a
+    // stem's volcanoes is a hover-target; hovering one draws a polyline connecting that gene's
+    // position across the stem's conditions (incl. where it's no longer significant — e.g.
+    // suppressed in WT, gone in KO). Positions come from injected __STEM_TRACE__ (keyed by
+    // contrast id), so it works over http AND file:// (no reading into the <object> SVG).
+    var SVGNS = "http://www.w3.org/2000/svg";
+    var STEM_TRACE = window.__STEM_TRACE__ || {};
+    var _stems = [];   // .vstem elements currently shown (re-laid-out on resize)
+
+    // (fx, fy) fraction of a volcano image -> position within the vstem content box, accounting
+    // for the SVG letterboxing (preserveAspectRatio "meet") into the fixed <object> box.
+    function fracToPos(obj, fx, fy, aspect, vstem, stemRect) {
+      var ob = obj.getBoundingClientRect();
+      if (!ob.width || !ob.height) return null;
+      var boxA = ob.width / ob.height, rw, rh, offx, offy;
+      if (aspect > boxA) { rw = ob.width; rh = ob.width / aspect; offx = 0; offy = (ob.height - rh) / 2; }
+      else { rh = ob.height; rw = ob.height * aspect; offy = 0; offx = (ob.width - rw) / 2; }
+      return {x: ob.left + offx + fx * rw - stemRect.left + vstem.scrollLeft,
+              y: ob.top  + offy + fy * rh - stemRect.top};
+    }
+    function stemOverlay(vstem) {
+      var svg = vstem.querySelector(":scope > .vstem-trace");
+      if (!svg) { svg = document.createElementNS(SVGNS, "svg");
+                  svg.setAttribute("class", "vstem-trace"); vstem.appendChild(svg); }
+      svg.setAttribute("width", vstem.scrollWidth);
+      svg.setAttribute("height", vstem.clientHeight);
+      return svg;
+    }
+    function clearTrace(vstem) {
+      var svg = vstem.querySelector(":scope > .vstem-trace");
+      if (svg) while (svg.firstChild) svg.removeChild(svg.firstChild);
+    }
+    // Draw `gene`'s connecting line across this stem's condition volcanoes.
+    function traceGene(vstem, gene) {
+      var svg = stemOverlay(vstem);
+      while (svg.firstChild) svg.removeChild(svg.firstChild);
+      var stemRect = vstem.getBoundingClientRect(), pts = [];
+      vstem.querySelectorAll(".vcell").forEach(function(cell) {
+        var vk = cell.getAttribute("data-vk"); if (!vk) return;
+        var e = (STEM_TRACE[vk] || {})[gene]; if (!e) return;
+        var obj = cell.querySelector("object.vobj"); if (!obj) return;
+        var p = fracToPos(obj, e[0], e[1], e[2] || 1, vstem, stemRect);
+        if (p) pts.push(p);
+      });
+      if (!pts.length) return;
+      if (pts.length >= 2) {
+        var pl = document.createElementNS(SVGNS, "polyline");
+        pl.setAttribute("points", pts.map(function(p) { return p.x.toFixed(1) + "," + p.y.toFixed(1); }).join(" "));
+        pl.setAttribute("fill", "none"); pl.setAttribute("stroke", "#1D6FB8");
+        pl.setAttribute("stroke-width", "2"); pl.setAttribute("stroke-linejoin", "round");
+        pl.setAttribute("stroke-linecap", "round"); pl.setAttribute("opacity", "0.95");
+        svg.appendChild(pl);
+      }
+      pts.forEach(function(p) {
+        var c = document.createElementNS(SVGNS, "circle");
+        c.setAttribute("cx", p.x.toFixed(1)); c.setAttribute("cy", p.y.toFixed(1)); c.setAttribute("r", "4");
+        c.setAttribute("fill", "none"); c.setAttribute("stroke", "#1D6FB8"); c.setAttribute("stroke-width", "2");
+        svg.appendChild(c);
+      });
+      var lab = document.createElementNS(SVGNS, "text");
+      lab.setAttribute("x", (pts[0].x + 6).toFixed(1)); lab.setAttribute("y", (pts[0].y - 6).toFixed(1));
+      lab.setAttribute("font-size", "11"); lab.setAttribute("font-weight", "700"); lab.setAttribute("fill", "#1D3557");
+      lab.textContent = gene;
+      svg.appendChild(lab);
+    }
+    // Place an invisible hover-target over each significant-down gene point in the stem.
+    function placeHotspots(vstem) {
+      var old = vstem.querySelectorAll(":scope > .vhot");
+      for (var i = 0; i < old.length; i++) old[i].remove();
+      stemOverlay(vstem);
+      var stemRect = vstem.getBoundingClientRect();
+      vstem.querySelectorAll(".vcell").forEach(function(cell) {
+        var vk = cell.getAttribute("data-vk"); if (!vk) return;
+        var genes = STEM_TRACE[vk]; if (!genes) return;
+        var obj = cell.querySelector("object.vobj"); if (!obj) return;
+        Object.keys(genes).forEach(function(g) {
+          var e = genes[g]; if (!e[3]) return;   // isHit only -> a real point here, so hoverable
+          var p = fracToPos(obj, e[0], e[1], e[2] || 1, vstem, stemRect);
+          if (!p) return;
+          var h = document.createElement("div");
+          h.className = "vhot"; h.title = g;
+          h.style.left = (p.x - 7) + "px"; h.style.top = (p.y - 7) + "px";
+          h.addEventListener("mouseenter", function() { traceGene(vstem, g); });
+          vstem.appendChild(h);
+        });
+      });
+    }
+    function refreshStems() { _stems.forEach(placeHotspots); }
+    function traceStems() {
+      _stems = Array.prototype.slice.call(volBox.querySelectorAll(".vstem"));
+      _stems.forEach(placeHotspots);
+      // <object> SVGs need layout before their rects are valid — re-place as they load + a few passes
+      volBox.querySelectorAll("object.vobj").forEach(function(obj) {
+        obj.addEventListener("load", refreshStems);
+      });
+      setTimeout(refreshStems, 150);
+      setTimeout(refreshStems, 450);
+    }
+    window.addEventListener("resize", function() {
+      _stems.forEach(function(vstem) { clearTrace(vstem); placeHotspots(vstem); });
+    });
     // Does this compound cell have any validation plate among its visible plates? (drives the
     // auto-show of grouped volcanoes on plain gene hover.)
     function cellHasValidation(cell) {
@@ -2392,7 +2448,6 @@ _INTERFACE_INJECT = '''
     gd.on("plotly_unhover", function() {
       if (pinned) return;
       box.style.display = "none";
-      if (patBox) patBox.style.display = "none";
       if (researchBox) researchBox.style.display = "none";
     });
     gd.on("plotly_click", function(e) {
@@ -2406,7 +2461,6 @@ _INTERFACE_INJECT = '''
         pinned = true;
         box.classList.add("pinned");
         box.style.display = "block";
-        if (patBox) patBox.classList.add("pinned");
         if (researchBox) researchBox.classList.add("pinned");
       }
     });
@@ -3827,9 +3881,6 @@ def plot_3d_interface(
     volcano_n_jobs=1,
     compound_meta_df=None,
     compound_meta_icons=None,
-    gene_patents_df=None,
-    gene_patents_top_n=5,
-    depmap_url_template='https://depmap.org/portal/gene/{gene}',
     disease_area_colors=None,
     na_area_color='#bbbbbb',
     title='',
@@ -3880,8 +3931,8 @@ def plot_3d_interface(
     If ``min_x_highlight`` is set, only genes at/above it are eligible for the
     corner-distance and auto-y highlights (a noise-floor gate on the x-axis).
 
-    Graceful degradation: ``disease_area``, the ``top1..topN`` compound columns,
-    ``fisher_p`` and ``gene_patents_df`` are all optional. Missing compound
+    Graceful degradation: ``disease_area``, the ``top1..topN`` compound columns
+    and ``fisher_p`` are all optional. Missing compound
     columns simply disable the hover/pin panel and volcanoes; the 3D scatter
     with hover text always renders.
 
@@ -4031,6 +4082,8 @@ def plot_3d_interface(
     # __VOLCANO_BASE__ and store only the per-row filename in the compound blob
     # (prefix × 23k rows was ~2 MB). '' ⇒ embedded mode, JS prepends nothing.
     _volcano_base = ''
+    ring_pos = {}   # {volcano filename: [fx, fy, aspect]} for the cross-plate trace line (see render pass)
+    stem_trace = {}   # {contrast(vk): {gene: [fx, fy, aspect, isHitHere]}} — hover-any-gene trace across a stem
     # Precomputed panels (compound blobs + plate/activity lists + thumb/volcano modes) can be
     # passed in to SKIP the expensive build below — the referenced thumbnail/volcano files must
     # already exist on disk (written by the run that produced the panels). Cache via return_panels.
@@ -4042,6 +4095,14 @@ def plot_3d_interface(
         _thumb_ext     = bool(panels['thumb_ext'])
         _thumb_rel     = panels['thumb_rel']
         print(f'> panels: loaded {len(custom):,} gene panels from cache (skipped rebuild)')
+        _rp_path = os.path.join(volcano_dir, 'ring_pos.json') if volcano_dir else None
+        if _rp_path and os.path.exists(_rp_path):   # trace-line ring positions (rendered by the original run)
+            try:
+                import json as _json
+                with open(_rp_path) as _rf:
+                    ring_pos = _json.load(_rf)
+            except Exception:
+                ring_pos = {}
 
     if have_compounds and panels is None:
         _stats = {'png': 0, 'rdkit': 0, 'miss': 0}
@@ -4196,6 +4257,11 @@ def plot_3d_interface(
                 has_ng = 'n_genes' in compounds_df.columns   # genes measured in the experiment
                 has_mbid = 'molecule_batch_id' in compounds_df.columns  # per-plate batch id
                 has_comp = 'is_completion' in compounds_df.columns  # ride-along validation-stem condition (gene not significant here)
+                import re as _re_v   # validation-plate matcher: only these rows carry a contrast id (vk) for the trace
+                _vp_suf = [str(s).upper() for s in (plate_validation_suffixes or [])]
+                _vp_re = _re_v.compile('(' + '|'.join(_vp_suf) + ')$', _re_v.I) if _vp_suf else None
+                def _is_valp(p):
+                    return bool(_vp_re and pd.notna(p) and _vp_re.search(str(p)))
                 if has_act:
                     _ACT_ORDER = ['High (>25)', 'Medium (11-25)', 'Low (2-10)',
                                   'Single (1)', 'Silent']
@@ -4234,6 +4300,7 @@ def plot_3d_interface(
                                 (str(int(_ng[pi])) if has_ng and pd.notna(_ng[pi]) else ''),
                                 (str(_mbid[pi]) if has_mbid and pd.notna(_mbid[pi]) else ''),
                                 (1 if has_comp and bool(_comp[pi]) else 0),
+                                (str(_vk[pi]) if (_is_valp(_plate[pi]) and pd.notna(_vk[pi])) else ''),  # contrast id (validation rows only) for the trace
                             ])
                             vk = _vk[pi]
                             if pd.notna(vk):
@@ -4329,23 +4396,59 @@ def plot_3d_interface(
             _sig = bool(volcano_significant) and ('significant' in _vsrc.columns)
             _ext = '.svg' if _sig else '.png'
             _external = bool(volcano_dir) and bool(html_path)
+            # ring_pos[filename] = [fx, fy, aspect]: the target gene's ring centre as a
+            # fraction of each volcano image, injected as __RING_POS__ so the interface can
+            # draw the cross-plate trace line without reading the SVG DOM (blocked under file://).
+            import json as _json
+            ring_pos = {}
+            _ring_pos_path = os.path.join(volcano_dir, 'ring_pos.json') if _external else None
+            if _ring_pos_path and os.path.exists(_ring_pos_path):
+                try:
+                    with open(_ring_pos_path) as _rf:
+                        ring_pos = _json.load(_rf)
+                except Exception:
+                    ring_pos = {}
             if _external:
                 os.makedirs(volcano_dir, exist_ok=True)
                 _rel = os.path.relpath(
                     volcano_dir, os.path.dirname(os.path.abspath(html_path))).replace(os.sep, '/')
                 _volcano_base = _rel   # emitted once; rows store only the filename
 
-                def _vfname(g, vk):
-                    return _volcano_cache_fname(g, vk, volcano_xlim, volcano_size_px, _ext)
+                def _vfname(g, vk, version=''):
+                    return _volcano_cache_fname(g, vk, volcano_xlim, volcano_size_px, _ext, version=version)
+
+                # Only VALIDATION-plate volcanoes need the trace-line output (the #tgt-ring marker
+                # + ring_pos); they're salted with 'v2' so ONLY they re-render on the bump, while
+                # every other volcano keeps its original (unversioned) cache filename -> cache hit.
+                import re as _re
+                _vsuf = [str(s).upper() for s in (plate_validation_suffixes or [])]
+                _vplate_re = _re.compile('(' + '|'.join(_vsuf) + ')$', _re.I) if _vsuf else None
+
+                def _task_plate(g, ei, pi):
+                    if pi is None:
+                        return None
+                    try:
+                        _slot = custom[g][ei][3]
+                        return _slot[pi][0] if isinstance(_slot, list) else None
+                    except Exception:
+                        return None
+
+                def _task_ver(g, ei, pi):
+                    _p = _task_plate(g, ei, pi)
+                    return 'v2' if (_vplate_re and _p and _vplate_re.search(str(_p))) else ''
 
                 # cache hits: file already on disk -> reference it, skip render. List the
                 # dir ONCE and test membership in memory — an os.path.exists per task is
                 # ~26k stat calls, painfully slow on a Dropbox/networked mount (/mnt/c).
                 _existing = set(os.listdir(volcano_dir))
+                _val_fns = set()   # validation-plate volcano filenames (only these carry ring_pos)
                 render = []
                 for (g, vk, ei, pi) in tqdm(tasks, desc='volcano cache scan',
                                             unit='task', mininterval=0.5, ncols=80):
-                    fn_ = _vfname(g, vk)
+                    _ver = _task_ver(g, ei, pi)
+                    fn_ = _vfname(g, vk, _ver)
+                    if _ver:
+                        _val_fns.add(fn_)
                     if fn_ in _existing:
                         _set_volcano(g, ei, pi, fn_)   # base prepended client-side
                     else:
@@ -4355,13 +4458,15 @@ def plot_3d_interface(
                 render = [(g, vk, ei, pi, None) for (g, vk, ei, pi) in tasks]
                 n_cached = 0
 
-            def _store(g, ei, pi, fn_, content):
+            def _store(g, ei, pi, fn_, content, fx=None, fy=None, aspect=None):
                 # content = SVG text (_sig) or base64 PNG. External: write the file
                 # and store its relative path; embedded: store an inline value
                 # (data-URI SVG, or raw base64 PNG). '' on failure.
                 if not content:
                     _set_volcano(g, ei, pi, '')
                     return
+                if _external and fx is not None and fy is not None and fn_ in _val_fns:
+                    ring_pos[fn_] = [round(fx, 4), round(fy, 4), round(aspect or 1.0, 4)]
                 if _external:
                     mode_ = 'w' if _sig else 'wb'
                     data_ = content if _sig else base64.b64decode(content)
@@ -4382,12 +4487,13 @@ def plot_3d_interface(
                 import matplotlib.pyplot as plt
                 pbar = tqdm(total=n_render, desc='volcanoes', unit='cmp', mininterval=0.5, ncols=80)
                 for g, vk, ei, pi, fn_ in render:
+                    _fx = _fy = _asp = None
                     try:
                         if _sig:
-                            content = _volcano_svg_string(
+                            content, _fx, _fy, _asp = _volcano_svg_string(
                                 _vsrc, vk, g, key='compound', sig_col='significant',
                                 xmin=volcano_xlim[0], xmax=volcano_xlim[1],
-                                size_px=volcano_size_px)
+                                size_px=volcano_size_px, return_pos=True)
                         else:
                             fig_v, ax_v = plt.subplots(
                                 figsize=(volcano_size_px / 100, volcano_size_px / 100), dpi=100)
@@ -4403,7 +4509,7 @@ def plot_3d_interface(
                     except Exception as e:
                         tqdm.write(f'  [warn] volcano failed {g}/{vk}: {e}')
                         content = ''
-                    _store(g, ei, pi, fn_, content)
+                    _store(g, ei, pi, fn_, content, _fx, _fy, _asp)
                     pbar.update(1)
                 pbar.close()
             else:
@@ -4438,13 +4544,41 @@ def plot_3d_interface(
                     results = Parallel(n_jobs=volcano_n_jobs, backend='loky')(
                         delayed(_volcano_render_worker)(
                             (g, vk, sub_cache.get(vk, _empty), volcano_size_px,
-                             volcano_xlim[0], volcano_xlim[1], _sig))
+                             volcano_xlim[0], volcano_xlim[1], _sig, True))
                         for g, vk, _, _, _ in render)
-                for (g, vk, ei, pi, fn_), content in zip(render, results):
-                    _store(g, ei, pi, fn_, content)
+                for (g, vk, ei, pi, fn_), res in zip(render, results):
+                    if isinstance(res, tuple):
+                        content, _fx, _fy, _asp = res
+                    else:
+                        content, _fx, _fy, _asp = res, None, None, None
+                    _store(g, ei, pi, fn_, content, _fx, _fy, _asp)
             print(f'> volcanoes: {n_cached:,} cached, {n_render:,} rendered'
                   + (' [interactive SVG]' if _sig else '')
                   + (f' -> {volcano_dir}' if _external else ' (embedded)'))
+            if _ring_pos_path:   # persist ring centres so cached re-runs keep the trace-line positions
+                try:
+                    with open(_ring_pos_path, 'w') as _rf:
+                        _json.dump(ring_pos, _rf)
+                except Exception as _e:
+                    print(f'  [warn] could not write ring_pos.json: {_e}')
+            # stem_trace[vk][gene] = [fx, fy, aspect, isHitHere]: every significant-down gene's
+            # position in each validation contrast (positions reused from ring_pos — no re-render).
+            # isHitHere=1 => a significant point in THIS volcano (hoverable); 0 => shown only so the
+            # line can pass through (the gene is not significant in this condition).
+            if _external:
+                for (g, vk, ei, pi) in tasks:
+                    if pi is None:
+                        continue
+                    _row = custom[g][ei][3][pi]
+                    if not (len(_row) > 7 and _row[7]):    # validation rows only (carry a vk at idx 7)
+                        continue
+                    _rp = ring_pos.get(_vfname(g, vk, 'v2'))
+                    if not _rp:
+                        continue
+                    _hit = 0 if (len(_row) > 6 and _row[6]) else 1
+                    stem_trace.setdefault(str(vk), {})[str(g)] = [_rp[0], _rp[1], _rp[2] if len(_rp) > 2 else 1.0, _hit]
+                print(f'> stem trace: {sum(len(v) for v in stem_trace.values()):,} gene positions '
+                      f'across {len(stem_trace):,} validation contrasts')
         elif _vsrc is None:
             print('> no volcano source (pass df_raw or volcano_source) — volcanoes disabled')
     else:
@@ -4642,8 +4776,6 @@ def plot_3d_interface(
         # dominant real-world load cost) and fully offline. Keep plotly.min.js
         # alongside the HTML, like the _data.js / volcanoes_px / srb_png sidecars.
         fig.write_html(html_path, include_plotlyjs='directory')
-        gene_patents_map = _build_gene_patents_html_map(
-            gene_patents_df, gene_patents_top_n, depmap_url_template)
         import json as _json
         # Emit large data via JSON.parse("...") not as JS object literals: the engine
         # scans a string literal cheaply and the native JSON parser is far faster than
@@ -4820,8 +4952,6 @@ def plot_3d_interface(
         _all_compounds = sorted(_compound_genes)
         data_js = (
             'window.__GENE_COMPOUNDS__ = ' + _jsp(custom if have_compounds else {}) + ';\n'
-            'window.__GENE_PATENTS__ = ' + _jsp(gene_patents_map) + ';\n'
-            'window.__DEPMAP_URL__ = ' + _json.dumps(depmap_url_template) + ';\n'
             'window.__PAGE_SIZE__ = ' + str(int(page_size)) + ';\n'
             'window.__PLATES__ = ' + _jsp(list(all_plates)) + ';\n'
             'window.__PLATE_DATES__ = ' + _jsp(_plate_dates_map) + ';\n'
@@ -4846,6 +4976,7 @@ def plot_3d_interface(
                                     in (volcano_source.columns if volcano_source is not None else []))
                           else ('path' if (volcano_dir and html_path) else 'b64')) + ';\n'
             'window.__VOLCANO_BASE__ = ' + _json.dumps(_volcano_base) + ';\n'
+            'window.__STEM_TRACE__ = ' + _jsp(stem_trace) + ';\n'   # {vk: {gene: [fx,fy,aspect,isHit]}} for the hover trace (http + file://)
             'window.__THUMB_MODE__ = ' + _json.dumps('path' if _thumb_ext else 'b64') + ';\n'
             'window.__THUMB_DIR__ = ' + _json.dumps(_thumb_rel) + ';\n'
             'window.__AXIS_LABELS__ = '
@@ -5965,13 +6096,19 @@ def _volcano_svg_string(df, uniquecontrast, gene,
                         key='uniquecontrast', sig_col='significant',
                         fc_thresh=1.0, p_thresh=0.05,
                         xmin=-8.0, xmax=8.0, size_px=350,
-                        up_color='#008bfb', down_color='#ff0051', ns_color='lightgrey'):
+                        up_color='#008bfb', down_color='#ff0051', ns_color='lightgrey',
+                        return_pos=False):
     """
     Render the significant-only volcano (one ``uniquecontrast``) to an *interactive*
     SVG string. The dense non-significant cloud is rasterised (keeps the file small),
     while each significant point is a vector marker carrying a ``<title>`` (gene
     name) so a browser shows a native hover tooltip — like the 3D dots. The target
     ``gene`` is ringed + annotated. Returns ``''`` on empty/failure.
+
+    When ``return_pos`` is set, returns ``(svg, fx, fy, aspect)`` where (fx, fy) is the
+    target gene's ring centre as a fraction of the saved image (0..1, y down) and
+    ``aspect`` = width/height of the image — so a client can place the ring without
+    reading the SVG's DOM (needed for the cross-plate trace line under ``file://``).
     """
     import io
     import xml.etree.ElementTree as ET
@@ -5979,11 +6116,14 @@ def _volcano_svg_string(df, uniquecontrast, gene,
     matplotlib.use('Agg')
     import matplotlib.pyplot as plt
 
+    def _ret(svg, fx=None, fy=None, aspect=None):
+        return (svg, fx, fy, aspect) if return_pos else svg
+
     has_sig = sig_col in df.columns
     cols = ['genes', 'logfc', 'pvalue'] + ([sig_col] if has_sig else [])
     sub = df[df[key] == uniquecontrast][cols].dropna(subset=['genes', 'logfc', 'pvalue'])
     if sub.empty:
-        return ''
+        return _ret('')
     aggspec = {'logfc': ('logfc', 'mean'), 'pvalue': ('pvalue', 'min')}
     if has_sig:
         aggspec['significant'] = (sig_col, 'max')
@@ -5999,6 +6139,7 @@ def _volcano_svg_string(df, uniquecontrast, gene,
 
     fig, ax = plt.subplots(figsize=(size_px / 100, size_px / 100), dpi=100)
     gid2gene = {}
+    fx = fy = aspect = None
     try:
         # rasterised grey background (one image inside the SVG, not thousands of nodes)
         ax.scatter(agg.loc[ns, 'logfc'], agg.loc[ns, 'nlog10p'], s=6, c=ns_color,
@@ -6017,8 +6158,9 @@ def _volcano_svg_string(df, uniquecontrast, gene,
         ax.axvline(-fc_thresh, ls='--', lw=0.7, c='#888')
         tg = agg[agg['genes'] == gene]
         if not tg.empty:
-            ax.scatter(tg['logfc'], tg['nlog10p'], s=70, facecolor='none',
-                       edgecolor='black', lw=1.5, zorder=5)
+            _ring = ax.scatter(tg['logfc'], tg['nlog10p'], s=70, facecolor='none',
+                               edgecolor='black', lw=1.5, zorder=5)
+            _ring.set_gid('tgt-ring')   # id read by the interface to trace the gene across grouped volcanoes
             ax.annotate(gene, xy=(tg['logfc'].iat[0], tg['nlog10p'].iat[0]),
                         xytext=(8, 6), textcoords='offset points',
                         fontsize=11, fontweight='bold',
@@ -6028,10 +6170,10 @@ def _volcano_svg_string(df, uniquecontrast, gene,
         ax.set_ylabel('-log10(p-value)')
         ax.set_title('')   # the panel labels the volcano in HTML
         buf = io.StringIO()
-        fig.savefig(buf, format='svg', bbox_inches='tight')
+        fig.savefig(buf, format='svg', bbox_inches='tight', pad_inches=0.1)
     except Exception:
         plt.close(fig)
-        return ''
+        return _ret('')
     plt.close(fig)
 
     # inject <title>gene</title> into each significant point's <g id="sig*">
@@ -6039,15 +6181,40 @@ def _volcano_svg_string(df, uniquecontrast, gene,
         ET.register_namespace('', 'http://www.w3.org/2000/svg')
         root = ET.fromstring(buf.getvalue())
         ns_uri = '{http://www.w3.org/2000/svg}'
+        # image size (pt) from the viewBox; the ring's fraction is read straight from the
+        # saved SVG (no extra draw) so the client can place the trace line under file://.
+        _W = _H = None
+        _vb = root.get('viewBox')
+        if _vb:
+            try:
+                _p = [float(x) for x in _vb.replace(',', ' ').split()]
+                _W, _H = _p[2], _p[3]
+            except Exception:
+                _W = _H = None
         for el in root.iter():
             gid = el.get('id')
             if gid in gid2gene:
                 t = ET.SubElement(el, ns_uri + 'title')
                 t.text = gid2gene[gid]
                 el.insert(0, t)
-        return ET.tostring(root, encoding='unicode')
+            elif gid == 'tgt-ring' and return_pos and _W and _H:
+                # ring marker = a <path> (bezier circle) in SVG (pt) coords; its centre is the
+                # midpoint of the path's bounding box. y is already top-down in SVG.
+                _pth = el.find(ns_uri + 'path')
+                if _pth is not None and _pth.get('d'):
+                    try:
+                        import re as _re2
+                        _nums = [float(n) for n in _re2.findall(r'-?\d+\.?\d*(?:[eE]-?\d+)?', _pth.get('d'))]
+                        _xs, _ys = _nums[0::2], _nums[1::2]
+                        if _xs and _ys:
+                            fx = ((min(_xs) + max(_xs)) / 2) / _W
+                            fy = ((min(_ys) + max(_ys)) / 2) / _H
+                            aspect = _W / _H
+                    except Exception:
+                        pass
+        return _ret(ET.tostring(root, encoding='unicode'), fx, fy, aspect)
     except Exception:
-        return buf.getvalue()
+        return _ret(buf.getvalue(), fx, fy, aspect)
 
 
 def _volcano_render_worker(args):
@@ -6064,24 +6231,26 @@ def _volcano_render_worker(args):
     import matplotlib.pyplot as plt
     gene, compound, sub, size_px, xmin, xmax = args[:6]
     significant = args[6] if len(args) > 6 else False
+    return_pos = args[7] if len(args) > 7 else False   # also return the target ring's (fx, fy, aspect)
     if significant:
         return _volcano_svg_string(sub, compound, gene, key='compound',
                                    sig_col='significant',
-                                   xmin=xmin, xmax=xmax, size_px=size_px)
+                                   xmin=xmin, xmax=xmax, size_px=size_px, return_pos=return_pos)
     fig, ax = plt.subplots(figsize=(size_px / 100, size_px / 100), dpi=100)
     try:
         plot_volcano(sub, compound, gene,
                      xmin=xmin, xmax=xmax, ax=ax, title='')
         buf = io.BytesIO()
         fig.savefig(buf, format='PNG', bbox_inches='tight')
-        return base64.b64encode(buf.getvalue()).decode()
+        b64 = base64.b64encode(buf.getvalue()).decode()
+        return (b64, None, None, None) if return_pos else b64
     except Exception:
-        return ''
+        return ('', None, None, None) if return_pos else ''
     finally:
         plt.close(fig)
 
 
-def _volcano_cache_fname(gene, key, xlim, size_px, ext='.svg'):
+def _volcano_cache_fname(gene, key, xlim, size_px, ext='.svg', version=''):
     """Canonical on-disk volcano cache filename for a (focal gene, volcano key) pair.
 
     Single source of truth for the name used by `plot_3d_interface`'s disk cache, so
@@ -6089,9 +6258,14 @@ def _volcano_cache_fname(gene, key, xlim, size_px, ext='.svg'):
     later finds as cache hits. The key string is data-independent on purpose — the
     cache is keyed by identity + render params, NOT by the underlying p-values, so a
     data change (like flooring p-values) requires explicitly regenerating the file.
+
+    ``version`` optionally salts the key so a change to the rendered SVG *output* can
+    force regeneration for a SUBSET of volcanoes without invalidating the rest. Empty
+    (default) reproduces the original key exactly, so untouched volcanoes stay cached.
     """
     import hashlib
-    s = f'{gene}|{key}|{xlim[0]}|{xlim[1]}|{size_px}|{ext}'
+    _pre = f'{version}|' if version else ''
+    s = f'{_pre}{gene}|{key}|{xlim[0]}|{xlim[1]}|{size_px}|{ext}'
     return hashlib.md5(s.encode()).hexdigest()[:16] + ext
 
 

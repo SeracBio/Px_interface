@@ -503,7 +503,8 @@ class OUTPUT():
             depmap_defaults=['Selective', 'Non-essential'], conf_defaults=['High', 'Med'],
             lof_defaults=['Yes'], validation_defaults=None,  # default ticked boxes on load (validation: all)
             volcano_significant=True, volcano_dir=os.path.join(output_dir, 'interfaces', 'volcanoes_px'),
-            volcano_n_jobs=16, volcano_xlim=(-8, 8), volcano_size_px=350,
+            volcano_n_jobs=max(1, (os.cpu_count() or 8) - 2),  # use most cores for the volcano render
+            volcano_xlim=(-8, 8), volcano_size_px=350,
             disease_area_colors=DISEASE_AREA_COLORS, nb_display=False,
             html_path=os.path.join(output_dir, 'interfaces', 'Serac_Px_interface.html'), # 20260612_3d_interface_PX_R2_assoc_ms.html
         )

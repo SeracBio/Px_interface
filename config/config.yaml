@@ -56,7 +56,7 @@ MS_PATH: /home/gtamo/Px_interface/output/MS/MS.parquet
 
 CHEMLIB_OVERWRITE: false
 DFRAW_OVERWRITE: false
-IFACE_OVERWRITE: false             # true -> rebuild + save the interface inputs; false -> load them from IFACE_DIR + free RAM
+IFACE_OVERWRITE: true           # true -> rebuild + save the interface inputs; false -> load them from IFACE_DIR + free RAM
 IFACE_DIR: output/interface            # iface_df / compounds_df / meas / plate2date checkpoint for the 3D interface
 VALIDATION_PLATE_SUFFIXES:         # plate-name suffixes forming a validation stem (…WT/…MLN/…KO shown side by side)
 - WT

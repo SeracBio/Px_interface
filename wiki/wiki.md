@@ -91,7 +91,35 @@ data shares the namespace); no real PNGs so thumbnails are RDKit-rendered from `
   Plain **gene hover auto-shows** the first visible compound's grouped volcanoes when that compound has
   validation plates (`cellHasValidation` gate in the `plotly_hover` handler); the panel widens (max
   96vw, `.vstem` scrolls if needed). Multiple compounds: paged via the existing ◀▶ (one compound at a
-  time). Synthetic fixture: validation plates `Pw10{WT,MLN,KO}` + `Pw11{WT,KO}` (MSPlate namespace);
+  time).
+  - **Hover-any-gene trace across a stem's volcanoes (2026-07-20).** In a WT/MLN/KO stem, **hovering any
+    significant-down gene point** draws a polyline connecting that gene's position across the stem's
+    conditions (incl. where it's no longer significant — e.g. suppressed in WT, gone in KO), like a slope
+    chart. It is **hover-driven** (no always-on line) and works for **every** significant-down gene in the
+    panel, not just the compound's focal gene. Data: `__STEM_TRACE__[vk][gene] = [fx, fy, aspect, isHit]`
+    for every validation contrast `vk` — positions **reused from `ring_pos`** (no re-render; every
+    significant-down gene is already a focal gene of its own volcano via `compounds_df`+completion, so its
+    ring position in each condition exists). Built in `plot_3d_interface` after the render pass; each
+    validation plate-row carries its `vk` at index 7 so the JS maps a cell → contrast. JS: `placeHotspots`
+    lays invisible `.vhot` targets over each `isHit` gene point (positioned via the `<object>` rect +
+    injected `(fx,fy)` + letterbox math — works http AND `file://`, no `contentDocument`); `traceGene`
+    draws the `<polyline>` + per-point markers + gene label into the `.vstem-trace` overlay; re-placed on
+    `showVolcano` + `<object>` load + delayed passes + resize. The per-volcano `#tgt-ring` marker / ring
+    `<path>` bbox-centre (parsed from the serialised SVG, no extra draw) still feeds `ring_pos`; `ring_pos`
+    is persisted to `volcanoes_px/ring_pos.json` for cached re-runs. `__RING_POS__` (the old focal-only
+    always-on line) is superseded by `__STEM_TRACE__`. **Cache (SELECTIVE — important):** the on-disk
+    volcano cache is keyed by identity, not content. `_volcano_cache_fname(..., version=...)` salts the key
+    ONLY for validation-plate volcanoes (`version='v2'`), so on the trace-line change ONLY those re-render
+    while every other volcano keeps its original (unsalted) filename → cache hit. This matters at scale: a
+    global bump would re-render ALL volcanoes (real data ≈ 67k → ~4.5 h); the selective salt re-renders
+    only the validation subset. `_task_ver` derives validation-ness from the plate at `custom[g][ei][3][pi][0]`
+    via `plate_validation_suffixes`; `ring_pos` (and thus `__STEM_TRACE__`) is recorded only for `_val_fns`
+    (validation filenames) so the injected map stays small. `ring_pos.json` persists it for cached re-runs.
+    QA both `file://` + `http.server`.
+    **Volcano-render perf:** `build_interface` sets `volcano_n_jobs = os.cpu_count()-2` (was hardcoded 16);
+    combined with the no-extra-draw ring extraction, a cold validation render is ~3-4× faster. The dense
+    non-significant cloud (all ~8k genes) rasterised per volcano is the remaining per-volcano cost.
+  - Synthetic fixture: validation plates `Pw10{WT,MLN,KO}` + `Pw11{WT,KO}` (MSPlate namespace);
   the **deterministic case** (updated 2026-07-20 for stem completion) forces compound `SRB-0000006` /
   gene `G_00000` to be a significant down-hit on `Pw10WT/Pw10MLN/Pw11WT`, measured-but-NOT-significant
   on `Pw10KO` (logfc 0.20), and drops all `SRB-0000006 × Pw11KO` rows (compound never run there).
@@ -119,6 +147,13 @@ data shares the namespace); no real PNGs so thumbnails are RDKit-rendered from `
 - **gene research** is sourced from `config.GENE_RESEARCH` (whole-genome ~10K-gene JSON) and
   **filtered to plotted genes** before injection (`__GENE_RESEARCH__`) to bound the payload; the
   build prints `[gene_research] kept/total — MB injected`.
+- **Per-gene patents / DepMap card removed from the Px interface (2026-07-20).** The `#hover-patents`
+  side-card (gene + "DepMap ↗" link + patents table / "no patent entries") was **never fed data** in
+  `plot_3d_interface` (`build_interface` doesn't pass `gene_patents_df`), so it always rendered an empty
+  slim card — removed from `_INTERFACE_INJECT` (HTML/CSS/JS) and its `__GENE_PATENTS__`/`__DEPMAP_URL__`
+  injection + `gene_patents_df`/`gene_patents_top_n`/`depmap_url_template` params dropped from
+  `plot_3d_interface`. The separate `plot_target_3d` still has its own patents panel (untouched), and the
+  `_build_gene_patents_html_map` helper remains for it. Don't re-add it to the Px interface.
 - **PIN/HIDE** (top filter section, collapsible): search+autocomplete over genes & compounds; a
   **Selector** (orange) pins, a **Hide** (red) hides. Pinning a compound pins its target genes;
   hiding a **gene** drops its dot, hiding a **compound** drops only that compound (gates at
