@@ -163,6 +163,29 @@ class TestDataPipeline(unittest.TestCase):
         self.assertTrue(set(self.output.compounds_df['compound'])
                         .issubset(set(self.data.serac_df['compound'])))
 
+    def test_validation_stem_completion(self):
+        """Stem completion adds ride-along rows for measured-but-not-significant conditions,
+        and omits conditions where the compound was never run.
+
+        Fixture: SRB-0000006 on G_00000 is a significant-down hit on Pw10WT/Pw10MLN/Pw11WT,
+        measured-but-not-significant on Pw10KO, and never run on Pw11KO. So compounds_df must
+        carry Pw10KO as an is_completion row (gene shown in the insignificant zone) and must
+        NOT carry any Pw11KO row.
+        """
+        cdf = self.output.compounds_df
+        # the completion flag column exists
+        self.assertIn('is_completion', cdf.columns)
+        sel = cdf[(cdf['gene'] == 'G_00000') & (cdf['compound'] == 'SRB-0000006')]
+        by_plate = sel.set_index('plate')['is_completion'].to_dict()
+        # the significant conditions are present and flagged as real hits (not completion)
+        for p in ['Pw10WT', 'Pw10MLN', 'Pw11WT']:
+            self.assertIn(p, by_plate, f'{p} hit missing')
+            self.assertFalse(bool(by_plate[p]), f'{p} should be a real hit, not completion')
+        # Pw10KO is added as a completion row (compound run there, gene measured but not significant)
+        self.assertTrue(bool(by_plate.get('Pw10KO')), 'Pw10KO completion row missing')
+        # Pw11KO is omitted entirely (compound never run on that condition)
+        self.assertNotIn('Pw11KO', by_plate, 'Pw11KO should be omitted (compound not run there)')
+
     def test_iface_files_saved(self):
         """get_iface saves the four render inputs to IFACE_DIR."""
         d = self.params.IFACE_DIR

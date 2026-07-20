@@ -358,6 +358,58 @@ class OUTPUT():
             _n0 = len(compounds_df)
             compounds_df = compounds_df[compounds_df['activity'] != 'Silent']
             print(f'> dropped {_n0 - len(compounds_df):,} Silent-activity rows -> {len(compounds_df):,} remain')
+
+            # --- complete validation stems ---------------------------------------------
+            # A (gene, compound) is a hit only where it is significant-down, so a gene
+            # significant in the WT condition but not the KO condition of a plate stem
+            # (…WT/…MLN/…KO) would have no KO volcano. For each such hit on a validation
+            # plate, also add the stem's OTHER conditions where the compound was actually
+            # run (contrast exists) and the gene was measured — showing the gene at its
+            # true, non-significant coordinates. Conditions where the compound was never
+            # tested are correctly omitted. Rows are flagged is_completion so the interface
+            # shows them as ride-along context, not as hits.
+            compounds_df['is_completion'] = False
+            _sufs = [str(s).upper() for s in getattr(params, 'VALIDATION_PLATE_SUFFIXES', ['WT', 'MLN', 'KO'])]
+            _valre = re.compile(r'(' + '|'.join(_sufs) + r')$', re.I)
+            _stem = lambda p: _valre.sub('', str(p))
+            _val_plates = [p for p in rep['plate'].dropna().unique() if _valre.search(str(p))]
+            _stem_map = {}
+            for _p in _val_plates:
+                _stem_map.setdefault(_stem(_p), []).append(_p)
+            _uc_of = rep.drop_duplicates(['compound', 'plate']).set_index(['compound', 'plate'])['uniquecontrast']
+            _measured = set(zip(meas['genes'], meas['uniquecontrast']))          # (gene, contrast) present
+            _seen = set(zip(compounds_df['gene'], compounds_df['compound'], compounds_df['plate']))
+            _add = []
+            for _, _r in compounds_df[compounds_df['plate'].isin(_val_plates)].iterrows():
+                for _sib in _stem_map.get(_stem(_r['plate']), []):
+                    if _sib == _r['plate'] or (_r['gene'], _r['compound'], _sib) in _seen:
+                        continue
+                    if (_r['compound'], _sib) not in _uc_of.index:
+                        continue                                                 # compound never run here -> omit
+                    _uc = _uc_of.loc[(_r['compound'], _sib)]
+                    _uc = _uc if isinstance(_uc, str) else _uc.iloc[0]
+                    if (_r['gene'], _uc) not in _measured:
+                        continue                                                 # gene not measured -> omit
+                    _seen.add((_r['gene'], _r['compound'], _sib))
+                    _add.append({'gene': _r['gene'], 'compound': _r['compound'], 'plate': _sib, 'uniquecontrast': _uc})
+            if _add:
+                _mean_logfc = meas.dropna(subset=['logfc']).groupby(['genes', 'uniquecontrast'])['logfc'].mean()
+                add_df = pd.DataFrame(_add)
+                add_df['logfc'] = [_mean_logfc.get((g, u)) for g, u in zip(add_df['gene'], add_df['uniquecontrast'])]
+                add_df = (add_df.merge(rep[['uniquecontrast', 'activity']].drop_duplicates('uniquecontrast'), on='uniquecontrast', how='left')
+                                .merge(n_genes, on='uniquecontrast', how='left')
+                                .merge(chemlib, on='compound', how='left'))
+                add_df['molecule_batch_id'] = add_df['uniquecontrast'].map(
+                    data.df_raw.drop_duplicates('uniquecontrast').set_index('uniquecontrast')['MoleculeBatchID'])
+                _cm = add_df['molecule_batch_id'].isna()
+                _cp = add_df.loc[_cm, 'uniquecontrast'].str.split('_vs_').str[0].str.replace('.', '-', regex=False)
+                _cv = [p.startswith(c) for p, c in zip(_cp, add_df.loc[_cm, 'compound'].astype(str))]
+                add_df.loc[_cm, 'molecule_batch_id'] = _cp.where(pd.Series(_cv, index=_cp.index))
+                add_df['is_completion'] = True
+                compounds_df = pd.concat([compounds_df, add_df[compounds_df.columns]], ignore_index=True)
+            print(f'> validation-stem completion: added {len(_add):,} ride-along condition rows '
+                  f'across {len({(a["gene"], a["compound"]) for a in _add}):,} (gene,compound) pairs')
+
             print(f'> compounds_df: {len(compounds_df):,} (gene,compound,plate) rows across '
                 f'{compounds_df["gene"].nunique():,} genes, {compounds_df["uniquecontrast"].nunique():,} volcanoes to render')
 
@@ -434,6 +486,7 @@ class OUTPUT():
             x_label='SAR predictability', y_label='association score', z_label='MS score',
             must_include=MUST_INCLUDE, top_n_highlight=40,
             compounds_df=self.compounds_df, plate_dates=self.plate2date, plate_defaults=PLATE_DEFAULTS,  # nested-by-date Plates filter; default-tick latest date only
+            plate_validation_suffixes=getattr(params, 'VALIDATION_PLATE_SUFFIXES', ('WT', 'MLN', 'KO')),  # …WT/MLN/KO stems, shown side by side
             panels=_panels_in, return_panels=True,  # skip/cache the compound-panel build
             volcano_source=self.meas, volcano_key='uniquecontrast', page_size=5,
             png_dir=params.SRB_PNG_DIR,   # real compound PNGs from config; RDKit-render fallback when absent

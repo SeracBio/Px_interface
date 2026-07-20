@@ -46,6 +46,17 @@ def make_df_raw_ms(out, rng):
     df['pvalue'] = rng.uniform(1e-6, 1.0, len(df))
     df['adjpval'] = np.minimum(df['pvalue'] * rng.uniform(1, 5, len(df)), 1.0)
     df['significant'] = ((df['pvalue'] < 0.05) & (df['logfc'].abs() > 1)).astype(float)
+    # deterministic validation cases for QA/demo of stem completion (SRB-0000006 on gene G_00000):
+    #   * Pw10 stem: significant-down in WT & MLN; measured but NOT significant in KO
+    #     -> stem completion must ADD the Pw10KO volcano (gene shown in the insignificant zone).
+    #   * Pw11 stem: the compound is never run on Pw11KO (rows dropped below)
+    #     -> that condition must be OMITTED (no fabricated volcano).
+    _g0, _c6 = GENES[0], COMPOUNDS[6]
+    _sig = (df['compound'] == _c6) & (df['genes'] == _g0) & (df['MSPlate'].isin(['Pw10WT', 'Pw10MLN', 'Pw11WT']))
+    df.loc[_sig, ['logfc', 'pvalue', 'adjpval', 'significant']] = [-2.5, 1e-5, 1e-4, 1.0]
+    _nsk = (df['compound'] == _c6) & (df['genes'] == _g0) & (df['MSPlate'] == 'Pw10KO')
+    df.loc[_nsk, ['logfc', 'pvalue', 'adjpval', 'significant']] = [0.2, 0.6, 0.8, 0.0]
+    df = df[~((df['compound'] == _c6) & (df['MSPlate'] == 'Pw11KO'))].reset_index(drop=True)
     df = df[['MoleculeBatchID', 'MSPlate', 'genes', 'pg', 'logfc', 'pvalue',
              'adjpval', 'significant', 'uniquecontrast', 'compound', 'batch']]
     df.to_parquet(os.path.join(out, 'df_raw.parquet'), index=False)
@@ -114,9 +125,12 @@ def make_sources_config(out, out_rel, rng):
         pre  = P if prefixed else ''
         bcol = 'Batch Molecule-Batch ID' if prefixed else 'Molecule-Batch ID'
         ccol = (P + 'Concentration (uM)') if prefixed else 'Concentration'
+        # validation-plate experiments are never 'Silent' (Silent rows get dropped downstream),
+        # so the grouped WT/MLN/KO volcanoes always survive for the demo/QA.
         return pd.DataFrame([{
             bcol: cmp2mbid[c], pre + 'MSPlate': pl, ccol: float(rng.choice([0.1, 1.0, 10.0])),
-            pre + 'Cmpd Activity': rng.choice(ACTS), pre + 'Nr. Down': int(rng.randint(0, 40)),
+            pre + 'Cmpd Activity': ('Low (2-10)' if pl in VAL_PLATES else rng.choice(ACTS)),
+            pre + 'Nr. Down': int(rng.randint(0, 40)),
             pre + 'Cell line': 'HEK293', pre + 'Sample Condition': 'WT',
         } for c in comps for pl in PLATES])
 

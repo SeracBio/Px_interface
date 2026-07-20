@@ -74,15 +74,48 @@ data shares the namespace); no real PNGs so thumbnails are RDKit-rendered from `
   `__VALIDATION_SUFFIXES__` — are pulled out of their date groups into a **dedicated "validation"
   sub-block** (rendered **first/at the top**, gold-accented header + a `border-bottom` rule
   (`.pf-validation`) separating it from the dated plates; same `.pf-date` structure so the tri-state
-  parent + collapse work for free). Within the block, plates **sharing a stem** (name minus the
-  WT/MLN/KO suffix, e.g. `Pw10WT/Pw10MLN/Pw10KO` → stem `Pw10`) render **on one row, side by side**,
-  ordered by the suffix order (**WT, then MLN, then KO**) via `validationBlock()` (`.pf-val-row` /
-  `.pf-val-stem` CSS; row shows the stem once, then the suffix checkboxes). They **start UNticked** regardless of `plate_defaults` (JS `isValidationPlate` forces
-  `ticked[p]=false` at init; `buildPlateGroup` splits them off via `items.filter(isValidationPlate)`).
-  The synthetic fixture now includes `Pw04WT/Pw05MLN/Pw06KO` (MSPlate namespace, dated via the
-  `px_*_db` file) to exercise this. Note: interface plates = the **MSPlate** namespace, NOT the FBX
-  `plate` column — the two are disjoint in the synthetic fixture, so `__PLATE_DEFAULTS__` filters to
-  `[]` there (a known fidelity gap; real data shares the namespace).
+  parent + collapse work for free). **One checkbox per stem (2026-07-20, supersedes the earlier
+  per-condition side-by-side checkboxes):** `validationBlock()` renders a single `.pf-stem` box per
+  stem (name minus the WT/MLN/KO suffix, e.g. `Pw10WT/Pw10MLN/Pw10KO` → stem `Pw10`), labelled
+  `Pw10  WT/MLN/KO`; its `data-plates` lists the member plates ordered WT→MLN→KO. Ticking a stem
+  toggles ALL its member plates in `ticked` (change handler resolves a box to plates via `platesOf`;
+  `syncStems()` derives each stem box's checked/indeterminate from members; `syncPlateUIHook` re-syncs
+  on session load since stem boxes have no `value=`). They **start UNticked** regardless of
+  `plate_defaults` (JS `isValidationPlate` forces `ticked[p]=false` at init). Shared helpers
+  `valStemOf`/`valSufOf`/`valRank`/`validationGroups` (defined once near `isValidationPlate`) are used
+  by both the filter and the volcano panel.
+- **Grouped WT/MLN/KO volcanoes on gene hover (2026-07-20).** The per-condition "side by side" now
+  lives in the **volcano panel**: `buildVolcanoHtml` splits a compound's visible plate-rows into
+  validation (grouped by stem → one `.vstem` flex row per stem, conditions side by side in WT/MLN/KO
+  order, each volcano highlighting the gene) vs dated (stacked as before; CSS `.vstem`/`.vstem-lab`).
+  Plain **gene hover auto-shows** the first visible compound's grouped volcanoes when that compound has
+  validation plates (`cellHasValidation` gate in the `plotly_hover` handler); the panel widens (max
+  96vw, `.vstem` scrolls if needed). Multiple compounds: paged via the existing ◀▶ (one compound at a
+  time). Synthetic fixture: validation plates `Pw10{WT,MLN,KO}` + `Pw11{WT,KO}` (MSPlate namespace);
+  the **deterministic case** (updated 2026-07-20 for stem completion) forces compound `SRB-0000006` /
+  gene `G_00000` to be a significant down-hit on `Pw10WT/Pw10MLN/Pw11WT`, measured-but-NOT-significant
+  on `Pw10KO` (logfc 0.20), and drops all `SRB-0000006 × Pw11KO` rows (compound never run there).
+  Validation-plate experiments are made non-`Silent` (line-359 drop) so hits always render. Note:
+  interface plates = the **MSPlate** namespace, NOT the FBX `plate` column —
+  disjoint in the fixture, so `__PLATE_DEFAULTS__` filters to `[]` there (known gap; real data shares
+  the namespace). Fixture `df_raw.uniquecontrast` is plate-specific so a compound's plates all survive.
+- **Validation-stem completion (2026-07-20).** A `(gene,compound)` is a hit only where it is
+  significant-down, so a gene significant in one condition of a stem (e.g. WT) but not another (KO)
+  would have no KO volcano — breaking the side-by-side comparison. `get_iface` now **completes stems**:
+  for each significant hit on a validation plate, it adds the stem's OTHER conditions **where the
+  compound was actually run** (contrast exists in `report`) **and** the gene was measured (`meas`),
+  pulling the gene's real (non-significant) logfc from the full MEASURE. Conditions where the compound
+  was never run are omitted (no fabricated volcano). Added rows carry `is_completion=True`
+  (new `compounds_df` column); the volcano render already rings the target gene regardless of
+  significance (`_volcano_svg_string`), so the gene shows in the insignificant grey cloud.
+  Threading: suffix rule from `config.VALIDATION_PLATE_SUFFIXES` (default `[WT,MLN,KO]`, also passed to
+  `plot_3d_interface` as `plate_validation_suffixes`); the flag rides as plate-row **index 6** (`pl[6]`).
+  JS: completion rows **ride along** their significant sibling — `visPlates` includes a completion row
+  iff its plate is ticked AND its stem has a visible real hit (bypassing the activity filter so an
+  off-activity KO still appears); `geneHasVisibleCompound`/`collectExport` **skip** completion rows
+  (they are display-only context, not hits/exports); `buildVolcanoHtml` tags them `.vcomp` + a
+  `.vns` "not significant" label. Verified end-to-end (`test_validation_stem_completion` + headless
+  CDP): `Pw10` shows WT/MLN hits + a KO "not significant" cell; `Pw11` shows WT only (KO omitted).
 - **gene research** is sourced from `config.GENE_RESEARCH` (whole-genome ~10K-gene JSON) and
   **filtered to plotted genes** before injection (`__GENE_RESEARCH__`) to bound the payload; the
   build prints `[gene_research] kept/total — MB injected`.
@@ -104,6 +137,16 @@ data shares the namespace); no real PNGs so thumbnails are RDKit-rendered from `
     overlay (`showPins`) without unpinning (chips stay). The overlay trace is `showlegend=False` (the
     toggle is the single control; a native key would misrepresent the mixed circle/diamond shapes).
     Persisted in `.iface` session (`showPins`) and the URL hash (`sp=0` when off).
+  - **Solo / "only pinned" view (2026-07-20):** **double-clicking** `#pin-toggle` sets `soloPins` — the
+    3D/2D scatter then shows **only the pinned genes**, hiding all others (mirrors Plotly's
+    legend-double-click-to-isolate). Implemented in `applyRanges`: when `soloPins`, a point's mask is
+    `!!shownPinSet()[gene]` (all sliders/plate/activity/target filters bypassed) instead of the normal
+    filter chain, so every pin shows and nothing else does. Double-click again to restore. The toggle
+    goes gold (`.solo`) with a "· only" suffix (`#pin-toggle-solo`); auto-exits (and re-filters) when the
+    last pin is removed. `redrawPins` re-runs `recolor3d` on solo enter/refresh/exit (pin/unpin during
+    solo re-filters the area traces). Persisted in session (`soloPins`) and hash (`so=1`). Verified
+    headless (CDP): in solo the area traces collapse to exactly the pinned set; restore returns to the
+    prior filtered view.
 - **Compound-validation filter** (COMPOUND FILTERS): FBXO31 dependent/independent tickboxes keyed to
   `validated_compounds`/`devalidated_compounds`; mirror of the target-centric Validation filter.
 - **Session save/load** (SESSION subsection): `.iface` JSON captures pins, hides, all filter

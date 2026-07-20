@@ -1327,6 +1327,16 @@ _INTERFACE_INJECT = '''
   #hover-img .volcano .vobj { width: 360px; height: 360px; max-width: 100%;
                               border: 1px solid #eee; border-radius: 4px; display: block;
                               margin: 0 auto; }
+  /* Grouped validation volcanoes: one stem per row, its conditions (WT/MLN/KO) side by side. */
+  #hover-img .volcano .vstem-lab { font-weight: 600; color: #1D3557; margin: 8px 0 2px;
+                                   text-align: left; }
+  #hover-img .volcano .vstem { display: flex; flex-direction: row; gap: 8px;
+                               align-items: flex-start; flex-wrap: nowrap; overflow-x: auto;
+                               padding-bottom: 4px; }
+  #hover-img .volcano .vstem .vcell { flex: 0 0 auto; text-align: center; }
+  #hover-img .volcano .vstem .vcell .vlabel { text-align: center; }
+  #hover-img .volcano .vstem .vcell.vcomp { opacity: 0.85; }
+  #hover-img .volcano .vns { color: #b8860b; font-style: italic; }
   /* Pin the Plotly plot to a bounded box to the RIGHT of the filter panel and ABOVE the
      range panel, instead of letting the responsive plot fill the whole window. This makes
      the plot fit + stay centred on ANY viewport (incl. short laptop screens) — a window-
@@ -1388,11 +1398,12 @@ _INTERFACE_INJECT = '''
   #filter-panel .pf-date.pf-validation { padding-bottom: 6px; margin-bottom: 6px;
                                          border-bottom: 1px solid #c7ced9; }
   #filter-panel .pf-date.pf-validation .pf-date-head { color: #b8860b; }
-  /* Same-stem validation plates (WT/MLN/KO) on one row, side by side. */
-  #filter-panel .pf-val-row { display: flex; align-items: center; flex-wrap: wrap; gap: 4px 10px;
-                              padding: 1px 0; }
-  #filter-panel .pf-val-row .pf-val-stem { font-weight: 600; color: #1D3557; min-width: 52px; }
-  #filter-panel .pf-val-row label { display: inline-flex; align-items: center; gap: 3px; }
+  /* Validation: one checkbox per stem; ticking it toggles all its WT/MLN/KO plates. */
+  #filter-panel .pf-stem-row { display: flex; align-items: center; gap: 6px; padding: 1px 0;
+                               cursor: pointer; }
+  #filter-panel .pf-stem-row .pf-stem-name { font-weight: 600; color: #1D3557; }
+  #filter-panel .pf-stem-row .pf-stem-cond { color: #888; font-size: 10px; }
+  #filter-panel .pf-stem-row input { margin-left: auto; }   /* checkbox to the right */
   /* Gene search + pin overlay */
   #gene-search-wrap { position: relative; display: flex; gap: 5px; }
   #gene-search { flex: 1 1 auto; min-width: 0; padding: 3px 6px; font: 12px sans-serif;
@@ -1433,6 +1444,8 @@ _INTERFACE_INJECT = '''
   #pin-toggle label { display: inline-flex; align-items: center; gap: 5px; cursor: pointer; }
   #pin-toggle input { cursor: pointer; margin: 0; }
   #pin-toggle #pin-toggle-n { color: #888; }
+  #pin-toggle #pin-toggle-solo { color: #b8860b; font-weight: 700; }
+  #pin-toggle.solo { background: #FFF3C4; border-color: #b8860b; }
   /* HIDE sub-block (mirror of pin, in red) */
   #hide-search-wrap { position: relative; display: flex; gap: 5px; margin-top: 8px; }
   #hide-search { flex: 1 1 auto; min-width: 0; padding: 3px 6px; font: 12px sans-serif;
@@ -1649,8 +1662,8 @@ _INTERFACE_INJECT = '''
 </div>
 <div id="hover-patents"></div>
 <div id="axis-legend"></div>
-<div id="pin-toggle" title="Show or hide pinned genes (they stay pinned either way)">
-  <label><input type="checkbox" id="pin-toggle-cb" checked> ★ pinned <span id="pin-toggle-n">0</span></label>
+<div id="pin-toggle" title="Show or hide pinned genes (double-click to show ONLY pinned genes)">
+  <label><input type="checkbox" id="pin-toggle-cb" checked> ★ pinned <span id="pin-toggle-n">0</span><span id="pin-toggle-solo"></span></label>
 </div>
 <div id="research-box"></div>
 <div id="range-panel">
@@ -1711,6 +1724,24 @@ _INTERFACE_INJECT = '''
     var _valSuffixes = window.__VALIDATION_SUFFIXES__ || [];
     var _valRe = _valSuffixes.length ? new RegExp('(' + _valSuffixes.join('|') + ')$', 'i') : null;
     function isValidationPlate(p) { return !!_valRe && _valRe.test(p); }
+    var _valSufRank = {};
+    _valSuffixes.forEach(function(s, i) { _valSufRank[s.toUpperCase()] = i; });
+    function valSufOf(p)  { var m = _valRe && p.match(_valRe); return m ? m[1].toUpperCase() : ""; }
+    function valStemOf(p) { return _valRe ? p.replace(_valRe, "") : p; }
+    function valRank(p)   { var r = _valSufRank[valSufOf(p)]; return r === undefined ? 99 : r; }
+    // Group a list of validation plates by stem; stems sorted, member plates ordered WT, MLN, KO.
+    function validationGroups(list) {
+      var groups = {}, gorder = [];
+      list.forEach(function(p) {
+        var st = valStemOf(p);
+        if (!groups[st]) { groups[st] = []; gorder.push(st); }
+        groups[st].push(p);
+      });
+      gorder.sort(function(a, b) { return a < b ? -1 : (a > b ? 1 : 0); });
+      return gorder.map(function(st) {
+        return {stem: st, plates: groups[st].sort(function(a, b) { return valRank(a) - valRank(b); })};
+      });
+    }
     plates.forEach(function(p) {
       ticked[p] = isValidationPlate(p) ? false
                 : (plateDefaults ? (plateDefaults.indexOf(p) !== -1) : true);
@@ -1921,6 +1952,7 @@ _INTERFACE_INJECT = '''
     var hiddenGenes = [];        // gene names hidden directly (drop from the plot)
     var hiddenCompounds = [];    // compound ids hidden (drop the compound only; its genes stay)
     var showPins = true;         // master "show pinned genes" toggle (UI below the legend)
+    var soloPins = false;        // "solo" mode (double-click the toggle): show ONLY pinned genes, hide the rest
     var _hiddenSet = {};         // cache: directly-hidden genes
     var _hiddenCmpSet = {};      // cache: directly-hidden compound ids
     function rebuildHidden() {
@@ -1955,6 +1987,7 @@ _INTERFACE_INJECT = '''
     var applyPinHideHook = function() {};         // set in the pin/hide block; re-renders pins/hides from the arrays
     var buildPinTraceHook = function() {};        // set in the pin block; repaints the pin overlay under current filters
     var applySessionHook = function() {};         // set in the session block; applies a (partial) session/hash state
+    var syncPlateUIHook = function() {};          // set in the plate block; re-syncs stem/parent boxes from `ticked`
 
     // A gene is "active" under the current Plate + Activity ticks if it has at
     // least one compound whose plate AND activity are both ticked. Used to grey
@@ -1969,6 +2002,7 @@ _INTERFACE_INJECT = '''
         if (Array.isArray(t[3])) {
           for (var j = 0; j < t[3].length; j++) {
             var pl = t[3][j];
+            if (pl[6]) continue;   // completion (context) rows don't make a gene "have a compound"
             var plateOk = (!plates.length) || ticked[pl[0]];
             var actOk = (!activities.length) || pl[3] === undefined || tickedAct[pl[3]];
             if (plateOk && actOk) return true;
@@ -2003,9 +2037,11 @@ _INTERFACE_INJECT = '''
         var t = arr[i];
         if (!t || t[0] === "__META__" || !cmpAllowed(t)) continue;
         if (isPaged(t)) {
-          var vis = visPlates(t);   // plate-rows: [plate, logfc, volcano, activity, n_genes, mbid]
+          var vis = visPlates(t);   // plate-rows: [plate, logfc, volcano, activity, n_genes, mbid, is_completion]
           for (var j = 0; j < vis.length; j++) {
-            var pl = vis[j], bid = pl[5] || t[0], plate = pl[0] || "", act = pl[3] || "";
+            var pl = vis[j];
+            if (pl[6]) continue;   // completion rows are display-only context, not exported hits
+            var bid = pl[5] || t[0], plate = pl[0] || "", act = pl[3] || "";
             var key = JSON.stringify([bid, plate, act]);
             (map[key] || (map[key] = {bid: bid, plate: plate, act: act, genes: {}})).genes[gene] = 1;
           }
@@ -2022,10 +2058,21 @@ _INTERFACE_INJECT = '''
     //   * a base64 string                                    (single-volcano legacy mode).
     // A plate-row is visible only if BOTH its plate and its activity are ticked.
     function isPaged(t) { return Array.isArray(t[3]); }
+    // pl[6] flags a validation-stem "completion" row — a condition (e.g. KO) where the gene
+    // is NOT significant, shown only so the WT/MLN/KO volcanoes stay side-by-side complete.
+    // Real (hit) rows obey the plate + activity ticks; completion rows ride along whenever
+    // their plate is ticked AND their stem has a visible real hit for this compound (they
+    // bypass the activity filter so an off-activity KO still appears next to its WT hit).
     function visPlates(t) {
-      return t[3].filter(function(pl) {
-        return ticked[pl[0]] && (!activities.length || pl[3] === undefined || tickedAct[pl[3]]);
+      var real = t[3].filter(function(pl) {
+        return !pl[6] && ticked[pl[0]] && (!activities.length || pl[3] === undefined || tickedAct[pl[3]]);
       });
+      if (real.length === t[3].length) return real;   // no completion rows -> fast path
+      var okStems = {};
+      real.forEach(function(pl) { if (isValidationPlate(pl[0])) okStems[valStemOf(pl[0])] = 1; });
+      return real.concat(t[3].filter(function(pl) {
+        return pl[6] && ticked[pl[0]] && okStems[valStemOf(pl[0])];
+      }));
     }
     function entryVisible(t) {
       if (!cmpAllowed(t)) return false;
@@ -2241,7 +2288,32 @@ _INTERFACE_INJECT = '''
       if (isPaged(t)) {
         var vps = visPlates(t);
         if (!vps.length) return "";
-        vps.forEach(function(pl) {
+        // Validation plates: group by stem, conditions side by side (WT/MLN/KO) so the gene's
+        // location can be compared across the same plate's conditions at a glance.
+        var valRows = vps.filter(function(pl) { return isValidationPlate(pl[0]); });
+        var normRows = vps.filter(function(pl) { return !isValidationPlate(pl[0]); });
+        var groups = {}, gorder = [];
+        valRows.forEach(function(pl) {
+          var st = valStemOf(pl[0]);
+          if (!groups[st]) { groups[st] = []; gorder.push(st); }
+          groups[st].push(pl);
+        });
+        gorder.sort(function(a, b) { return a < b ? -1 : (a > b ? 1 : 0); });
+        gorder.forEach(function(st) {
+          groups[st].sort(function(a, b) { return valRank(a[0]) - valRank(b[0]); });
+          html += '<div class="vstem-lab">' + currentGene + ' · ' + (groups[st][0][5] || cmp)
+                + ' · ' + st + '</div><div class="vstem">';
+          groups[st].forEach(function(pl) {
+            var act = pl[3] ? ' · ' + pl[3] : '';
+            var ns = pl[6] ? ' <span class="vns">not significant</span>' : '';
+            html += '<div class="vcell' + (pl[6] ? ' vcomp' : '') + '"><div class="vlabel">'
+                  + (valSufOf(pl[0]) || pl[0]) + ' (logfc ' + pl[1] + ')' + act + ns + '</div>'
+                  + (pl[2] ? vimg(pl[2]) : '<div class="vmiss">(no volcano)</div>') + '</div>';
+          });
+          html += '</div>';
+        });
+        // Non-validation (dated) plates: stacked, one per row, as before.
+        normRows.forEach(function(pl) {
           var act = pl[3] ? ' · ' + pl[3] : '';
           var ng = pl[4] ? ' (' + pl[4] + ' genes)' : '';
           var cid = pl[5] || cmp;   // MoleculeBatchID (per plate) when available, else compound
@@ -2260,6 +2332,13 @@ _INTERFACE_INJECT = '''
       if (!html) { volBox.style.display = "none"; return; }
       volBox.innerHTML = html;
       volBox.style.display = "block";
+    }
+    // Does this compound cell have any validation plate among its visible plates? (drives the
+    // auto-show of grouped volcanoes on plain gene hover.)
+    function cellHasValidation(cell) {
+      var t = fullArr[parseInt(cell.getAttribute("data-eidx"), 10)];
+      if (!t || !isPaged(t)) return false;
+      return visPlates(t).some(function(pl) { return isValidationPlate(pl[0]); });
     }
     function markVolPin(cell) {
       var prev = row.querySelector(".cell.vpin");
@@ -2302,8 +2381,13 @@ _INTERFACE_INJECT = '''
     });
     gd.on("plotly_hover", function(e) {
       if (pinned) return;
-      if (render(e.points && e.points[0])) box.style.display = "block";
-      else box.style.display = "none";
+      if (render(e.points && e.points[0])) {
+        box.style.display = "block";
+        // Auto-show the grouped WT/MLN/KO volcanoes for the first compound when it was run on
+        // validation plates, so a plain hover surfaces the gene's location across conditions.
+        var firstCell = row.querySelector(".cell");
+        if (firstCell && cellHasValidation(firstCell)) showVolcano(firstCell);
+      } else box.style.display = "none";
     });
     gd.on("plotly_unhover", function() {
       if (pinned) return;
@@ -2401,30 +2485,20 @@ _INTERFACE_INJECT = '''
         });
         return h + '</div></div>';
       }
-      // Validation block: plates sharing a stem (name minus the WT/MLN/KO suffix) sit on one row,
-      // side by side, ordered by the suffix order (WT, then MLN, then KO).
+      // Validation block: ONE checkbox per plate stem (name minus the WT/MLN/KO suffix). Ticking a
+      // stem toggles all its member plates (its data-plates, ordered WT, MLN, KO). The per-condition
+      // side-by-side view lives in the volcano panel, not here.
       function validationBlock(list) {
-        var sufOrder = {};
-        _valSuffixes.forEach(function(s, i) { sufOrder[s.toUpperCase()] = i; });
-        var stemOf = function(p) { return p.replace(_valRe, ""); };
-        var sufOf  = function(p) { var m = p.match(_valRe); return m ? m[1].toUpperCase() : ""; };
-        var rank   = function(p) { var r = sufOrder[sufOf(p)]; return r === undefined ? 99 : r; };
-        var groups = {}, gorder = [];
-        list.forEach(function(p) {
-          var st = stemOf(p);
-          if (!groups[st]) { groups[st] = []; gorder.push(st); }
-          groups[st].push(p);
-        });
-        gorder.sort(function(a, b) { return a < b ? -1 : (a > b ? 1 : 0); });
+        var groups = validationGroups(list);   // {stems: [{stem, plates:[ordered]}], ...}
         var rows = "";
-        gorder.forEach(function(st) {
-          groups[st].sort(function(a, b) { return rank(a) - rank(b); });
-          rows += '<div class="pf-val-row"><span class="pf-val-stem">' + st + '</span>';
-          groups[st].forEach(function(p) {
-            rows += '<label title="' + p + '"><input type="checkbox" value="' + p + '"'
-                  + (tickedMap[p] ? ' checked' : '') + '>' + (sufOf(p) || p) + '</label>';
-          });
-          rows += '</div>';
+        groups.forEach(function(g) {
+          var allOn = g.plates.every(function(p) { return tickedMap[p]; });
+          var conds = g.plates.map(valSufOf).filter(Boolean).join("/");
+          rows += '<label class="pf-stem-row" title="' + g.plates.join(", ") + '">'
+                + '<span class="pf-stem-name">' + g.stem + '</span>'
+                + (conds ? ' <span class="pf-stem-cond">' + conds + '</span>' : '')
+                + '<input type="checkbox" class="pf-stem" data-plates="' + g.plates.join(",") + '"'
+                + (allOn ? ' checked' : '') + '></label>';
         });
         return '<div class="pf-date pf-validation collapsed"><div class="pf-date-head">'
              + '<span class="fp-caret">&#9662;</span>'
@@ -2438,6 +2512,23 @@ _INTERFACE_INJECT = '''
       if (valItems.length) html += validationBlock(valItems);
       order.forEach(function(d) { html += dateBlock(d, byDate[d], byDate[d].length); });
       boxesEl.innerHTML = html;
+      // A checkbox maps to one or more plates: a normal box → its own value; a validation
+      // stem box (.pf-stem) → all its member plates (data-plates).
+      function platesOf(inp) {
+        if (inp.classList.contains("pf-stem"))
+          return (inp.getAttribute("data-plates") || "").split(",").filter(Boolean);
+        return inp.value ? [inp.value] : [];
+      }
+      // Re-derive each validation stem box's checked/indeterminate from its members' ticked state.
+      function syncStems() {
+        var stems = boxesEl.querySelectorAll(".pf-stem");
+        for (var i = 0; i < stems.length; i++) {
+          var ps = platesOf(stems[i]), on = 0;
+          ps.forEach(function(p) { if (tickedMap[p]) on++; });
+          stems[i].checked = ps.length > 0 && on === ps.length;
+          stems[i].indeterminate = on > 0 && on < ps.length;
+        }
+      }
       function syncParent(dateEl) {
         var cbs = dateEl.querySelectorAll(".pf-date-boxes input"), on = 0;
         for (var i = 0; i < cbs.length; i++) if (cbs[i].checked) on++;
@@ -2445,16 +2536,22 @@ _INTERFACE_INJECT = '''
         par.checked = on === cbs.length;
         par.indeterminate = on > 0 && on < cbs.length;
       }
+      syncPlateUIHook = function() { syncStems(); var b = boxesEl.querySelectorAll(".pf-date"); for (var i = 0; i < b.length; i++) syncParent(b[i]); };
+      syncStems();
       var blocks = boxesEl.querySelectorAll(".pf-date");
       for (var i = 0; i < blocks.length; i++) syncParent(blocks[i]);
       boxesEl.addEventListener("change", function(e) {
         var t = e.target; if (!t || t.type !== "checkbox") return;
-        if (t.classList.contains("pf-date-all")) {      // parent toggles all plates in its date
+        if (t.classList.contains("pf-date-all")) {      // parent toggles every box in its block
           var box = t.closest(".pf-date").querySelectorAll(".pf-date-boxes input");
-          for (var j = 0; j < box.length; j++) { box[j].checked = t.checked; tickedMap[box[j].value] = t.checked; }
+          for (var j = 0; j < box.length; j++) {
+            box[j].checked = t.checked; box[j].indeterminate = false;
+            platesOf(box[j]).forEach(function(p) { tickedMap[p] = t.checked; });
+          }
           t.indeterminate = false;
         } else {
-          tickedMap[t.value] = t.checked;
+          platesOf(t).forEach(function(p) { tickedMap[p] = t.checked; });
+          t.indeterminate = false;
           syncParent(t.closest(".pf-date"));
         }
         page = 0; recolor3d(); if (pinned) renderPage();
@@ -2656,13 +2753,16 @@ _INTERFACE_INJECT = '''
           b[a] = [(loV <= R[a].min + st) ? -Infinity : loV,
                   (hiV >= R[a].max - st) ?  Infinity : hiV];
         });
-        var total = 0, masks = {};
+        var total = 0, masks = {}, _pinSet = shownPinSet();
         R.areaTraces.forEach(function(ti) {
           var o = orig[ti]; if (!o) return;
           var m = [];
           for (var k = 0; k < o.x.length; k++) {
-            // in slider range AND has a compound on a ticked plate+activity
-            var inr = o.x[k] >= b.x[0] && o.x[k] <= b.x[1]
+            // solo mode: show ONLY pinned genes (all sliders/ticks bypassed); otherwise the
+            // gene must be in slider range AND have a compound on a ticked plate+activity.
+            var inr = soloPins
+              ? !!_pinSet[o.text[k]]
+              : (o.x[k] >= b.x[0] && o.x[k] <= b.x[1]
                    && o.y[k] >= b.y[0] && o.y[k] <= b.y[1]
                    && o.z[k] >= b.z[0] && o.z[k] <= b.z[1]
                    && geneHasVisibleCompound(o.text[k])
@@ -2670,7 +2770,7 @@ _INTERFACE_INJECT = '''
                    && confAllowed(o.text[k])
                    && lofAllowed(o.text[k])
                    && valAllowed(o.text[k])
-                   && !isHiddenGene(o.text[k]);   // hidden genes/compound-targets drop from the view
+                   && !isHiddenGene(o.text[k]));   // hidden genes/compound-targets drop from the view
             m.push(inr); if (inr) total++;
           }
           masks[ti] = m;
@@ -2809,7 +2909,13 @@ _INTERFACE_INJECT = '''
       }
       buildPinTraceHook = buildPinTrace;   // let applyRanges refresh pins on plate/activity changes
       function redrawPins() {
-        if (typeof Plotly !== "undefined" && buildPinTrace()) Plotly.redraw(gd);
+        var wasSolo = soloPins;
+        if (Object.keys(effectivePinSet()).length === 0) soloPins = false;   // no pins left -> leave solo
+        if (soloPins || wasSolo) {
+          recolor3d();           // solo enter/refresh/exit changes the area filter -> re-run it
+        } else if (typeof Plotly !== "undefined" && buildPinTrace()) {
+          Plotly.redraw(gd);
+        }
         refreshLabelsHook();   // pinned genes label via scene.annotations (dedup with range labels)
         updateCountHook();     // pinned proteins + their compounds enter the tally
         refreshToggle();       // show/position the master toggle and update its count
@@ -2833,14 +2939,32 @@ _INTERFACE_INJECT = '''
         if (n > 0) {
           toggleN.textContent = "(" + n + ")";
           toggleCb.checked = showPins;
+          toggleEl.classList.toggle("solo", soloPins);
+          var soloEl = document.getElementById("pin-toggle-solo");
+          if (soloEl) soloEl.textContent = soloPins ? " · only" : "";
+          toggleEl.title = soloPins
+            ? "Showing ONLY pinned genes — double-click to show all genes again"
+            : "Show or hide pinned genes (double-click to show ONLY pinned genes)";
           toggleEl.style.display = "block";
           placePinToggle();
         } else {
+          soloPins = false;
+          toggleEl.classList.remove("solo");
           toggleEl.style.display = "none";
         }
       }
       if (toggleCb) toggleCb.addEventListener("change", function() {
         showPins = toggleCb.checked; redrawPins();
+      });
+      // Double-click the toggle = "solo" the pins: show ONLY pinned genes, hide the rest
+      // (double-click again to restore). Mirrors Plotly's legend double-click-to-isolate.
+      if (toggleEl) toggleEl.addEventListener("dblclick", function(e) {
+        e.preventDefault();
+        if (Object.keys(effectivePinSet()).length === 0) return;   // nothing pinned -> nothing to solo
+        soloPins = !soloPins;
+        if (soloPins) { showPins = true; toggleCb.checked = true; }   // must be showing pins to solo them
+        recolor3d();       // re-filter the area traces (solo on: only pins; off: full filters)
+        refreshToggle();
       });
       window.addEventListener("resize", placePinToggle);
       if (gd && gd.on) gd.on("plotly_afterplot", placePinToggle);   // legend moves on 2D/3D + relayout
@@ -3062,7 +3186,7 @@ _INTERFACE_INJECT = '''
       var AXS = ["x", "y", "z"];
 
       function gather() {
-        var s = {version: 1, showPins: showPins,
+        var s = {version: 1, showPins: showPins, soloPins: soloPins,
                  pinnedGenes: pinnedGenes.slice(), pinnedCompounds: pinnedCompounds.slice(),
                  hiddenGenes: hiddenGenes.slice(), hiddenCompounds: hiddenCompounds.slice(),
                  filters: {plates: Object.assign({}, ticked), activity: Object.assign({}, tickedAct),
@@ -3104,6 +3228,7 @@ _INTERFACE_INJECT = '''
       function apply(s) {
         if (!s || typeof s !== "object") throw new Error("not a session object");
         if (typeof s.showPins === "boolean") showPins = s.showPins;   // before the re-render below
+        if (typeof s.soloPins === "boolean") soloPins = s.soloPins;
         setArr(pinnedGenes, s.pinnedGenes); setArr(pinnedCompounds, s.pinnedCompounds);
         setArr(hiddenGenes, s.hiddenGenes); setArr(hiddenCompounds, s.hiddenCompounds);
         applyPinHideHook();                       // rebuild hidden cache + re-render pins/hides (syncs the toggle)
@@ -3112,6 +3237,7 @@ _INTERFACE_INJECT = '''
         });
         var f = s.filters || {};
         applyGroup(ticked, document.getElementById("pf-boxes"), f.plates); refreshPlateParents();
+        syncPlateUIHook();   // validation stem boxes have no value= attr; sync them from `ticked`
         applyGroup(tickedAct, document.getElementById("af-boxes"), f.activity);
         applyGroup(tickedDep, document.getElementById("df-boxes"), f.depmap);
         applyGroup(tickedConf, document.getElementById("cn-boxes"), f.confidence);
@@ -3188,6 +3314,7 @@ _INTERFACE_INJECT = '''
         if (hiddenGenes.length)     parts.push('hg=' + enc(hiddenGenes));
         if (hiddenCompounds.length) parts.push('hc=' + enc(hiddenCompounds));
         if (!showPins)              parts.push('sp=0');   // pins-hidden state (default is shown)
+        if (soloPins)               parts.push('so=1');   // solo (only-pinned) view
         return parts.join('&');
       }
 
@@ -3198,10 +3325,11 @@ _INTERFACE_INJECT = '''
         h.split('&').forEach(function(kv) {
           var i = kv.indexOf('='); if (i > 0) q[kv.slice(0, i)] = kv.slice(i + 1);
         });
-        if (!('p' in q || 'pg' in q || 'pc' in q || 'hg' in q || 'hc' in q || 'sp' in q)) return null;  // unrecognised -> keep default view
+        if (!('p' in q || 'pg' in q || 'pc' in q || 'hg' in q || 'hc' in q || 'sp' in q || 'so' in q)) return null;  // unrecognised -> keep default view
         var sess = {pinnedGenes: dec(q.pg), pinnedCompounds: dec(q.pc),
                     hiddenGenes: dec(q.hg), hiddenCompounds: dec(q.hc)};
         if ('sp' in q) sess.showPins = q.sp !== '0';
+        if ('so' in q) sess.soloPins = q.so === '1';
         if ('p' in q) {   // exact plate view: only the listed plates ticked on
           var want = {}; dec(q.p).forEach(function(p) { want[p] = 1; });
           var plates = {}; Object.keys(ticked).forEach(function(p) { plates[p] = !!want[p]; });
@@ -4067,6 +4195,7 @@ def plot_3d_interface(
                 has_act = 'activity' in compounds_df.columns
                 has_ng = 'n_genes' in compounds_df.columns   # genes measured in the experiment
                 has_mbid = 'molecule_batch_id' in compounds_df.columns  # per-plate batch id
+                has_comp = 'is_completion' in compounds_df.columns  # ride-along validation-stem condition (gene not significant here)
                 if has_act:
                     _ACT_ORDER = ['High (>25)', 'Medium (11-25)', 'Low (2-10)',
                                   'Single (1)', 'Silent']
@@ -4086,13 +4215,14 @@ def plot_3d_interface(
                         smi = (cg['smiles'].dropna().iloc[0]
                                if cg['smiles'].notna().any() else None)
                         ei = len(entries)
-                        plate_rows = []   # [plate, logfc, volcano, activity, n_genes, mbid] per plate
+                        plate_rows = []   # [plate, logfc, volcano, activity, n_genes, mbid, is_completion] per plate
                         # column arrays once per group (avoids a per-row Series from iterrows)
                         _plate = cg['plate'].to_numpy()
                         _logfc = cg['logfc'].to_numpy()
                         _act = cg['activity'].to_numpy() if has_act else None
                         _ng = cg['n_genes'].to_numpy() if has_ng else None
                         _mbid = cg['molecule_batch_id'].to_numpy() if has_mbid else None
+                        _comp = cg['is_completion'].to_numpy() if has_comp else None
                         _vk = cg[vkey_col].to_numpy()
                         for pi in range(len(cg)):
                             lf = _logfc[pi]
@@ -4103,6 +4233,7 @@ def plot_3d_interface(
                                 (str(_act[pi]) if has_act and pd.notna(_act[pi]) else ''),
                                 (str(int(_ng[pi])) if has_ng and pd.notna(_ng[pi]) else ''),
                                 (str(_mbid[pi]) if has_mbid and pd.notna(_mbid[pi]) else ''),
+                                (1 if has_comp and bool(_comp[pi]) else 0),
                             ])
                             vk = _vk[pi]
                             if pd.notna(vk):
