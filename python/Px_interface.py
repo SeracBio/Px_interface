@@ -456,6 +456,15 @@ class OUTPUT():
             'nervous system disease': '#963802', 'psychiatric disorder': '#000000',
             'nutritional or metabolic disease': '#17E804', 'endocrine system disease': "#6EE5F5",
         }
+        # Validation-mode colours (V toggle): each category is a dark ring + light fill
+        # (like the reference volcano). Purple = FBXO31 dependent, orange = FBXO31 independent,
+        # light blue = every other gene; the grey backdrop turns light blue too.
+        VALIDATION_COLORS = {
+            'dependent':   {'fill': '#B98BD6', 'ring': '#7B2D8E'},
+            'independent': {'fill': '#F2B366', 'ring': '#D07C1A'},
+            'rest':        {'fill': '#B3D4E6', 'ring': '#6BA3C7'},
+            'background': '#CFE3F0',
+        }
         MUST_INCLUDE = sorted(self.iface_df.loc[self.iface_df['disease_area'].isin(['pharma', 'BMS']), 'gene'])
         # Plates filter starts with only the latest tranche's plates ticked; untick to widen.
         _latest_date = max(self.plate2date.values())
@@ -506,6 +515,7 @@ class OUTPUT():
             volcano_n_jobs=max(1, (os.cpu_count() or 8) - 2),  # use most cores for the volcano render
             volcano_xlim=(-8, 8), volcano_size_px=350,
             disease_area_colors=DISEASE_AREA_COLORS, nb_display=False,
+            validation_colors=VALIDATION_COLORS, color_mode_default='V',  # V/D colour toggle; open in validation colouring
             html_path=os.path.join(output_dir, 'interfaces', 'Serac_Px_interface.html'), # 20260612_3d_interface_PX_R2_assoc_ms.html
         )
 

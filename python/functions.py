@@ -1393,6 +1393,8 @@ _INTERFACE_INJECT = '''
   #filter-panel .disp-toggle .seg { padding: 2px 11px; color: #888; background: #f0f0f0;
                                     transition: background .12s, color .12s; }
   #filter-panel .disp-toggle .seg.active { color: #fff; background: #1D3557; }
+  /* thin divider between the Axes and Color toggles on the shared Display row */
+  #filter-panel .disp-sep { color: #ccc; margin: 0 2px; }
   /* Plates nested by date: collapsible sub-block per date inside the Plates group. */
   #filter-panel .pf-date + .pf-date { margin-top: 4px; }
   #filter-panel .pf-date-head { cursor: pointer; font-weight: 600; color: #1D3557;
@@ -1586,6 +1588,11 @@ _INTERFACE_INJECT = '''
       <span class="disp-label">Axes</span>
       <span class="disp-toggle" id="disp-toggle" role="switch" title="3D = SAR predictability × association × MS score; 2D = a flat association × MS view (SAR axis hidden; SAR range slider still filters).">
         <span class="seg seg2d active" data-mode="2D">2D</span><span class="seg seg3d" data-mode="3D">3D</span>
+      </span>
+      <span class="disp-sep">|</span>
+      <span class="disp-label">Color</span>
+      <span class="disp-toggle" id="color-toggle" role="switch" title="V = colour genes by FBXO31 validation (purple = dependent, orange = independent, light blue = other); D = colour by disease area. The top-right legend follows the mode.">
+        <span class="seg segV active" data-cmode="V">V</span><span class="seg segD" data-cmode="D">D</span>
       </span>
     </div>
   </div>
@@ -1797,6 +1804,21 @@ _INTERFACE_INJECT = '''
     (window.__VALIDATED_TARGETS__ || []).forEach(function(g) { validatedSet[g] = true; });
     var devalidatedSet = {};
     (window.__DEVALIDATED_TARGETS__ || []).forEach(function(g) { devalidatedSet[g] = true; });
+    // Colour mode: "V" = colour genes by FBXO31 validation (purple dependent / orange
+    // independent / light-blue rest), "D" = by disease area (the per-trace colours). The
+    // V/D pill toggles it; recolor3d (applyRanges) re-applies whichever mode is active.
+    var VCOL = window.__VALIDATION_COLORS__ || {dependent: {fill: "#B98BD6", ring: "#7B2D8E"},
+                                                independent: {fill: "#F2B366", ring: "#D07C1A"},
+                                                rest: {fill: "#B3D4E6", ring: "#6BA3C7"},
+                                                background: "#CFE3F0"};
+    var VAL_LEGEND_TRACES = window.__VAL_LEGEND_TRACES__ || [];   // legend-proxy traces carrying the V-mode keys
+    var COLOR_MODE = (window.__COLOR_MODE_DEFAULT__ === "D") ? "D" : "V";
+    // FBXO31 category → dark ring + light fill (like the reference volcano circles).
+    function valCatOf(g) { return validatedSet[g] ? "dependent" : (devalidatedSet[g] ? "independent" : "rest"); }
+    function valFillOf(g) { return (VCOL[valCatOf(g)] || {}).fill || "#cccccc"; }
+    function valRingOf(g) { return (VCOL[valCatOf(g)] || {}).ring || "#333333"; }
+    var VAL_CATS = ["dependent", "independent", "rest"];   // same order as VAL_LEGEND_TRACES
+    var valCatShown = {dependent: true, independent: true, rest: true};   // V-mode legend category filter
     var valLabelYes = window.__VAL_LABEL_YES__ || "Yes";   // label for the validated box
     var valLabelNo  = window.__VAL_LABEL_NO__  || "No";    // label for the devalidated box
     var valCats = window.__VALIDATION_CATS__ || [];        // subset of the two labels present
@@ -1852,6 +1874,7 @@ _INTERFACE_INJECT = '''
 
     // declared before the display IIFE (which assigns it) so a later var-initializer can't clobber it
     var setMode2DHook = function(two) {};         // set in the display block; switches 2D/3D view
+    var setColorModeHook = function(m) {};        // set in the colour block; switches V/D gene colouring
     // --- Display: 2D / 3D toggle. 2D = orthographic camera down the SAR (x) axis so only
     // association (y) × MS (z) show; x-axis hidden, rotation locked. Same Scatter3d traces,
     // so every filter / slider / pin / hover interaction is untouched. SAR slider still filters.
@@ -1921,6 +1944,35 @@ _INTERFACE_INJECT = '''
       // Poll until the plot has rendered (_fullLayout) so the relayout + resize land.
       (function initTwoD() { if (gd._fullLayout) { setMode(true); fitBox(); }
                              else setTimeout(initTwoD, 30); })();
+    })();
+
+    // --- Color: V / D toggle. V = colour genes by FBXO31 validation, D = by disease area.
+    // The recolouring itself lives in recolor3d (applyRanges); this block flips COLOR_MODE,
+    // syncs the pill, swaps the top-right legend (disease areas <-> validation keys), and
+    // re-runs the mask so the new colours paint. The legend swap toggles showlegend on the
+    // disease-area traces vs the 3 empty validation-key traces (Python sets the load state).
+    (function () {
+      var tg = document.getElementById("color-toggle");
+      function syncUI() {
+        if (tg) { tg.querySelector(".segV").classList.toggle("active", COLOR_MODE === "V");
+                  tg.querySelector(".segD").classList.toggle("active", COLOR_MODE === "D"); }
+      }
+      setColorModeHook = function (m) {
+        COLOR_MODE = (m === "D") ? "D" : "V";
+        syncUI();
+        var v = (COLOR_MODE === "V"), _R = window.__RANGES__ || {};
+        if (gd && gd.data) {
+          (_R.areaTraces || []).forEach(function(ti) { if (gd.data[ti]) gd.data[ti].showlegend = !v; });
+          VAL_LEGEND_TRACES.forEach(function(ti) { if (gd.data[ti]) gd.data[ti].showlegend = v; });
+        }
+        recolor3d();   // applyRanges re-applies the active mode's colours + redraws (picks up showlegend)
+      };
+      if (tg) tg.addEventListener("click", function (e) {
+        var seg = e.target.closest(".seg");
+        var v = seg ? seg.getAttribute("data-cmode") === "V" : (COLOR_MODE !== "V");
+        setColorModeHook(v ? "V" : "D");
+      });
+      syncUI();   // reflect the default mode on load (Python sets the initial legend + colours)
     })();
 
     var pinned = false;
@@ -2705,18 +2757,19 @@ _INTERFACE_INJECT = '''
       if (window.ResizeObserver) new ResizeObserver(positionAxisLegend).observe(rp);
       else setTimeout(positionAxisLegend, 200);
       var AX = ["x", "y", "z"];
-      var els = {}, orig = {};
+      var els = {}, orig = {}, origColor = {};   // origColor[ti] = the trace's disease-area colour (D mode)
       function fmt(v) { return (Math.abs(v) >= 100 ? v.toFixed(0) : v.toFixed(2)); }
       // Full per-area arrays come from the injected __AREA_DATA__ (plain numbers).
       // We must NOT read gd.data[ti].x — Plotly stores trace coords as base64
       // {dtype, bdata} objects, not JS arrays (.slice/.length would fail).
       var AREA = window.__AREA_DATA__ || [];
       function captureOrig() {
-        orig = {};
+        orig = {}; origColor = {};
         R.areaTraces.forEach(function(ti, i) {
           var d = AREA[i] || {x: [], y: [], z: [], gene: [], hover: []};
           orig[ti] = {x: d.x, y: d.y, z: d.z, text: d.gene, cd: d.gene,
                       hover: d.hover || []};
+          origColor[ti] = d.color || (gd.data[ti] && gd.data[ti].marker && gd.data[ti].marker.color);
         });
       }
       var lastMasks = {}, lastTotal = 0;
@@ -2824,6 +2877,7 @@ _INTERFACE_INJECT = '''
                    && confAllowed(o.text[k])
                    && lofAllowed(o.text[k])
                    && valAllowed(o.text[k])
+                   && (COLOR_MODE !== "V" || valCatShown[valCatOf(o.text[k])] !== false)  // V-mode legend category filter
                    && !isHiddenGene(o.text[k]));   // hidden genes/compound-targets drop from the view
             m.push(inr); if (inr) total++;
           }
@@ -2842,7 +2896,22 @@ _INTERFACE_INJECT = '''
           var tr = gd.data[ti];
           tr.x = fx; tr.y = fy; tr.z = fz; tr.text = ft; tr.customdata = fcd;
           tr.hovertext = fhov;   // keep the tooltip aligned with the filtered points
+          // V mode: light fill + dark ring per FBXO31 category; D mode: solid disease colour + grey ring.
+          if (tr.marker) {
+            if (!tr.marker.line) tr.marker.line = {};
+            if (COLOR_MODE === "V") {
+              tr.marker.color = ft.map(valFillOf);
+              tr.marker.line.color = ft.map(valRingOf); tr.marker.line.width = 2.4;
+            } else {
+              tr.marker.color = origColor[ti];
+              tr.marker.line.color = "#333"; tr.marker.line.width = 1;
+            }
+          }
         });
+        // Grey backdrop (trace 0) tints light-blue in V mode to match the validation palette.
+        if (gd.data[0] && gd.data[0].marker) {
+          gd.data[0].marker.color = (COLOR_MODE === "V") ? VCOL.background : "lightgrey";
+        }
         // Labels are rebuilt by refreshLabels() (scene.annotations) — see there for the
         // visible-traces + top-N-by-MS logic. Stash the masks/total so a later legend
         // toggle can re-derive labels without recomputing the range filter.
@@ -2859,6 +2928,34 @@ _INTERFACE_INJECT = '''
       // Toggling a disease area in the legend changes trace visibility (plotly fires
       // plotly_restyle); re-derive labels so hidden areas drop their labels too.
       if (gd.on) gd.on("plotly_restyle", refreshLabels);
+      // V-mode legend keys are empty proxy traces, so Plotly's default toggle would do nothing
+      // to the real points (they live in the disease-area traces). Intercept click/double-click on
+      // those keys and filter the points by FBXO31 category instead. Click = toggle one category;
+      // double-click = isolate it (or restore all if it's already the only one shown). Non-validation
+      // legend keys (disease areas in D mode) keep Plotly's default behaviour (return true).
+      function _valCatOfCurve(ti) {
+        var i = VAL_LEGEND_TRACES.indexOf(ti);
+        return i === -1 ? null : VAL_CATS[i];
+      }
+      function _syncValLegendDim() {
+        // dim a hidden category's legend key by parking its proxy trace at "legendonly"
+        VAL_LEGEND_TRACES.forEach(function(ti, i) {
+          if (gd.data[ti]) gd.data[ti].visible = (valCatShown[VAL_CATS[i]] === false) ? "legendonly" : true;
+        });
+      }
+      if (gd.on) gd.on("plotly_legendclick", function(e) {
+        var cat = _valCatOfCurve(e && e.curveNumber); if (!cat) return true;
+        valCatShown[cat] = (valCatShown[cat] === false);   // toggle
+        _syncValLegendDim(); recolor3d();
+        return false;
+      });
+      if (gd.on) gd.on("plotly_legenddoubleclick", function(e) {
+        var cat = _valCatOfCurve(e && e.curveNumber); if (!cat) return true;
+        var onlyThis = valCatShown[cat] && VAL_CATS.every(function(c) { return c === cat ? valCatShown[c] : !valCatShown[c]; });
+        VAL_CATS.forEach(function(c) { valCatShown[c] = onlyThis ? true : (c === cat); });   // isolate, or restore all
+        _syncValLegendDim(); recolor3d();
+        return false;
+      });
       AX.forEach(function(a) {
         var cfg = R[a];
         var lo = document.getElementById(a + "-lo");
@@ -3254,6 +3351,7 @@ _INTERFACE_INJECT = '''
         }
         var seg2d = document.querySelector("#disp-toggle .seg2d");
         s.mode2d = !!(seg2d && seg2d.classList.contains("active"));
+        s.colorMode = COLOR_MODE;
         try {
           var cam = gd && gd._fullLayout && gd._fullLayout.scene && gd._fullLayout.scene.camera;
           if (cam) s.camera = JSON.parse(JSON.stringify(cam));
@@ -3304,6 +3402,7 @@ _INTERFACE_INJECT = '''
         if (typeof f.contaminant === "boolean") {
           contaminantOn = f.contaminant; var cb2 = document.getElementById("contaminant-toggle"); if (cb2) cb2.checked = contaminantOn;
         }
+        if (s.colorMode === "V" || s.colorMode === "D") setColorModeHook(s.colorMode);
         recolor3d();                              // re-run the mask (filters+hidden+ranges) + labels + count
         if (typeof s.mode2d === "boolean") setMode2DHook(s.mode2d);
         if (s.camera) { try { Plotly.relayout(gd, {"scene.camera": s.camera}); } catch (e) {} }
@@ -3369,6 +3468,7 @@ _INTERFACE_INJECT = '''
         if (hiddenCompounds.length) parts.push('hc=' + enc(hiddenCompounds));
         if (!showPins)              parts.push('sp=0');   // pins-hidden state (default is shown)
         if (soloPins)               parts.push('so=1');   // solo (only-pinned) view
+        if (COLOR_MODE === 'D')     parts.push('cm=D');   // colour by disease area (default is V)
         return parts.join('&');
       }
 
@@ -3379,11 +3479,12 @@ _INTERFACE_INJECT = '''
         h.split('&').forEach(function(kv) {
           var i = kv.indexOf('='); if (i > 0) q[kv.slice(0, i)] = kv.slice(i + 1);
         });
-        if (!('p' in q || 'pg' in q || 'pc' in q || 'hg' in q || 'hc' in q || 'sp' in q || 'so' in q)) return null;  // unrecognised -> keep default view
+        if (!('p' in q || 'pg' in q || 'pc' in q || 'hg' in q || 'hc' in q || 'sp' in q || 'so' in q || 'cm' in q)) return null;  // unrecognised -> keep default view
         var sess = {pinnedGenes: dec(q.pg), pinnedCompounds: dec(q.pc),
                     hiddenGenes: dec(q.hg), hiddenCompounds: dec(q.hc)};
         if ('sp' in q) sess.showPins = q.sp !== '0';
         if ('so' in q) sess.soloPins = q.so === '1';
+        if ('cm' in q) sess.colorMode = (q.cm === 'D') ? 'D' : 'V';
         if ('p' in q) {   // exact plate view: only the listed plates ticked on
           var want = {}; dec(q.p).forEach(function(p) { want[p] = 1; });
           var plates = {}; Object.keys(ticked).forEach(function(p) { plates[p] = !!want[p]; });
@@ -3883,6 +3984,8 @@ def plot_3d_interface(
     compound_meta_icons=None,
     disease_area_colors=None,
     na_area_color='#bbbbbb',
+    validation_colors=None,
+    color_mode_default='V',
     title='',
     range_sliders=False,
     range_defaults=None,
@@ -3974,6 +4077,11 @@ def plot_3d_interface(
 
     if disease_area_colors is None:
         disease_area_colors = {}
+    if validation_colors is None:
+        validation_colors = {'dependent':   {'fill': '#B98BD6', 'ring': '#7B2D8E'},
+                             'independent': {'fill': '#F2B366', 'ring': '#D07C1A'},
+                             'rest':        {'fill': '#B3D4E6', 'ring': '#6BA3C7'},
+                             'background': '#CFE3F0'}
 
     # Per-axis explanations shown on hover over the axis legend (like plot_target_3d).
     # Defaults describe the FBX interface axes; override any via `axis_help`.
@@ -4561,29 +4669,35 @@ def plot_3d_interface(
                         _json.dump(ring_pos, _rf)
                 except Exception as _e:
                     print(f'  [warn] could not write ring_pos.json: {_e}')
-            # stem_trace[vk][gene] = [fx, fy, aspect, isHitHere]: every significant-down gene's
-            # position in each validation contrast (positions reused from ring_pos — no re-render).
-            # isHitHere=1 => a significant point in THIS volcano (hoverable); 0 => shown only so the
-            # line can pass through (the gene is not significant in this condition).
-            if _external:
-                for (g, vk, ei, pi) in tasks:
-                    if pi is None:
-                        continue
-                    _row = custom[g][ei][3][pi]
-                    if not (len(_row) > 7 and _row[7]):    # validation rows only (carry a vk at idx 7)
-                        continue
-                    _rp = ring_pos.get(_vfname(g, vk, 'v2'))
-                    if not _rp:
-                        continue
-                    _hit = 0 if (len(_row) > 6 and _row[6]) else 1
-                    stem_trace.setdefault(str(vk), {})[str(g)] = [_rp[0], _rp[1], _rp[2] if len(_rp) > 2 else 1.0, _hit]
-                print(f'> stem trace: {sum(len(v) for v in stem_trace.values()):,} gene positions '
-                      f'across {len(stem_trace):,} validation contrasts')
         elif _vsrc is None:
             print('> no volcano source (pass df_raw or volcano_source) — volcanoes disabled')
     else:
         print('> no compound panel (provide compounds_df or top1..topN columns) — '
               'scatter + hover text only')
+
+    # stem_trace[vk][gene] = [fx, fy, aspect, isHitHere]: every significant-down gene's position in
+    # each validation contrast, for the cross-plate hover trace. Built from custom + ring_pos so it
+    # works whether volcanoes were rendered fresh OR the panels/volcanoes were loaded from cache
+    # (IFACE_OVERWRITE=false) — the render pass already persisted ring_pos.json, loaded above.
+    # isHitHere=1 => a significant point in THIS volcano (hoverable); 0 => shown so the line passes through.
+    if have_compounds and bool(volcano_dir) and bool(html_path) and ring_pos:
+        _ext = '.svg' if volcano_significant else '.png'
+        for g, entries in custom.items():
+            for entry in entries:
+                if not (isinstance(entry, list) and entry and entry[0] != '__META__'
+                        and len(entry) > 3 and isinstance(entry[3], list)):
+                    continue
+                for _row in entry[3]:
+                    if not (isinstance(_row, list) and len(_row) > 7 and _row[7]):
+                        continue   # validation rows only (carry a contrast id at idx 7)
+                    _vk = _row[7]
+                    _rp = ring_pos.get(_volcano_cache_fname(g, _vk, volcano_xlim, volcano_size_px, _ext, version='v2'))
+                    if not _rp:
+                        continue
+                    _hit = 0 if (len(_row) > 6 and _row[6]) else 1
+                    stem_trace.setdefault(str(_vk), {})[str(g)] = [_rp[0], _rp[1], _rp[2] if len(_rp) > 2 else 1.0, _hit]
+        print(f'> stem trace: {sum(len(v) for v in stem_trace.values()):,} gene positions '
+              f'across {len(stem_trace):,} validation contrasts')
 
     # bundle the (built or loaded) panel data so callers can cache + replay it (return_panels)
     _panels_out = ({'custom': custom, 'all_plates': list(all_plates),
@@ -4649,6 +4763,7 @@ def plot_3d_interface(
             textfont=dict(size=10, color='black'),
             hovertext=_hover_text(grp), hoverinfo='text',
             name=name,
+            showlegend=(str(color_mode_default).upper() != 'V'),  # disease-area keys only in D mode
         )
         if have_compounds:
             # customdata = just the gene name; heavy entries live in __GENE_COMPOUNDS__.
@@ -4661,6 +4776,7 @@ def plot_3d_interface(
             'z': [float(v) for v in grp['_zplot']],
             'gene': list(grp['gene']),
             'hover': list(_hover_text(grp)),
+            'color': color,   # disease-area colour, restored by the D colour mode
         })
 
     for area in area_order:
@@ -4693,6 +4809,23 @@ def plot_3d_interface(
         showlegend=False,
     ))
     pin_trace_index = len(fig.data) - 1
+
+    # Validation-mode legend keys: 3 empty traces whose swatches carry the V-mode palette
+    # (purple dependent / orange independent / light-blue other). They hold no data, so they
+    # never affect the plot — the JS colour toggle just flips showlegend between these and the
+    # disease-area traces, so the top-right legend follows the V/D mode. Shown in V by default.
+    # A single None point (not x=[]) so gl3d actually renders a legend entry — empty traces don't.
+    val_legend_trace_indices = []
+    _val_default_show = str(color_mode_default).upper() == 'V'
+    for _vk, _vlab in [('dependent', validated_label), ('independent', devalidated_label), ('rest', 'other')]:
+        _c = validation_colors.get(_vk, {})
+        fig.add_trace(go.Scatter3d(
+            x=[None], y=[None], z=[None], mode='markers',
+            marker=dict(size=7, color=_c.get('fill', '#cccccc'), opacity=0.95,
+                        line=dict(color=_c.get('ring', '#333'), width=2.4)),
+            name=_vlab, hoverinfo='skip', showlegend=_val_default_show,
+        ))
+        val_legend_trace_indices.append(len(fig.data) - 1)
 
     # Range-slider config. The colour traces are indices 1..N (trace 0 = grey
     # backdrop); the JS slices them to the in-range subset on each slider move.
@@ -5003,7 +5136,10 @@ def plot_3d_interface(
             'window.__CMP_VALIDATION_CATS__ = ' + _jsp(cmp_validation_cats) + ';\n'
             'window.__CMP_VALIDATION_DEFAULTS__ = ' + (_jsp(cmp_validation_def) if cmp_validation_def is not None else 'null') + ';\n'
             'window.__CMP_VAL_LABEL_YES__ = ' + _json.dumps(str(compound_validated_label)) + ';\n'
-            'window.__CMP_VAL_LABEL_NO__ = ' + _json.dumps(str(compound_devalidated_label)) + ';\n')
+            'window.__CMP_VAL_LABEL_NO__ = ' + _json.dumps(str(compound_devalidated_label)) + ';\n'
+            'window.__VALIDATION_COLORS__ = ' + _jsp(validation_colors) + ';\n'
+            'window.__VAL_LEGEND_TRACES__ = ' + _jsp(val_legend_trace_indices) + ';\n'
+            'window.__COLOR_MODE_DEFAULT__ = ' + _json.dumps('D' if str(color_mode_default).upper() == 'D' else 'V') + ';\n')
         _data_name = os.path.splitext(os.path.basename(html_path))[0] + '_data.js'
         _data_path = os.path.join(os.path.dirname(html_path), _data_name)
         with open(_data_path, 'w') as fh:

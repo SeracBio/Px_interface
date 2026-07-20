@@ -218,6 +218,36 @@ class TestRender(unittest.TestCase):
         self.assertTrue(os.path.isdir(vdir))
         self.assertTrue(any(f.endswith('.svg') for f in os.listdir(vdir)))
 
+    def test_stem_trace_survives_panels_cache(self):
+        """Gene-linking (__STEM_TRACE__) must be built on BOTH the fresh-render and the
+        panels-cache path. IFACE_OVERWRITE=false loads cached panels but must still emit the
+        cross-plate trace positions (regression: the build used to be skipped on the cache path,
+        shipping an empty map and silently disabling the WT/MLN/KO gene-linking)."""
+        import re
+        out = 'tmp/out_cache_test'
+        dj = os.path.join(out, 'interfaces', 'Serac_Px_interface_data.js')
+
+        def stem_total():
+            js = open(dj).read()
+            m = re.search(r'__STEM_TRACE__ = JSON\.parse\("(.*?)"\);', js, re.S)
+            st = json.loads(json.loads('"' + m.group(1) + '"'))
+            return sum(len(v) for v in st.values())
+
+        saved = self.params.IFACE_OVERWRITE
+        try:
+            self.params.IFACE_OVERWRITE = True            # fresh render: writes panels.json + ring_pos.json
+            self.output.build_interface(self.data, self.params, out)
+            fresh = stem_total()
+            self.params.IFACE_OVERWRITE = False           # cache load: must rebuild the trace from cache
+            self.output.build_interface(self.data, self.params, out)
+            cached = stem_total()
+        finally:
+            self.params.IFACE_OVERWRITE = saved
+        # the fresh render emits trace positions
+        self.assertGreater(fresh, 0)
+        # the cache path emits the SAME positions (not an empty map)
+        self.assertEqual(cached, fresh)
+
 
 if __name__ == '__main__':
     unittest.main(verbosity=2)

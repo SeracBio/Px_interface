@@ -99,8 +99,13 @@ data shares the namespace); no real PNGs so thumbnails are RDKit-rendered from `
     panel, not just the compound's focal gene. Data: `__STEM_TRACE__[vk][gene] = [fx, fy, aspect, isHit]`
     for every validation contrast `vk` — positions **reused from `ring_pos`** (no re-render; every
     significant-down gene is already a focal gene of its own volcano via `compounds_df`+completion, so its
-    ring position in each condition exists). Built in `plot_3d_interface` after the render pass; each
-    validation plate-row carries its `vk` at index 7 so the JS maps a cell → contrast. JS: `placeHotspots`
+    ring position in each condition exists). Built in `plot_3d_interface` by iterating `custom` +
+    `ring_pos`; each validation plate-row carries its `vk` at index 7 so the JS maps a cell → contrast.
+    **Runs on BOTH the fresh-render AND the panels-cache path (fix 2026-07-20):** the build was previously
+    inside the `panels is None` (rebuild) branch, so `IFACE_OVERWRITE=false` (panels loaded from cache)
+    skipped it and shipped an empty `__STEM_TRACE__` → gene-linking silently disabled. It now lives after
+    both branches, reusing the `ring_pos.json` the cache branch already loads, so linking survives cache
+    re-runs. Regression test: build twice (overwrite then `IFACE_OVERWRITE=false`) → same 1,904 positions. JS: `placeHotspots`
     lays invisible `.vhot` targets over each `isHit` gene point (positioned via the `<object>` rect +
     injected `(fx,fy)` + letterbox math — works http AND `file://`, no `contentDocument`); `traceGene`
     draws the `<polyline>` + per-point markers + gene label into the `.vstem-trace` overlay; re-placed on
@@ -231,6 +236,33 @@ data shares the namespace); no real PNGs so thumbnails are RDKit-rendered from `
   **orthographic zoom ignores camera distance** (`eye.x`), and `scene.aspectmode:'manual'` frame geometry is
   data-range-independent (0-100 vs 0-212 MS render identically). **Do not use `margin.l`** to clear the panel —
   it squeezes the scene and clips the vertical axis. Session/hash loads still override the 2D/3D mode.
+- **Gene colour V/D toggle (2026-07-20):** a second pill (`#color-toggle`) sits **on the same Display row** as the
+  Axes 2D/3D pill, separated by a `|` (`.disp-sep`), and switches how genes are coloured. **V (validation, default)**
+  = per-gene by FBXO31 status, each drawn as a **dark ring + light fill** (like the reference volcano circles):
+  **purple** dependent (fill `#B98BD6` / ring `#7B2D8E`), **orange** independent (fill `#F2B366` / ring `#D07C1A`),
+  **light blue** other (fill `#B3D4E6` / ring `#6BA3C7`). **D (disease)** = the original per-area colours (each
+  Scatter3d trace's fixed `disease_area` colour, solid + `#333` ring). Colours from `VALIDATION_COLORS`
+  (Px_interface `build_interface`) → `validation_colors` param → `__VALIDATION_COLORS__`; default via
+  `color_mode_default='V'` → `__COLOR_MODE_DEFAULT__`. **No re-render** — recolouring rides `recolor3d`
+  (`applyRanges`): in V each area trace's `marker.color` becomes `ft.map(valFillOf)` (light fill) + its
+  `marker.line.color` becomes `ft.map(valRingOf)` (dark ring, width 1.4); in D → `origColor[ti]` fill (the disease
+  colour, captured in `captureOrig` from `area_data[i].color`) + `#333` ring. (Trace 0 backdrop is `opacity=0`, so
+  its colour flip is a no-op — the visible dots are the highlighted/area traces only.) **Caveat:** gl3d officially
+  supports per-point `marker.color` string arrays but only numeric→colorscale for `marker.line.color`; the per-point
+  string ring array is accepted by plotly.py and *may* render — if a build shows uniform/black rings on the plot,
+  switch the ring to the numeric-index + `line.colorscale` mechanism (legend swatches are unaffected — see below).
+  **Legend follows the mode (native top-right Plotly legend):** 3 legend-proxy Scatter3d traces
+  (`__VAL_LEGEND_TRACES__`, indices after the pin trace) each carry ONE `None` point (gl3d shows no legend entry for
+  a truly empty `x=[]` trace) with a uniform fill+ring (so each swatch renders its ring reliably), names
+  `FBXO31 dependent` / `FBXO31 independent` / `other`. `setColorModeHook` flips `showlegend` — disease-area traces
+  on in D / off in V, the 3 validation traces the reverse (Python sets the load state via each trace's
+  `showlegend`). **Legend keys filter by category (2026-07-20):** since the proxy traces are empty, Plotly's default
+  legend toggle can't act on the real points — so `plotly_legendclick` / `plotly_legenddoubleclick` are intercepted
+  for the 3 proxy curves (return `false` to suppress default): click toggles one `valCatShown` category, double-click
+  isolates it (or restores all). The mask in `applyRanges` gates V-mode points by `valCatShown[valCatOf(gene)]`, and
+  `_syncValLegendDim` parks a hidden category's proxy at `visible:'legendonly'` so its key dims. Non-validation keys
+  (disease areas in D) keep Plotly's default toggle. Ring width 2.4. Persisted in session (`s.colorMode`) + hash
+  (`cm=D`, default V omitted) via `setColorModeHook`.
 - **Range readouts are edit-in-place (2026-07-14):** each axis's `lo – hi` readout (`#x-val` etc.) is two
   `contenteditable` `.rp-edit` spans (dotted underline = editable hint). Click a number, type, and **Enter/blur
   commits** (Esc reverts): `commitEdit` clamps to `[min,max]`, keeps `lo ≤ hi` (editing lo can't exceed hi and
