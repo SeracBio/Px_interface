@@ -50,10 +50,14 @@ parquet, gene_sar.csv, 2 FBX tranches, chemlib (`SRB-#######` compounds, `CCO` s
 source csvs, contaminants.csv, gene_research.json, ot_cache.parquet, pharma_patent/bms_genes csvs.
 Compounds use real `SRB-` format so `get_iface`'s `startswith('SRB-')` filter passes. `tmp/` is gitignored
 — regenerate after a clone/reboot. Full run incl. render (~20s):
-`python python/Px_interface.py --config tmp/config.yaml --output_dir tmp/out`. Known fidelity gaps (fine
-for structure tests): synthetic `df_raw.uniquecontrast` is per-compound not per (compound,plate);
-FBX/df_raw uniquecontrasts are disjoint so the MEASURE/REPORT source-of-truth dedup path isn't exercised
-(MS-SCORE's (gene,plate) dedup is); no real PNGs so thumbnails are RDKit-rendered from `CCO`.
+`python python/Px_interface.py --config tmp/config.yaml --output_dir tmp/out`. Synthetic
+`df_raw.uniquecontrast` is now **plate-specific** (`{mbid}.{plate}_vs_DMSO`, matching the FBX
+convention) so a compound tested on several plates keeps one row per plate — needed for the shared-stem
+validation plates (`Pw10WT/MLN/KO`, `Pw11WT/KO`) to all survive combine. Known fidelity gaps (fine for
+structure tests): FBX/df_raw uniquecontrasts are disjoint so the MEASURE/REPORT source-of-truth dedup
+path isn't exercised (MS-SCORE's (gene,plate) dedup is); interface plates use the **MSPlate** namespace
+while FBX plates use `Pw{ti}{p}` (disjoint → `__PLATE_DEFAULTS__` filters to `[]` on synthetic; real
+data shares the namespace); no real PNGs so thumbnails are RDKit-rendered from `CCO`.
 
 ## Interface conventions (the render engine)
 - **Axes:** x = R2 (SAR predictability, full-genome), y = OpenTargets association, z = MS score.
@@ -65,6 +69,20 @@ FBX/df_raw uniquecontrasts are disjoint so the MEASURE/REPORT source-of-truth de
 - **`plate_dates=` →** Plates filter renders **nested-by-date** (collapsible per-date sub-blocks,
   tri-state parents). **`plate_defaults=`** (list of plates) starts only those ticked; the notebook
   passes the **latest tranche's plates** so the default view shows just the newest date.
+- **Validation plates (2026-07-17):** plates whose name ends in a configured suffix — param
+  `plate_validation_suffixes=('WT','MLN','KO')` on `plot_3d_interface`, injected as
+  `__VALIDATION_SUFFIXES__` — are pulled out of their date groups into a **dedicated "validation"
+  sub-block** (rendered **first/at the top**, gold-accented header + a `border-bottom` rule
+  (`.pf-validation`) separating it from the dated plates; same `.pf-date` structure so the tri-state
+  parent + collapse work for free). Within the block, plates **sharing a stem** (name minus the
+  WT/MLN/KO suffix, e.g. `Pw10WT/Pw10MLN/Pw10KO` → stem `Pw10`) render **on one row, side by side**,
+  ordered by the suffix order (**WT, then MLN, then KO**) via `validationBlock()` (`.pf-val-row` /
+  `.pf-val-stem` CSS; row shows the stem once, then the suffix checkboxes). They **start UNticked** regardless of `plate_defaults` (JS `isValidationPlate` forces
+  `ticked[p]=false` at init; `buildPlateGroup` splits them off via `items.filter(isValidationPlate)`).
+  The synthetic fixture now includes `Pw04WT/Pw05MLN/Pw06KO` (MSPlate namespace, dated via the
+  `px_*_db` file) to exercise this. Note: interface plates = the **MSPlate** namespace, NOT the FBX
+  `plate` column — the two are disjoint in the synthetic fixture, so `__PLATE_DEFAULTS__` filters to
+  `[]` there (a known fidelity gap; real data shares the namespace).
 - **gene research** is sourced from `config.GENE_RESEARCH` (whole-genome ~10K-gene JSON) and
   **filtered to plotted genes** before injection (`__GENE_RESEARCH__`) to bound the payload; the
   build prints `[gene_research] kept/total — MB injected`.
@@ -72,12 +90,20 @@ FBX/df_raw uniquecontrasts are disjoint so the MEASURE/REPORT source-of-truth de
   **Selector** (orange) pins, a **Hide** (red) hides. Pinning a compound pins its target genes;
   hiding a **gene** drops its dot, hiding a **compound** drops only that compound (gates at
   `cmpAllowed`), its target genes stay. Hide supersedes pin. Click-to-select on the plot/panel.
-  - **Pins are gated by current filters (2026-06-30):** a pinned gene renders (dot/label/count) only
-    if it has ≥1 compound on the ticked plates+activities (`geneHasVisibleCompound` via new
-    `visiblePinSet()`); the pin chip is retained, so re-ticking the plate brings the dot back.
-    `applyRanges` now repaints the pin overlay (`buildPinTraceHook`) on every filter change, not just
-    pin/unpin. Note this also suppresses pins whose only compounds are filtered out by class/dep/conf/
-    lof/validation, and genes with no compounds at all (single-volcano/non-plate entries still count).
+  - **Pins are ALWAYS shown, shape encodes selection state (2026-07-17, reverses the 2026-06-30
+    filter-gating):** a pinned gene renders (dot/label/count) regardless of whether it has a compound
+    on the ticked plates/activities — the overlay now uses `shownPinSet()` (= `effectivePinSet()` gated
+    only by the master toggle), and `visiblePinSet()` was removed. Per-point `marker.symbol` on the
+    overlay: **circle** when the pin has a visible compound (`geneHasVisibleCompound` true — looks like a
+    normal in-selection dot), **diamond/losange** when it doesn't. `applyRanges` still repaints the
+    overlay (`buildPinTraceHook`) on every filter change so the shape flips live as plates/activities
+    are ticked. Pin outline matched to the area dots (`line #333/1`).
+  - **Master "★ pinned (N)" toggle:** a single HTML checkbox (`#pin-toggle`) docked just below the Plotly
+    legend — positioned from the legend's `getBoundingClientRect()` via `placePinToggle` (re-run on
+    resize + `plotly_afterplot`; falls back top-right if no legend). Enables/disables the whole pinned
+    overlay (`showPins`) without unpinning (chips stay). The overlay trace is `showlegend=False` (the
+    toggle is the single control; a native key would misrepresent the mixed circle/diamond shapes).
+    Persisted in `.iface` session (`showPins`) and the URL hash (`sp=0` when off).
 - **Compound-validation filter** (COMPOUND FILTERS): FBXO31 dependent/independent tickboxes keyed to
   `validated_compounds`/`devalidated_compounds`; mirror of the target-centric Validation filter.
 - **Session save/load** (SESSION subsection): `.iface` JSON captures pins, hides, all filter
@@ -346,7 +372,16 @@ and a *merged* cluster means either a <55px (tight, good) gap or an overlap (loo
   topology unchanged; kept the two files in sync. **Internal diagram now local-only (2026-07-16):**
   `docs/aws_architecture_mermaid.md` (real internal CIDRs) is gitignored + `git rm --cached` (untracked, local
   copy kept) so only the redacted `docs/aws_architecture_mermaid.shared.md` lives in git going forward. Takes
-  effect on the remote after commit+push; the file still exists in **git history** (history rewrite to remove). **Operational:** next `terraform init` needs `-backend-config=backend.hcl`
+  effect on the remote after commit+push; the file still exists in **git history** (history rewrite to remove).
+- 2026-07-16 — **Step 6 prep: interface artifacts S3 bucket** — added `aws-vpn/s3.tf`: a hardened bucket
+  `${project}-interface-${account_id}` (name computed at apply → not committed; versioned, SSE-S3/AES256,
+  public-access-blocked, TLS-only + same-account policy) + an `s3:GetObject`/`ListBucket` grant on the EC2
+  instance role, and an `interface_bucket` output. Upload path: workstation `aws s3 sync tmp/out/interfaces/`
+  → bucket → EC2 pulls via the S3 gateway endpoint → `/var/www/webapp`. AES256 (not KMS) so no extra
+  kms:Decrypt grant is needed. `terraform validate` clean; not yet applied. Create the bucket alone without the
+  staged EC2 replacement via `terraform apply -target=aws_s3_bucket.interface …` (+ the 4 bucket sub-resources
+  + `aws_iam_role_policy.s3_interface_read`). And keep the box on the SYNTHETIC render until M365 SSO (hard
+  privacy rule). **Operational:** next `terraform init` needs `-backend-config=backend.hcl`
   (`-reconfigure` if migrating from the old hard-coded backend); applying H1 changes the SG in place (no EC2
   replace), but a full `apply` still triggers the pending boot/monitoring EC2 replacement — same "not before
   Step 6" caveat as above. The bootstrap bucket-policy apply is independent and safe anytime.
@@ -367,3 +402,96 @@ and a *merged* cluster means either a <55px (tight, good) gap or an overlap (loo
   box booted (this is the real test that the H1 egress lockdown didn't break `dnf`/SSM; expect 7 ok, nginx
   active, 4/4 endpoints). (5) **Step 6** — upload the real interface (S3-via-gateway-endpoint recommended, or
   base64-over-SSM for a small file).
+- 2026-07-16 — **Step 6 done + boot made hands-off. What went wrong on the manual attempt** (root causes, so
+  it never recurs): the running box (`172.20.2.66`) had been replaced by an earlier boot whose `user_data`
+  (a) **predated the retry loop** → hit the boot race (cloud-init ran at 8 s uptime, before endpoints/routing;
+  `dnf install nginx` had no route, `set -e` aborted) → **nginx never installed**; and (b) was applied
+  **without `TF_VAR_webapp_htpasswd_hash`**, so the `variables.tf` **placeholder** hash `$2y$10$REPLACEME…`
+  got baked into `.htpasswd` → nginx `crypt_r() failed (22: Invalid argument)` → **HTTP 500** after entering
+  the password. Also the boot script writes a 143-byte placeholder `Serac_Px_interface.html`, which showed as
+  `Serac Px Interface â€" VPN Access Only` (em-dash mojibake, no `<meta charset>`) until the real HTML was
+  synced over it. **Code changes to make future boots self-configuring (no on-box installs):** `ec2.tf`
+  `user_data` now (i) **pulls the interface from S3 at boot** — `retry 30 10 aws s3 sync
+  s3://<interface-bucket>/interfaces/ /var/www/webapp/` (|| true, placeholder only if the bucket is empty),
+  (ii) fixes the placeholder charset (`<meta charset="utf-8">`, ASCII hyphen), (iii) sets `root:nginx` + 644/755
+  perms; instance `depends_on` now includes `aws_iam_role_policy.s3_interface_read`. The retry loop (already in
+  `ec2.tf`) handles the boot race. NB this `user_data` edit means the next `apply` **replaces the EC2** — which
+  is desired (the replacement self-heals).
+- 2026-07-16 — **CLEAN DEPLOY RUNBOOK (hands-off; no SSH, no on-box installs).** Prereqs one-time: bootstrap
+  applied, `backend.hcl` created, interface bucket exists (`s3.tf` applied). Then, to (re)deploy the box so it
+  comes up already serving:
+  1. **Render + upload the interface to S3 FIRST** (so the box pulls it at boot):
+     `conda run -n ML python tests/make_synthetic.py --out tmp` →
+     `conda run -n ML python python/Px_interface.py --config tmp/config.yaml --output_dir tmp/out` →
+     `BUCKET=$(terraform -chdir=aws-vpn output -raw interface_bucket)` →
+     `aws s3 sync tmp/out/interfaces/ "s3://$BUCKET/interfaces/" --region eu-north-1 --exclude "*_2dtest.html"`.
+  2. **Basic-Auth hash** — `ec2.tf` auto-reads `~/.serac_aws` (one line `serac_user:$2y$…`), so nothing to
+     export. (If that file is ever missing you'll get the placeholder hash → `crypt_r` 500; recreate it with
+     `htpasswd -nbB serac_user > ~/.serac_aws`, or fall back to `export TF_VAR_webapp_htpasswd_hash=…`.)
+  3. `cd aws-vpn && terraform init -backend-config=backend.hcl` (if needed) then `terraform plan` / `terraform apply`.
+  4. Wait ~2–3 min, then `bash aws-vpn/healthcheck.sh` (expect nginx active, 4/4 endpoints, tunnel UP).
+  5. Browse `https://$(terraform -chdir=aws-vpn output -raw ec2_private_ip)/` over the VPN → Basic-Auth → the
+     interface. No SSH, no manual `dnf`/`htpasswd`/sync — the box self-configured from `user_data` + S3.
+  **Refresh the interface later** (new render, box unchanged): re-render → `aws s3 sync … s3://$BUCKET/interfaces/`
+  → then either one SSM command `sudo aws s3 sync s3://$BUCKET/interfaces/ /var/www/webapp/` on the box, or just
+  reboot/replace the instance (boot re-pulls). **Order rule:** upload to S3 *before* the apply so the boot pull
+  finds it; the two must-be-present-or-it-breaks items are the **S3 upload** and **`~/.serac_aws`** (the hash file).
+- 2026-07-16 — **Basic-Auth hash now read from a local file.** `ec2.tf` has a `webapp_htpasswd_hash` local:
+  `sensitive(fileexists(pathexpand("~/.serac_aws")) ? trimspace(file(...)) : var.webapp_htpasswd_hash)` — reads
+  `~/.serac_aws` (one line `serac_user:$2y$…`) so no `TF_VAR` export needed; falls back to the var if absent.
+  `user_data` uses `local.webapp_htpasswd_hash`. (`~/.serac_aws` is `chmod 600`, workstation-only, never committed.)
+- 2026-07-16 — **friendly internal DNS: `advantedge.seracbio.com` (Route 53 private zone + inbound resolver).**
+  Chosen over a public `seracbio.com/...` path, which is impossible for a VPN-only private box (would require
+  public exposure). New `aws-vpn/dns.tf`: a **private hosted zone scoped to `advantedge.seracbio.com`** (NOT all
+  of seracbio.com — avoids shadowing the public domain) with an apex **A record → the EC2's fixed private IP**;
+  a **Route 53 Resolver INBOUND endpoint** (~$90/mo) with IPs in two AZs (added a 2nd private subnet
+  `172.20.3.0/24` in `eu-north-1b`); a resolver SG allowing 53 tcp/udp from `on_premises_cidr`. EC2 pinned to a
+  **fixed private IP `172.20.2.10`** (`ec2_private_ip` var) so the record survives replacements. TLS cert
+  (`tls.tf`) now has CN + SAN = `advantedge.seracbio.com` (no name-mismatch warning). nginx serves the interface
+  under **`/Px_interface/`** (bare `/` 301-redirects there); the boot S3 pull + placeholder now target
+  `/var/www/webapp/Px_interface/`. Outputs: `resolver_inbound_ips`, `webapp_url`
+  (`https://advantedge.seracbio.com/Px_interface/`). **IT action required:** add a **conditional forwarder** on
+  the FortiGate/on-prem DNS for `advantedge.seracbio.com` → the `resolver_inbound_ips` (forward ONLY that name,
+  not all seracbio.com). `terraform validate` clean; not yet applied. NB this **replaces the EC2** (user_data +
+  private_ip change) — follow the CLEAN DEPLOY RUNBOOK (S3 upload + `~/.serac_aws` first). Cost note: the ~$90/mo
+  inbound resolver was the previously-flagged item in the cost table; now incurred. **Docs updated to match:**
+  `aws-vpn/instructions.md` (Step 3 hash→`~/.serac_aws`; Step 4 no env var; Step 6 S3 upload + boot auto-pull to
+  `/Px_interface/`; new Step 7 = friendly-DNS + conditional forwarder; Step 8 test via `advantedge.seracbio.com`;
+  refreshed the ASCII overview to 172.20 CIDRs + resolver) and both mermaid diagrams (`.md` + redacted
+  `.shared.md`) now show the Route 53 private zone + inbound resolver, the fixed-IP EC2 serving `/Px_interface/`,
+  the interface S3 bucket boot-pull, and a DNS-resolve step in the runtime sequence.
+- 2026-07-16 — **Boot race fixed for good: provisioning moved out of cloud-init into a systemd unit.**
+  Symptom (recurred even WITH the inline `retry 30 10` loop): a fresh/replaced box came up with nginx not
+  listening (browser `ERR_CONNECTION_REFUSED` on `https://172.20.2.10/Px_interface/`), yet
+  `sudo bash /var/lib/cloud/instance/scripts/part-001` run manually ~2 min later succeeded — i.e. the box is
+  fine, cloud-init just fires `user_data` at ~8 s uptime and the bounded retry (~5–6 min) can exhaust before the
+  VPC endpoints / VPN-propagated routes are reachable, then `set -e` aborts and cloud-init never re-runs.
+  **Durable fix (no more manual `part-001`):** `user_data` now does **zero network work** — it only writes an
+  idempotent `/opt/provision-webapp.sh` + a `provision-webapp.service` systemd oneshot, then
+  `systemctl start --no-block` (so cloud-init doesn't block on the network-gated pass). The unit is ordered
+  `After=network-online.target` (runs once the NIC is actually up, not at 8 s) and the script retries the whole
+  pass internally (60 × 15 s ≈ 15 min) until dnf/SSM/S3 answer; `Restart=on-failure` gives further passes. The
+  bash now lives in **`aws-vpn/user_data.sh.tftpl`** (rendered via `templatefile()` in `ec2.tf`) — chosen over a
+  triple-nested heredoc-in-heredoc for reliability. Two more changes rolled in: (i) the **Basic-Auth hash moved
+  to SSM** — new `aws_ssm_parameter.htpasswd` (`/<project>/webapp/htpasswd`, SecureString), fetched at boot like
+  the TLS cert/key, IAM read-grant + `depends_on` updated; keeps the secret out of user_data (IMDS-readable) and
+  keeps the `templatefile` vars non-sensitive; (ii) the S3 sync is now `|| return 1` (retry on network error)
+  instead of `|| true`, which fixes the old "placeholder shown even though S3 has the interface" bug (empty
+  bucket still returns 0 → placeholder; only a *reachable* empty bucket falls through). `terraform validate`
+  clean; rendered template passes `bash -n` (outer + inner). NB the `user_data` change **replaces the EC2** on
+  the next apply — desired (the replacement self-provisions). Diagnostics on a box: `systemctl status
+  provision-webapp`, `journalctl -u provision-webapp`.
+- 2026-07-17 — **APPLIED + serving; boot fix confirmed. Only the on-prem DNS forwarder remains (with IT).**
+  `terraform apply` replaced the EC2; `bash aws-vpn/healthcheck.sh` = **6 ok / 1 warn (status-checks still
+  initialising) / 0 fail** — instance running, SSM Online, 4/4 endpoints, VPN 2/2 tunnels UP, **nginx active with
+  no manual `part-001`** → the systemd self-provisioner works as intended. Interface confirmed serving over the
+  VPN at `https://172.20.2.10/Px_interface/`. **DNS security review (asked + verified):** the whole DNS stack
+  stays inside the VPC/VPN boundary — private hosted zone (never in public DNS; A record → RFC1918 IP), inbound
+  resolver endpoint has private IPs only + SG-gated to `on_premises_cidr`, `private_b` subnet on the private RT
+  which has **no 0.0.0.0/0 / IGW / NAT**. DNS only maps name→private IP; access still gated by EC2 SG + TLS +
+  basic auth. **DNS handoff DONE (pending IT):** `terraform output resolver_inbound_ips` = **`172.20.2.155`,
+  `172.20.3.107`** — the conditional-forwarder request (forward ONLY `advantedge.seracbio.com` → those two IPs,
+  53 udp/tcp; NOT all of seracbio.com) has been **sent to IT**. Once IT adds it,
+  `https://advantedge.seracbio.com/Px_interface/` resolves over the VPN (verify with
+  `nslookup advantedge.seracbio.com` → `172.20.2.10`). Until then, use the IP URL. **This is the last open item
+  on the AWS deployment.**

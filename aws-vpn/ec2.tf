@@ -80,7 +80,7 @@ resource "aws_security_group" "ec2" {
     prefix_list_ids = [data.aws_ec2_managed_prefix_list.s3.id]
   }
   egress {
-    description = "DNS (UDP) to the VPC resolver — resolve endpoint private hostnames"
+    description = "DNS (UDP) to the VPC resolver: resolve endpoint private hostnames"
     from_port   = 53
     to_port     = 53
     protocol    = "udp"
@@ -94,7 +94,7 @@ resource "aws_security_group" "ec2" {
     cidr_blocks = [var.vpc_cidr]
   }
   egress {
-    description = "NTP to Amazon Time Sync (avoid clock skew -> SigV4 failures)"
+    description = "NTP to Amazon Time Sync (avoid clock skew for SigV4)"
     from_port   = 123
     to_port     = 123
     protocol    = "udp"
@@ -141,7 +141,8 @@ resource "aws_iam_role_policy" "ssm_tls" {
       ]
       Resource = [
         aws_ssm_parameter.tls_cert.arn,
-        aws_ssm_parameter.tls_key.arn
+        aws_ssm_parameter.tls_key.arn,
+        aws_ssm_parameter.htpasswd.arn
       ]
       },
       {
@@ -165,106 +166,39 @@ resource "aws_iam_instance_profile" "ec2" {
 }
 
 # -------------------------------------------------------
-# User data — installs Nginx and configures HTTPS at boot
+# Basic-Auth hash — prefer a local ~/.serac_aws file (one line: "serac_user:$2y$...") so you
+# don't have to export TF_VAR_webapp_htpasswd_hash on every apply; fall back to the variable
+# if the file is absent. sensitive() keeps it out of plan output.
 # -------------------------------------------------------
 locals {
-  user_data = <<-EOF
-    #!/bin/bash
-    set -euo pipefail
-
-    REGION="${var.aws_region}"
-    PROJECT="${var.project_name}"
-
-    # Resilience: cloud-init fires ~8s into boot, sometimes before the VPC
-    # endpoints/routing are ready, so retry the network-dependent steps.
-    retry() {
-      max="$1"; delay="$2"; shift 2; n=1
-      until "$@"; do
-        if [ "$n" -ge "$max" ]; then echo "FAILED after $n attempts: $*" >&2; return 1; fi
-        echo "attempt $n failed; retry in $delay s: $*" >&2; n=$((n + 1)); sleep "$delay"
-      done
-    }
-
-    fetch_param() { # $1 = SSM param name, $2 = destination file
-      aws ssm get-parameter --region "$REGION" --name "$1" \
-        --with-decryption --query Parameter.Value --output text > "$2"
-    }
-
-    # Install Nginx (retry until package repos are reachable via the S3 endpoint)
-    retry 30 10 dnf install -y nginx
-    command -v aws >/dev/null 2>&1 || retry 5 10 dnf install -y awscli
-
-    # Create directories before writing files
-    mkdir -p /etc/nginx/ssl
-    mkdir -p /var/www/webapp
-
-    # Pull TLS cert and key from SSM (retry until the ssm endpoint is reachable)
-    retry 30 10 fetch_param "/$PROJECT/tls/cert" /etc/nginx/ssl/webapp.crt
-    retry 30 10 fetch_param "/$PROJECT/tls/key"  /etc/nginx/ssl/webapp.key
-
-    chmod 600 /etc/nginx/ssl/webapp.key
-    chmod 644 /etc/nginx/ssl/webapp.crt
-
-    # Write .htpasswd for HTTP basic auth
-    # Value is injected from the webapp_htpasswd_hash variable (bcrypt hash).
-    # To regenerate: htpasswd -nbB serac_user 'yourpassword'
-    echo '${var.webapp_htpasswd_hash}' > /etc/nginx/.htpasswd
-    chmod 640 /etc/nginx/.htpasswd
-    chown root:nginx /etc/nginx/.htpasswd
-
-    # Write Nginx config — HTTPS only, HTTP redirects to HTTPS
-    cat > /etc/nginx/conf.d/webapp.conf <<'NGINX'
-server {
-    listen 80 default_server;
-    return 301 https://$host$request_uri;
+  _htpasswd_file       = pathexpand("~/.serac_aws")
+  webapp_htpasswd_hash = sensitive(fileexists(local._htpasswd_file) ? trimspace(file(local._htpasswd_file)) : var.webapp_htpasswd_hash)
 }
 
-server {
-    listen 443 ssl default_server;
+# Basic-Auth hash kept in SSM (like the TLS cert/key) rather than baked into user_data —
+# user_data is readable by anything on the box via IMDS, so secrets don't belong there.
+# The instance pulls it at boot via the same fetch_param path as the cert/key.
+resource "aws_ssm_parameter" "htpasswd" {
+  name        = "/${var.project_name}/webapp/htpasswd"
+  description = "nginx basic-auth hash (serac_user:bcrypt) for the Px interface"
+  type        = "SecureString"
+  value       = local.webapp_htpasswd_hash
 
-    ssl_certificate     /etc/nginx/ssl/webapp.crt;
-    ssl_certificate_key /etc/nginx/ssl/webapp.key;
-
-    # Modern TLS only
-    ssl_protocols       TLSv1.2 TLSv1.3;
-    ssl_ciphers         HIGH:!aNULL:!MD5;
-    ssl_prefer_server_ciphers on;
-
-    # Security headers.
-    # NOTE: HSTS is intentionally omitted while using a self-signed cert — once a
-    # browser records HSTS it removes the "proceed anyway" bypass on cert warnings,
-    # which would hard-lock users. Re-enable it only after distributing a trusted
-    # cert to employee trust stores:
-    #   add_header Strict-Transport-Security "max-age=63072000" always;
-    add_header X-Frame-Options DENY always;
-    add_header X-Content-Type-Options nosniff always;
-
-    root /var/www/webapp;
-    index Serac_Px_interface.html;
-
-    location / {
-        auth_basic           "Serac Px Interface";
-        auth_basic_user_file /etc/nginx/.htpasswd;
-        try_files $uri $uri/ =404;
-    }
+  tags = {
+    Project = var.project_name
+  }
 }
-NGINX
 
-    # Placeholder entry page — replace with the real Serac_Px_interface.html
-    cat > /var/www/webapp/Serac_Px_interface.html <<'HTML'
-<!DOCTYPE html>
-<html>
-  <head><title>Serac Px Interface</title></head>
-  <body><h1>Serac Px Interface — VPN Access Only</h1></body>
-</html>
-HTML
-
-    # Validate config before starting
-    nginx -t
-
-    systemctl enable nginx
-    systemctl start nginx
-  EOF
+# -------------------------------------------------------
+# User data — drops a systemd-driven provisioner that waits for network-online and
+# retries until the VPC endpoints answer, so boot never races cloud-init (see the .tftpl).
+# -------------------------------------------------------
+locals {
+  user_data = templatefile("${path.module}/user_data.sh.tftpl", {
+    region  = var.aws_region
+    project = var.project_name
+    bucket  = aws_s3_bucket.interface.bucket
+  })
 }
 
 # -------------------------------------------------------
@@ -274,6 +208,7 @@ resource "aws_instance" "main" {
   ami                    = local.ami_id
   instance_type          = var.ec2_instance_type
   subnet_id              = aws_subnet.private.id
+  private_ip             = var.ec2_private_ip # stable IP so the DNS A record survives replacements
   vpc_security_group_ids = [aws_security_group.ec2.id]
   iam_instance_profile   = aws_iam_instance_profile.ec2.name
 
@@ -303,13 +238,16 @@ resource "aws_instance" "main" {
   }
 
   # Ensure the SSM params AND the VPC endpoints exist before the instance boots —
-  # user_data's dnf install / aws ssm calls have no route until the endpoints are up.
+  # user_data's dnf install / aws ssm / s3 sync calls have no route until the endpoints are
+  # up, and the S3 read grant must exist before the boot-time interface pull.
   depends_on = [
     aws_ssm_parameter.tls_cert,
     aws_ssm_parameter.tls_key,
+    aws_ssm_parameter.htpasswd,
     aws_vpc_endpoint.ssm,
     aws_vpc_endpoint.ssmmessages,
     aws_vpc_endpoint.ec2messages,
-    aws_vpc_endpoint.s3
+    aws_vpc_endpoint.s3,
+    aws_iam_role_policy.s3_interface_read
   ]
 }

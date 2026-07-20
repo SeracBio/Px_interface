@@ -16,9 +16,12 @@ resource "tls_self_signed_cert" "webapp" {
   private_key_pem = tls_private_key.webapp.private_key_pem
 
   subject {
-    common_name  = "internal.${var.project_name}.local"
+    common_name  = var.webapp_hostname
     organization = var.tls_cert_org
   }
+
+  # Serve the friendly internal name without a cert name-mismatch warning.
+  dns_names = [var.webapp_hostname, "internal.${var.project_name}.local"]
 
   # Valid from now
   validity_period_hours = var.tls_cert_validity_days * 24

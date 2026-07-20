@@ -1384,6 +1384,15 @@ _INTERFACE_INJECT = '''
   #filter-panel .pf-date.collapsed .pf-date-boxes { display: none; }
   #filter-panel .pf-date.collapsed .fp-caret { transform: rotate(-90deg); }
   #filter-panel .pf-date-boxes { padding-left: 12px; }
+  /* Validation sub-block sits at the top, separated from the dated plates by a rule. */
+  #filter-panel .pf-date.pf-validation { padding-bottom: 6px; margin-bottom: 6px;
+                                         border-bottom: 1px solid #c7ced9; }
+  #filter-panel .pf-date.pf-validation .pf-date-head { color: #b8860b; }
+  /* Same-stem validation plates (WT/MLN/KO) on one row, side by side. */
+  #filter-panel .pf-val-row { display: flex; align-items: center; flex-wrap: wrap; gap: 4px 10px;
+                              padding: 1px 0; }
+  #filter-panel .pf-val-row .pf-val-stem { font-weight: 600; color: #1D3557; min-width: 52px; }
+  #filter-panel .pf-val-row label { display: inline-flex; align-items: center; gap: 3px; }
   /* Gene search + pin overlay */
   #gene-search-wrap { position: relative; display: flex; gap: 5px; }
   #gene-search { flex: 1 1 auto; min-width: 0; padding: 3px 6px; font: 12px sans-serif;
@@ -1416,6 +1425,14 @@ _INTERFACE_INJECT = '''
   #pinned-box .pin-x:hover { color: #1D3557; }
   #pinned-box .pin-cmp { background: #eef2f8; border-color: #1D3557; }
   #pinned-box .pin-n { color: #888; font-size: 10px; }
+  /* Master "show pinned genes" toggle — positioned by JS just below the Plotly legend */
+  #pin-toggle { position: fixed; display: none; z-index: 9998; padding: 3px 8px;
+                background: rgba(255,255,255,0.92); border: 1px solid #FFC400;
+                border-radius: 10px; font: 11px sans-serif; color: #1D3557;
+                box-shadow: 0 1px 3px rgba(0,0,0,0.12); user-select: none; }
+  #pin-toggle label { display: inline-flex; align-items: center; gap: 5px; cursor: pointer; }
+  #pin-toggle input { cursor: pointer; margin: 0; }
+  #pin-toggle #pin-toggle-n { color: #888; }
   /* HIDE sub-block (mirror of pin, in red) */
   #hide-search-wrap { position: relative; display: flex; gap: 5px; margin-top: 8px; }
   #hide-search { flex: 1 1 auto; min-width: 0; padding: 3px 6px; font: 12px sans-serif;
@@ -1632,6 +1649,9 @@ _INTERFACE_INJECT = '''
 </div>
 <div id="hover-patents"></div>
 <div id="axis-legend"></div>
+<div id="pin-toggle" title="Show or hide pinned genes (they stay pinned either way)">
+  <label><input type="checkbox" id="pin-toggle-cb" checked> ★ pinned <span id="pin-toggle-n">0</span></label>
+</div>
 <div id="research-box"></div>
 <div id="range-panel">
   <div class="rp-title">Ranges <span class="rp-reset" id="rp-reset">reset</span>
@@ -1686,7 +1706,15 @@ _INTERFACE_INJECT = '''
     var plates = window.__PLATES__ || [];
     var ticked = {};
     var plateDefaults = window.__PLATE_DEFAULTS__ || null;   // plates to start ticked; null/absent = all
-    plates.forEach(function(p) { ticked[p] = plateDefaults ? (plateDefaults.indexOf(p) !== -1) : true; });
+    // Validation plates — names ending in a configured suffix (e.g. WT / MLN / KO) — get a
+    // dedicated "validation" sub-block in the Plates filter and start UNticked.
+    var _valSuffixes = window.__VALIDATION_SUFFIXES__ || [];
+    var _valRe = _valSuffixes.length ? new RegExp('(' + _valSuffixes.join('|') + ')$', 'i') : null;
+    function isValidationPlate(p) { return !!_valRe && _valRe.test(p); }
+    plates.forEach(function(p) {
+      ticked[p] = isValidationPlate(p) ? false
+                : (plateDefaults ? (plateDefaults.indexOf(p) !== -1) : true);
+    });
     var activities = window.__ACTIVITIES__ || [];
     // Optional focus set: if __ACTIVITY_DEFAULTS__ is given, only those levels
     // start ticked (others off) so the view opens focused on e.g. Low + Single.
@@ -1892,6 +1920,7 @@ _INTERFACE_INJECT = '''
     var pinnedCompounds = [];    // compound ids pinned (each pins its target genes)
     var hiddenGenes = [];        // gene names hidden directly (drop from the plot)
     var hiddenCompounds = [];    // compound ids hidden (drop the compound only; its genes stay)
+    var showPins = true;         // master "show pinned genes" toggle (UI below the legend)
     var _hiddenSet = {};         // cache: directly-hidden genes
     var _hiddenCmpSet = {};      // cache: directly-hidden compound ids
     function rebuildHidden() {
@@ -1911,6 +1940,10 @@ _INTERFACE_INJECT = '''
       pinnedGenes.forEach(function(g) { if (!isHiddenGene(g)) s[g] = 1; });
       return s;
     }
+    // Pinned genes actually rendered right now: the full pin set (a pin stays shown
+    // regardless of whether it has a compound on the ticked plates/activities), gated
+    // by the master showPins toggle. Empty when the toggle is off.
+    function shownPinSet() { return showPins ? effectivePinSet() : {}; }
     var clickMode = "";                           // "", "pin", or "hide" (set in the pin/hide block)
     var togglePinGene = function(g) {};           // assigned in the pin/hide block
     var togglePinCompound = function(c) {};
@@ -1945,15 +1978,6 @@ _INTERFACE_INJECT = '''
         }
       }
       return false;
-    }
-
-    // Pinned genes that currently have a compound on the ticked plates/activities.
-    // A pin with nothing visible on the selected plate is suppressed from the view
-    // (dot, label, count) — the chip stays, so re-ticking the plate brings it back.
-    function visiblePinSet() {
-      var out = {}, s = effectivePinSet();
-      Object.keys(s).forEach(function(g) { if (geneHasVisibleCompound(g)) out[g] = 1; });
-      return out;
     }
 
     // Collect this gene's DISTINCT visible compound ids (passing class+plate+activity)
@@ -2351,8 +2375,10 @@ _INTERFACE_INJECT = '''
       if (!items.length) { if (boxesEl.parentNode) boxesEl.parentNode.style.display = "none"; return false; }
       if (!dates || !Object.keys(dates).length)
         return buildGroup(items, tickedMap, boxesEl, allId, noneId);  // flat fallback
+      // Validation plates are pulled out of their date groups into one dedicated block.
+      var valItems = items.filter(isValidationPlate);
       var byDate = {}, order = [];
-      items.forEach(function(p) {
+      items.filter(function(p) { return !isValidationPlate(p); }).forEach(function(p) {
         var d = dates[p] || "(no date)";
         if (!byDate[d]) { byDate[d] = []; order.push(d); }
         byDate[d].push(p);
@@ -2363,18 +2389,54 @@ _INTERFACE_INJECT = '''
         return a < b ? -1 : (a > b ? 1 : 0);
       });
       boxesEl.classList.remove("pf-2col");              // each date sub-block owns its 2-col grid
-      var html = "";
-      order.forEach(function(d) {
-        html += '<div class="pf-date collapsed"><div class="pf-date-head"><span class="fp-caret">&#9662;</span>'
-              + '<input type="checkbox" class="pf-date-all" checked>' + d
-              + ' <span class="pf-date-n">(' + byDate[d].length + ')</span></div>'
+      function dateBlock(label, list, n, cls) {
+        var h = '<div class="pf-date collapsed' + (cls ? ' ' + cls : '') + '"><div class="pf-date-head">'
+              + '<span class="fp-caret">&#9662;</span>'
+              + '<input type="checkbox" class="pf-date-all">' + label
+              + ' <span class="pf-date-n">(' + n + ')</span></div>'
               + '<div class="pf-date-boxes pf-2col">';
-        byDate[d].forEach(function(p) {
-          html += '<label><input type="checkbox" value="' + p + '"'
-                + (tickedMap[p] ? ' checked' : '') + '>' + p + '</label>';
+        list.forEach(function(p) {
+          h += '<label><input type="checkbox" value="' + p + '"'
+             + (tickedMap[p] ? ' checked' : '') + '>' + p + '</label>';
         });
-        html += '</div></div>';
-      });
+        return h + '</div></div>';
+      }
+      // Validation block: plates sharing a stem (name minus the WT/MLN/KO suffix) sit on one row,
+      // side by side, ordered by the suffix order (WT, then MLN, then KO).
+      function validationBlock(list) {
+        var sufOrder = {};
+        _valSuffixes.forEach(function(s, i) { sufOrder[s.toUpperCase()] = i; });
+        var stemOf = function(p) { return p.replace(_valRe, ""); };
+        var sufOf  = function(p) { var m = p.match(_valRe); return m ? m[1].toUpperCase() : ""; };
+        var rank   = function(p) { var r = sufOrder[sufOf(p)]; return r === undefined ? 99 : r; };
+        var groups = {}, gorder = [];
+        list.forEach(function(p) {
+          var st = stemOf(p);
+          if (!groups[st]) { groups[st] = []; gorder.push(st); }
+          groups[st].push(p);
+        });
+        gorder.sort(function(a, b) { return a < b ? -1 : (a > b ? 1 : 0); });
+        var rows = "";
+        gorder.forEach(function(st) {
+          groups[st].sort(function(a, b) { return rank(a) - rank(b); });
+          rows += '<div class="pf-val-row"><span class="pf-val-stem">' + st + '</span>';
+          groups[st].forEach(function(p) {
+            rows += '<label title="' + p + '"><input type="checkbox" value="' + p + '"'
+                  + (tickedMap[p] ? ' checked' : '') + '>' + (sufOf(p) || p) + '</label>';
+          });
+          rows += '</div>';
+        });
+        return '<div class="pf-date pf-validation collapsed"><div class="pf-date-head">'
+             + '<span class="fp-caret">&#9662;</span>'
+             + '<input type="checkbox" class="pf-date-all">validation'
+             + ' <span class="pf-date-n">(' + list.length + ')</span></div>'
+             + '<div class="pf-date-boxes pf-val-boxes">' + rows + '</div></div>';
+      }
+      var html = "";
+      // Dedicated "validation" sub-block at the TOP (WT/MLN/KO plates, unticked by default),
+      // set off from the dated plates by a separator (see .pf-validation CSS).
+      if (valItems.length) html += validationBlock(valItems);
+      order.forEach(function(d) { html += dateBlock(d, byDate[d], byDate[d].length); });
       boxesEl.innerHTML = html;
       function syncParent(dateEl) {
         var cbs = dateEl.querySelectorAll(".pf-date-boxes input"), on = 0;
@@ -2519,7 +2581,7 @@ _INTERFACE_INJECT = '''
             protSet[o.text[k]] = 1; collectVisibleCompounds(o.text[k], cmpSet);
           }
         });
-        Object.keys(visiblePinSet()).forEach(function(g) { protSet[g] = 1; collectVisibleCompounds(g, cmpSet); });
+        Object.keys(shownPinSet()).forEach(function(g) { protSet[g] = 1; collectVisibleCompounds(g, cmpSet); });
         document.getElementById("rp-count").textContent =
           Object.keys(protSet).length + " proteins — " + Object.keys(cmpSet).length + " compounds";
       }
@@ -2552,7 +2614,7 @@ _INTERFACE_INJECT = '''
       // (bug 1); skipping legendonly traces means toggling a disease area hides its
       // labels along with its dots (bug 2).
       function refreshLabels() {
-        var cand = [], pinSet = effectivePinSet();
+        var cand = [], pinSet = shownPinSet();   // exclude shown pins here; they label via the overlay path below
         R.areaTraces.forEach(function(ti) {
           var o = orig[ti], m = lastMasks[ti]; if (!o || !m) return;
           if (gd.data[ti] && gd.data[ti].visible === "legendonly") return;
@@ -2571,7 +2633,7 @@ _INTERFACE_INJECT = '''
           cand = picked;
         }
         var _gx = window.__GENE_XYZ__ || {};   // pinned genes: always labelled (exempt from cap), same 11px font
-        Object.keys(visiblePinSet()).forEach(function(g) {
+        Object.keys(shownPinSet()).forEach(function(g) {
           var c = _gx[g]; if (c) cand.push({x: c[0], y: c[1], z: c[2], text: g});
         });
         Plotly.relayout(gd, {"scene.annotations": cand.map(function(c) {
@@ -2714,27 +2776,33 @@ _INTERFACE_INJECT = '''
       var acEl     = document.getElementById("gene-ac");
       var selBtn   = document.getElementById("select-btn");
       var boxEl    = document.getElementById("pinned-box");
+      var toggleEl = document.getElementById("pin-toggle");
+      var toggleCb = document.getElementById("pin-toggle-cb");
+      var toggleN  = document.getElementById("pin-toggle-n");
       var hideEl    = document.getElementById("hide-search");
       var hideAcEl  = document.getElementById("hide-ac");
       var hideBtn   = document.getElementById("hide-btn");
       var hideBoxEl = document.getElementById("hidden-box");
       if (!searchEl || !boxEl || PIN_TRACE == null) return;
 
-      // Mutate the pin overlay trace from the currently-VISIBLE pin set (pins with no
-      // compound on the ticked plates/activities are dropped). No redraw — the caller
-      // repaints, so applyRanges can fold this into its single Plotly.redraw.
+      // Mutate the pin overlay trace from the shown pin set. A pin stays visible even
+      // with no compound on the ticked plates/activities; its shape reflects selection
+      // state — CIRCLE when it has a visible compound (looks like a normal in-selection
+      // dot), DIAMOND (losange) when it doesn't. No redraw — the caller repaints, so
+      // applyRanges can fold this into its single Plotly.redraw.
       function buildPinTrace() {
-        var genes = Object.keys(visiblePinSet());
-        var xs = [], ys = [], zs = [], ts = [], cds = [], hov = [], cols = [];
+        var genes = Object.keys(shownPinSet());
+        var xs = [], ys = [], zs = [], ts = [], cds = [], hov = [], cols = [], syms = [];
         genes.forEach(function(g) {
           var c = GENE_XYZ[g]; if (!c) return;
           xs.push(c[0]); ys.push(c[1]); zs.push(c[2]); ts.push(g); cds.push(g); hov.push(g);
           cols.push(GENE_COLOR[g] || "#1D3557");   // colour by disease/pharma category
+          syms.push(geneHasVisibleCompound(g) ? "circle" : "diamond");
         });
         if (gd.data && gd.data[PIN_TRACE]) {
           var tr = gd.data[PIN_TRACE];
           tr.x = xs; tr.y = ys; tr.z = zs; tr.text = ts; tr.customdata = cds; tr.hovertext = hov;
-          tr.marker.color = cols;
+          tr.marker.color = cols; tr.marker.symbol = syms;
           return true;
         }
         return false;
@@ -2744,7 +2812,38 @@ _INTERFACE_INJECT = '''
         if (typeof Plotly !== "undefined" && buildPinTrace()) Plotly.redraw(gd);
         refreshLabelsHook();   // pinned genes label via scene.annotations (dedup with range labels)
         updateCountHook();     // pinned proteins + their compounds enter the tally
+        refreshToggle();       // show/position the master toggle and update its count
       }
+      // Master "show pinned genes" toggle, docked just under the Plotly legend.
+      function placePinToggle() {
+        if (!toggleEl || toggleEl.style.display === "none") return;
+        var lg = gd.querySelector(".legend");   // Plotly's SVG legend group
+        if (lg) {
+          var r = lg.getBoundingClientRect();
+          toggleEl.style.top  = (r.bottom + 6) + "px";
+          toggleEl.style.left = r.left + "px";
+          toggleEl.style.right = "auto";
+        } else {                                 // legend not drawn yet — fall back to top-right
+          toggleEl.style.top = "64px"; toggleEl.style.right = "18px"; toggleEl.style.left = "auto";
+        }
+      }
+      function refreshToggle() {
+        if (!toggleEl) return;
+        var n = Object.keys(effectivePinSet()).length;   // pins exist regardless of the view toggle
+        if (n > 0) {
+          toggleN.textContent = "(" + n + ")";
+          toggleCb.checked = showPins;
+          toggleEl.style.display = "block";
+          placePinToggle();
+        } else {
+          toggleEl.style.display = "none";
+        }
+      }
+      if (toggleCb) toggleCb.addEventListener("change", function() {
+        showPins = toggleCb.checked; redrawPins();
+      });
+      window.addEventListener("resize", placePinToggle);
+      if (gd && gd.on) gd.on("plotly_afterplot", placePinToggle);   // legend moves on 2D/3D + relayout
       function nTargets(c) {
         return (COMPOUND_GENES[c] || []).filter(function(g) { return GENE_XYZ[g]; }).length;
       }
@@ -2963,7 +3062,7 @@ _INTERFACE_INJECT = '''
       var AXS = ["x", "y", "z"];
 
       function gather() {
-        var s = {version: 1,
+        var s = {version: 1, showPins: showPins,
                  pinnedGenes: pinnedGenes.slice(), pinnedCompounds: pinnedCompounds.slice(),
                  hiddenGenes: hiddenGenes.slice(), hiddenCompounds: hiddenCompounds.slice(),
                  filters: {plates: Object.assign({}, ticked), activity: Object.assign({}, tickedAct),
@@ -3004,9 +3103,10 @@ _INTERFACE_INJECT = '''
 
       function apply(s) {
         if (!s || typeof s !== "object") throw new Error("not a session object");
+        if (typeof s.showPins === "boolean") showPins = s.showPins;   // before the re-render below
         setArr(pinnedGenes, s.pinnedGenes); setArr(pinnedCompounds, s.pinnedCompounds);
         setArr(hiddenGenes, s.hiddenGenes); setArr(hiddenCompounds, s.hiddenCompounds);
-        applyPinHideHook();                       // rebuild hidden cache + re-render pins/hides
+        applyPinHideHook();                       // rebuild hidden cache + re-render pins/hides (syncs the toggle)
         if (s.ranges && els && els.x) AXS.forEach(function(a) {
           if (s.ranges[a] && els[a]) { els[a].lo.value = s.ranges[a][0]; els[a].hi.value = s.ranges[a][1]; }
         });
@@ -3087,6 +3187,7 @@ _INTERFACE_INJECT = '''
         if (pinnedCompounds.length) parts.push('pc=' + enc(pinnedCompounds));
         if (hiddenGenes.length)     parts.push('hg=' + enc(hiddenGenes));
         if (hiddenCompounds.length) parts.push('hc=' + enc(hiddenCompounds));
+        if (!showPins)              parts.push('sp=0');   // pins-hidden state (default is shown)
         return parts.join('&');
       }
 
@@ -3097,9 +3198,10 @@ _INTERFACE_INJECT = '''
         h.split('&').forEach(function(kv) {
           var i = kv.indexOf('='); if (i > 0) q[kv.slice(0, i)] = kv.slice(i + 1);
         });
-        if (!('p' in q || 'pg' in q || 'pc' in q || 'hg' in q || 'hc' in q)) return null;  // unrecognised -> keep default view
+        if (!('p' in q || 'pg' in q || 'pc' in q || 'hg' in q || 'hc' in q || 'sp' in q)) return null;  // unrecognised -> keep default view
         var sess = {pinnedGenes: dec(q.pg), pinnedCompounds: dec(q.pc),
                     hiddenGenes: dec(q.hg), hiddenCompounds: dec(q.hc)};
+        if ('sp' in q) sess.showPins = q.sp !== '0';
         if ('p' in q) {   // exact plate view: only the listed plates ticked on
           var want = {}; dec(q.p).forEach(function(p) { want[p] = 1; });
           var plates = {}; Object.keys(ticked).forEach(function(p) { plates[p] = !!want[p]; });
@@ -3583,6 +3685,7 @@ def plot_3d_interface(
     compounds_df=None,
     plate_dates=None,
     plate_defaults=None,
+    plate_validation_suffixes=('WT', 'MLN', 'KO'),  # plates ending in these go to a "validation" sub-block, unticked by default
     panels=None,
     return_panels=False,
     volcano_source=None,
@@ -4308,16 +4411,21 @@ def plot_3d_interface(
                           '#9e9e9e', symbol='diamond', size=7)
 
     # Pinned-genes overlay — initially empty; the search box drives it (JS sets
-    # x/y/z/text/customdata on pin). Gold diamond + always-on label; deliberately NOT
-    # added to area_trace_indices, so the range sliders / filters never touch it —
-    # a pinned gene stays visible regardless of every filter.
-    # markers-only: the gene-name labels are drawn via scene.annotations (refreshLabels),
-    # the SAME 11px SVG path as every other gene — gl3d trace-text renders oversized.
+    # x/y/z/text/customdata/symbol on pin). Per-point shape: circle when the pin has a
+    # visible compound (looks like a normal in-selection dot), diamond when it doesn't.
+    # Deliberately NOT added to area_trace_indices, so the range sliders / filters never
+    # touch it — a pinned gene stays visible regardless of every filter.
+    # markers-only: labels are drawn via scene.annotations (refreshLabels), the SAME 11px
+    # SVG path as every other gene — gl3d trace-text renders oversized.
+    # showlegend=False: the master "★ pinned" toggle (HTML, below the legend) is the single
+    # control for the overlay; a native legend key would be redundant and, since pins can be
+    # circles or diamonds, its single glyph would misrepresent the shapes.
     fig.add_trace(go.Scatter3d(
         x=[], y=[], z=[], mode='markers',
         marker=dict(size=6, color='#1D3557', symbol='diamond',
-                    opacity=1.0, line=dict(color='#1D3557', width=1.5)),
+                    opacity=1.0, line=dict(color='#333', width=1)),
         text=[], customdata=[], hovertext=[], hoverinfo='text', name='★ pinned',
+        showlegend=False,
     ))
     pin_trace_index = len(fig.data) - 1
 
@@ -4587,6 +4695,7 @@ def plot_3d_interface(
             'window.__PLATES__ = ' + _jsp(list(all_plates)) + ';\n'
             'window.__PLATE_DATES__ = ' + _jsp(_plate_dates_map) + ';\n'
             'window.__PLATE_DEFAULTS__ = ' + (_jsp(_plate_def) if _plate_def is not None else 'null') + ';\n'
+            'window.__VALIDATION_SUFFIXES__ = ' + _jsp([str(s) for s in (plate_validation_suffixes or [])]) + ';\n'
             'window.__ACTIVITIES__ = ' + _jsp(list(all_activities)) + ';\n'
             'window.__ACTIVITY_DEFAULTS__ = ' + (_jsp(_act_def) if _act_def else 'null') + ';\n'
             'window.__CONTROL_COMPOUNDS__ = ' + _jsp([str(c) for c in (control_compounds or [])]) + ';\n'

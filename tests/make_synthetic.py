@@ -23,6 +23,10 @@ GENES        = [f'G_{i:05d}' for i in range(N_GENE)]
 PG_OF        = {g: f'PG_{i:05d}' for i, g in enumerate(GENES)}
 COMPOUNDS    = [f'SRB-{i:07d}' for i in range(40)]   # real 'SRB-' format so the get_iface filter passes
 PLATES       = [f'Pw{i:02d}' for i in range(4)]
+# validation plates (suffix WT/MLN/KO) -> "validation" sub-block, unticked; shared stems (Pw10*, Pw11*)
+# render side by side per stem in WT/MLN/KO order. MLN listed first below to prove the JS re-orders it.
+VAL_PLATES   = ['Pw10MLN', 'Pw10WT', 'Pw10KO', 'Pw11KO', 'Pw11WT']
+PLATES      += VAL_PLATES
 ACTS         = ['High (>25)', 'Medium (11-25)', 'Low (2-10)', 'Single (1)', 'Silent']
 FBX_TRANCHES = ['20260601', '20260616']
 P            = 'MSData - Proteomics activities: '   # prefixed-export column prefix
@@ -33,7 +37,10 @@ def make_df_raw_ms(out, rng):
                       columns=['compound', 'MSPlate', 'genes'])
     df['batch'] = '001'
     df['MoleculeBatchID'] = df['compound'] + '-' + df['batch']
-    df['uniquecontrast'] = df['MoleculeBatchID'].str.replace('-', '.', regex=False) + '_vs_DMSO'
+    # plate-specific uniquecontrast (matches the FBX convention '{c}.{batch}.{plate}_vs_DMSO') so a
+    # compound tested on several plates keeps one row per plate — needed for same-stem validation plates.
+    df['uniquecontrast'] = (df['MoleculeBatchID'].str.replace('-', '.', regex=False)
+                            + '.' + df['MSPlate'] + '_vs_DMSO')
     df['pg'] = df['genes'].map(PG_OF)
     df['logfc'] = rng.normal(0, 1.5, len(df))
     df['pvalue'] = rng.uniform(1e-6, 1.0, len(df))
@@ -116,7 +123,7 @@ def make_sources_config(out, out_rel, rng):
     src(COMPOUNDS,      True ).to_csv(os.path.join(out, 'clean_proteomics.csv'), index=False)
     src(COMPOUNDS[:20], True ).to_csv(os.path.join(out, 'px_20260520_cddvault.csv'), index=False)
     src(COMPOUNDS[20:], False).to_csv(os.path.join(out, 'px_20260529_cddvault.csv'), index=False)
-    pd.DataFrame({'MSPlate': ['Pw02']}).to_csv(os.path.join(out, 'px_20260520_db.csv'), index=False)
+    pd.DataFrame({'MSPlate': ['Pw02'] + VAL_PLATES}).to_csv(os.path.join(out, 'px_20260520_db.csv'), index=False)
     pd.DataFrame({'MSPlate': ['Pw03']}).to_csv(os.path.join(out, 'px_20260529_db.csv'), index=False)
     # contaminants list (only 'Molecule Name' is read); fake compounds from the synthetic set
     pd.DataFrame({'Molecule Name': COMPOUNDS[2:5]}).to_csv(os.path.join(out, 'contaminants.csv'), index=False)

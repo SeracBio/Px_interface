@@ -49,13 +49,14 @@ MCS_CSV: output/MS/20260505_target_final_mcs.csv
 ML_MODEL_OUTPUT: output/ML/trained_models/20260617_select_genes # date should match that of last MS tranche
 
 PHARMA_R2_CUTOFF: 0.08
-CHEMLIB_OVERWRITE: false
-DFRAW_OVERWRITE: false
+
 CHEMLIB_PATH: /home/gtamo/MS_ML/data/chemical_libs/SERAC_lib.csv
 DFRAW_PATH: /home/gtamo/Px_interface/output/MS/df_raw.parquet
 MS_PATH: /home/gtamo/Px_interface/output/MS/MS.parquet
 
-IFACE_OVERWRITE: true              # true -> rebuild + save the interface inputs; false -> load them from IFACE_DIR + free RAM
+CHEMLIB_OVERWRITE: false
+DFRAW_OVERWRITE: false
+IFACE_OVERWRITE: false             # true -> rebuild + save the interface inputs; false -> load them from IFACE_DIR + free RAM
 IFACE_DIR: output/interface            # iface_df / compounds_df / meas / plate2date checkpoint for the 3D interface
 
 CONTAMINANTS: /home/gtamo/MS_ML/data/MS/20260611_contaminants.csv

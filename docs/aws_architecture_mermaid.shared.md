@@ -31,11 +31,12 @@ flowchart TB
             subgraph PUBSN["Public subnet"]
                 PUBNOTE["reserved - EC2 is NOT here"]
             end
-            subgraph PRIVSN["Private subnet"]
-                EC2["EC2 t3.micro - Amazon Linux 2023<br/>NO public IP<br/>nginx: HTTPS + Basic Auth<br/>IMDSv2, encrypted gp3 root"]
+            subgraph PRIVSN["Private subnets (2 AZs)"]
+                EC2["EC2 t3.micro (fixed private IP) - Amazon Linux 2023<br/>NO public IP<br/>nginx: HTTPS + Basic Auth, serves /Px_interface/<br/>IMDSv2, encrypted gp3 root"]
                 E1["VPC endpoint: ssm"]
                 E2["VPC endpoint: ssmmessages"]
                 E3["VPC endpoint: ec2messages"]
+                RESOLVER["Route 53 inbound resolver<br/>ENIs in 2 AZs"]
             end
             S3GW["S3 gateway endpoint<br/>(dnf package installs)"]
             RT["Private route table<br/>VPN-propagated routes + S3 endpoint"]
@@ -44,7 +45,9 @@ flowchart TB
         end
 
         SSM["SSM Parameter Store - SecureString<br/>TLS cert + private key (KMS-encrypted)"]
-        IAM["IAM role + instance profile<br/>SSM core, read TLS params, KMS decrypt"]
+        IAM["IAM role + instance profile<br/>SSM core, read TLS params, KMS decrypt, read interface bucket"]
+        R53Z["Route 53 private zone<br/>internal hostname -> EC2 fixed IP"]
+        S3IF["S3 bucket - interface artifacts<br/>(EC2 pulls to /var/www/webapp/Px_interface at boot)"]
 
         subgraph MON["Monitoring"]
             CW["CloudWatch alarms<br/>VPN TunnelState (both / one down)"]
@@ -79,6 +82,11 @@ flowchart TB
     IAM -. attached .-> EC2
     EC2 -. reads at boot .-> SSM
 
+    FG -. forwards internal hostname .-> RESOLVER
+    RESOLVER -. answers from .-> R53Z
+    R53Z -. resolves to .-> EC2
+    EC2 -. pulls interface at boot .-> S3IF
+
     VPN -. tunnel telemetry .-> CW
     CW --> SNS
 
@@ -97,11 +105,14 @@ exchange rides inside the encrypted VPN tunnel.
 ```mermaid
 sequenceDiagram
     participant U as Remote user (FortiClient)
-    participant FG as FortiGate
+    participant FG as FortiGate (+ on-prem DNS)
+    participant RES as Route 53 inbound resolver
     participant VPN as S2S VPN / VGW
     participant EC2 as EC2 nginx
 
-    U->>FG: HTTPS request to EC2 private IP
+    U->>FG: resolve internal hostname
+    FG->>RES: forward query (over tunnel) -> EC2 fixed IP
+    U->>FG: GET https://<internal-hostname>/Px_interface/
     FG->>VPN: encrypt + send through IPsec tunnel
     VPN->>EC2: deliver inside the VPC private subnet
     EC2-->>U: 401 - Basic Auth challenge
@@ -124,10 +135,13 @@ sequenceDiagram
     participant SSMEP as ssm endpoint
     participant PS as SSM Parameter Store
 
-    TF->>EC2: launch (user_data script + IAM role)
+    TF->>EC2: launch (user_data + IAM role)
+    EC2->>EC2: user_data drops systemd oneshot (provision-webapp), waits for network-online
+    Note over EC2: retries the whole pass until endpoints answer (no cloud-init boot race)
     EC2->>S3EP: dnf install nginx (AL2023 repos in S3)
-    EC2->>SSMEP: get TLS cert + key
+    EC2->>SSMEP: get TLS cert + key + basic-auth hash
     SSMEP->>PS: fetch SecureString (KMS decrypt)
-    PS-->>EC2: cert + key
+    PS-->>EC2: cert + key + htpasswd
+    EC2->>S3EP: pull rendered interface from S3 bucket
     EC2->>EC2: write nginx.conf + .htpasswd, nginx -t, start nginx
 ```

@@ -1,0 +1,135 @@
+#!/bin/bash
+# Rendered by Terraform (templatefile in ec2.tf). Do not edit on the instance.
+#
+# cloud-init runs this at ~8s uptime, BEFORE the VPC endpoints / VPN-propagated routes are
+# reachable. So we do NO network work here — we only drop an idempotent provisioning script
+# and a systemd unit, then hand off. The unit runs AFTER network-online.target and retries
+# until the endpoints answer, so a fresh/replaced box self-provisions with no manual re-run.
+set -euo pipefail
+
+cat > /opt/provision-webapp.sh <<'PROV'
+#!/bin/bash
+REGION="${region}"
+PROJECT="${project}"
+BUCKET="${bucket}"
+
+log() { echo "[provision-webapp] $*"; }
+
+fetch_param() { # $1 = SSM param name, $2 = destination file
+  aws ssm get-parameter --region "$REGION" --name "$1" \
+    --with-decryption --query Parameter.Value --output text > "$2"
+}
+
+# One full provisioning pass. Every network-dependent step short-circuits to `return 1`
+# so the retry loop below tries the whole pass again; all steps are idempotent.
+attempt() {
+  command -v nginx >/dev/null 2>&1 || dnf install -y nginx || return 1
+  command -v aws   >/dev/null 2>&1 || dnf install -y awscli || return 1
+
+  mkdir -p /etc/nginx/ssl /var/www/webapp/Px_interface || return 1
+
+  fetch_param "/$PROJECT/tls/cert"      /etc/nginx/ssl/webapp.crt || return 1
+  fetch_param "/$PROJECT/tls/key"       /etc/nginx/ssl/webapp.key || return 1
+  fetch_param "/$PROJECT/webapp/htpasswd" /etc/nginx/.htpasswd    || return 1
+  chmod 600 /etc/nginx/ssl/webapp.key
+  chmod 644 /etc/nginx/ssl/webapp.crt
+  chmod 640 /etc/nginx/.htpasswd
+  chown root:nginx /etc/nginx/.htpasswd
+
+  cat > /etc/nginx/conf.d/webapp.conf <<'NGINX'
+server {
+    listen 80 default_server;
+    return 301 https://$host$request_uri;
+}
+
+server {
+    listen 443 ssl default_server;
+
+    ssl_certificate     /etc/nginx/ssl/webapp.crt;
+    ssl_certificate_key /etc/nginx/ssl/webapp.key;
+
+    # Modern TLS only
+    ssl_protocols       TLSv1.2 TLSv1.3;
+    ssl_ciphers         HIGH:!aNULL:!MD5;
+    ssl_prefer_server_ciphers on;
+
+    # Security headers.
+    # NOTE: HSTS is intentionally omitted while using a self-signed cert — once a
+    # browser records HSTS it removes the "proceed anyway" bypass on cert warnings,
+    # which would hard-lock users. Re-enable it only after distributing a trusted
+    # cert to employee trust stores:
+    #   add_header Strict-Transport-Security "max-age=63072000" always;
+    add_header X-Frame-Options DENY always;
+    add_header X-Content-Type-Options nosniff always;
+
+    root /var/www/webapp;
+
+    # Interface served under /Px_interface/ ; bare / redirects there.
+    location = / {
+        return 301 /Px_interface/;
+    }
+
+    location /Px_interface/ {
+        index Serac_Px_interface.html;
+        auth_basic           "Serac Px Interface";
+        auth_basic_user_file /etc/nginx/.htpasswd;
+        try_files $uri $uri/ =404;
+    }
+}
+NGINX
+
+  # Pull the rendered interface from S3. A reachable-but-empty bucket returns 0 (falls through
+  # to the placeholder); a network error returns non-zero so the whole pass retries.
+  aws s3 sync "s3://$BUCKET/interfaces/" /var/www/webapp/Px_interface/ --region "$REGION" || return 1
+  if [ ! -s /var/www/webapp/Px_interface/Serac_Px_interface.html ]; then
+    cat > /var/www/webapp/Px_interface/Serac_Px_interface.html <<'HTML'
+<!DOCTYPE html>
+<html>
+  <head><meta charset="utf-8"><title>Serac Px Interface</title></head>
+  <body><h1>Serac Px Interface - VPN Access Only</h1></body>
+</html>
+HTML
+  fi
+  chown -R root:nginx /var/www/webapp
+  find /var/www/webapp -type f -exec chmod 644 {} +
+  find /var/www/webapp -type d -exec chmod 755 {} +
+
+  nginx -t || return 1
+  systemctl enable nginx || return 1
+  systemctl restart nginx || return 1
+  return 0
+}
+
+# Retry the whole pass until endpoints are reachable (~15 min budget). systemd Restart=
+# below gives further passes if this ever exhausts.
+n=1; max=60
+until attempt; do
+  if [ "$n" -ge "$max" ]; then log "giving up after $n attempts"; exit 1; fi
+  log "attempt $n failed (endpoints not ready yet?); retry in 15s"
+  n=$((n + 1)); sleep 15
+done
+log "provisioned successfully on attempt $n"
+PROV
+chmod 700 /opt/provision-webapp.sh
+
+cat > /etc/systemd/system/provision-webapp.service <<'UNIT'
+[Unit]
+Description=Provision nginx + Serac Px interface (waits for network, retries until endpoints ready)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/opt/provision-webapp.sh
+RemainAfterExit=yes
+Restart=on-failure
+RestartSec=30
+
+[Install]
+WantedBy=multi-user.target
+UNIT
+
+systemctl daemon-reload
+systemctl enable provision-webapp.service
+# --no-block so cloud-init doesn't wait on the (network-gated) provisioning pass.
+systemctl start --no-block provision-webapp.service

@@ -39,7 +39,7 @@ variable "customer_gateway_ip" {
   description = "Public IP address of your on-premises VPN device"
   type        = string
   # Replace with your actual public IP
-  default     = "203.0.113.1"
+  default = "203.0.113.1"
 }
 
 variable "customer_gateway_bgp_asn" {
@@ -102,6 +102,31 @@ variable "webapp_htpasswd_hash" {
   type        = string
   sensitive   = true
   default     = "serac_user:$2y$10$REPLACEME_RUN_htpasswd_nbB_serac_user_yourpassword"
+}
+
+# Friendly internal hostname (VPN-only) served via a Route 53 private zone + inbound resolver
+variable "webapp_hostname" {
+  description = "Internal DNS name for the interface (private zone; resolves only over the VPN)"
+  type        = string
+  default     = "advantedge.seracbio.com"
+}
+
+variable "ec2_private_ip" {
+  description = "Fixed private IP for the EC2 (stable across replacements; must be in private_subnet_cidr)"
+  type        = string
+  default     = "172.20.2.10"
+}
+
+variable "availability_zone_b" {
+  description = "Second AZ for the resolver-endpoint subnet (inbound endpoint needs 2 AZs for HA)"
+  type        = string
+  default     = "eu-north-1b"
+}
+
+variable "private_subnet_b_cidr" {
+  description = "CIDR for the second private subnet (resolver endpoint HA)"
+  type        = string
+  default     = "172.20.3.0/24"
 }
 
 # TLS certificate
