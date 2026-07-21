@@ -193,6 +193,7 @@ def make_sources_config(out, out_rel, rng):
         'IFACE_DIR': rel('interface'),
         'IFACE_OVERWRITE': True,
         'ACTIVE_C': '#008bfb',                         # 'pharma' dot colour
+        'BMS_C': '#BA09D9',                            # 'BMS' dot colour
         'SRB_PNG_DIR': rel('srb_png'),                 # no real PNGs -> RDKit-render from CCO smiles
     }
     yaml.safe_dump(cfg, open(os.path.join(out, 'config.yaml'), 'w'), sort_keys=False)

@@ -3,6 +3,25 @@ _Durable, aggregate memory of this repo — read at session start. Aggregate onl
 
 ## Where we are now
 - **Focus:** building the per-gene 3D Px interface (`Serac_Px_interface.html`) via `fn.plot_3d_interface`.
+- **Architecture doc:** [`docs/INTERFACE.md`](../docs/INTERFACE.md) — full map of how the build fits together
+  (pipeline → `plot_3d_interface` → volcano cache → `_INTERFACE_INJECT` JS → the JS↔Python `__X__` contract +
+  invariants). Created 2026-07-21 from a multi-agent audit; read it before non-trivial interface edits.
+- **Audit + simplification pass (2026-07-21, multi-agent):** `functions.py` **7023→6048 lines (−14%)**.
+  - **Dead code deleted** (verified zero callers): `plot_target_3d`, `_HOVER_INJECT`, `_build_gene_patents_html_map`,
+    `plot_volcano_significant`, `load_fbx_tranche` (+ its `FBX_DFRAW_COLS`/`FBX_MS_COLS`). The legacy patents panel
+    is gone for good — live target links come via `__GENE_RESEARCH__` (`renderResearch`).
+  - **Simplifications** (~16, behaviour-preserving): dedup'd heavy computes in `combine_datasets`/`get_iface`,
+    `_dep0/_dep1` in `get_de_validated`, module-level `_fbx_csv`, `PRIORITY_DISEASE_AREAS` constant + assert,
+    `BMS_C`→config, `_uc2mbid` hoist, area_order set membership, single `_hover_text`, removed unused `import hashlib`.
+  - **Correctness fixes:** stem-trace `_ext` now matches the render/`ring_pos` extension; `recompute_volcanoes` /
+    `floor_zero_pvalues_and_refresh_volcanoes` gained `plate_validation_suffixes` so they salt validation volcanoes
+    `v2` (previously refreshing a WT/MLN/KO volcano was a silent no-op); JS activity filter uses `!pl[3]` (Python
+    injects `''`, not `undefined`, for missing activity).
+  - **Perf/size:** injected coords rounded to 4dp (smaller `_data.js`); slider drags coalesced to one `applyRanges`
+    per animation frame (`scheduleApply`); shared `saveBlob` helper for CSV/session export.
+  - **Not done (opt-in, need browser QA):** `renderChipBox`/stem-grouping dedup + single-pass `applyRanges`.
+  - All 18 tests green throughout. NOTE: JS changes are static-checked only (no headless browser in this env) —
+    hard-refresh + eyeball after rebuild.
 - Extracted from `MS_ML` (2026-06-23) so the interface lives on its own. The engine
   `python/functions.py` is the **whole** MS_ML module (carries some unused ML/signature/cytotox
   helpers); the driver is `vignettes/MS_Interface.ipynb`. `Rdkit_tools`/`Statistics_tools` imports

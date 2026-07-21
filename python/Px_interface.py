@@ -24,6 +24,22 @@ tqdm.pandas()
 import python.functions as fn
 from get_library import get_df   # CDD Vault collection export
 
+
+def _fbx_csv(tranche, kind):
+    """Path to the one *FBX_<kind>*.csv in a tranche folder (tolerates a _02 re-export suffix)."""
+    return os.path.join(tranche, next(f for f in os.listdir(tranche)
+                                      if f'FBX_{kind}' in f and f.endswith('.csv')))
+
+# OpenTargets therapeutic areas in display/priority order; a gene's disease_area is its
+# highest-ranked area here. Single source of truth: get_iface ranks by it, build_interface's
+# DISEASE_AREA_COLORS must cover it (asserted there).
+PRIORITY_DISEASE_AREAS = [
+    'cancer or benign tumor', 'hematologic disease', 'cardiovascular disease',
+    'immune system disease', 'musculoskeletal or connective tissue disease',
+    'nervous system disease', 'psychiatric disorder',
+    'nutritional or metabolic disease', 'endocrine system disease',
+]
+
 # ~~~~~~~~~~~~~~~~~~~~~~
 # CLASSES
 # ~~~~~~~~~~~~~~~~~~~~~~
@@ -104,9 +120,6 @@ class DATA():
             if os.path.isdir(t) and os.path.basename(t)[:8].isdigit()
             and any('FBX_REPORT' in f for f in os.listdir(t)))
 
-        def _fbx_csv(tranche, kind):   # the one *FBX_<kind>*.csv in a tranche (tolerates a _02 re-export suffix)
-            return os.path.join(tranche, next(f for f in os.listdir(tranche)
-                                              if f'FBX_{kind}' in f and f.endswith('.csv')))
         def _load_fbx(kind):
             return pd.concat([pd.read_csv(_fbx_csv(t, kind)) for t in self.FBX_TRANCHES],
                              ignore_index=True)
@@ -164,12 +177,13 @@ class OUTPUT():
         return None:
         """
         ## 1. MEASURE = df_raw UNION FBX_MEASURE (FBX wins on shared uniquecontrasts)
+        _dr_uc_set = set(data.df_raw['uniquecontrast'].astype(str))   # reused by the MEASURE + REPORT unions
         _cols = ['compound', 'genes', 'pg', 'plate', 'uniquecontrast',
                  'logfc', 'pvalue', 'adjpval', 'significant']
         fbx_std = (data.FBX_MEASURE.assign(compound=data.FBX_MEASURE['uniquecontrast'].map(data.uc2compound))
                    .reindex(columns=_cols).assign(source='FBX'))
         dr_std = data.df_raw.rename(columns={'MSPlate': 'plate'}).reindex(columns=_cols).assign(source='df_raw')
-        _shared_uc = set(data.FBX_MEASURE['uniquecontrast']) & set(data.df_raw['uniquecontrast'].astype(str))
+        _shared_uc = set(data.FBX_MEASURE['uniquecontrast']) & _dr_uc_set
         self.measure = pd.concat([fbx_std, dr_std[~dr_std['uniquecontrast'].astype(str).isin(_shared_uc)]],
                                  ignore_index=True)
         print(f'> combined MEASURE: {len(self.measure):,} rows | '
@@ -187,7 +201,7 @@ class OUTPUT():
                   .assign(compound=lambda d: d['uniquecontrast'].map(data.uc2compound))
                   .reindex(columns=_cols).assign(source='FBX'))
         df_ms_std = data.df_ms.rename(columns={'MSPlate': 'plate'}).reindex(columns=_cols).assign(source='df_raw')
-        _fbx_keys = set(map(tuple, fbx_gp[['genes', 'plate']].itertuples(index=False)))
+        _fbx_keys = set(fbx_gp[['genes', 'plate']].itertuples(index=False, name=None))
         _keep = ~df_ms_std.set_index(['genes', 'plate']).index.isin(_fbx_keys)
         self.mscore = pd.concat([fbx_gp, df_ms_std[_keep]], ignore_index=True)
         print(f'> combined MS-SCORE: {len(self.mscore):,} (gene,plate) rows '
@@ -221,16 +235,13 @@ class OUTPUT():
         rep_dr = rep_dr.reindex(columns=_cols).assign(source='df_raw')
         rep_fbx = (data.FBX_REPORT.assign(compound=data.FBX_REPORT['uniquecontrast'].map(data.uc2compound))
                    .reindex(columns=_cols).drop_duplicates('uniquecontrast').assign(source='FBX'))
-        _shared_uc = set(data.FBX_REPORT['uniquecontrast']) & set(data.df_raw['uniquecontrast'].astype(str))
+        _shared_uc = set(data.FBX_REPORT['uniquecontrast']) & _dr_uc_set
         self.report = pd.concat([rep_fbx, rep_dr[~rep_dr['uniquecontrast'].astype(str).isin(_shared_uc)]],
                                 ignore_index=True)
         print(f'> combined REPORT: {len(self.report):,} uniquecontrasts | '
               f'compounds {self.report["compound"].nunique():,} | plates {self.report["plate"].nunique():,}')
 
         ## 4. per-plate experiment DATE (tranche-derived) -> date-based plate filtering.
-        def _fbx_csv(tranche, kind):   # the one *FBX_<kind>*.csv in a tranche
-            return os.path.join(tranche, next(f for f in os.listdir(tranche)
-                                              if f'FBX_{kind}' in f and f.endswith('.csv')))
         _DFRAW_DATE_SRC = [
             ('2026-04-29', params.CLEAN_PROTEOMICS_PATH, 'MSData - Proteomics activities: MSPlate'),
             ('2026-05-20', params.PX_20260520_DB, 'MSPlate'),
@@ -256,14 +267,14 @@ class OUTPUT():
         """
         sdf = data.serac_df
         _has_tgt = sdf['Px_Target_interest'].notnull()
+        _dep0 = sdf[(sdf['Px_Ligase_dependent(yes/no)'] == 0) & _has_tgt]   # devalidated (ligase-independent)
+        _dep1 = sdf[(sdf['Px_Ligase_dependent(yes/no)'] == 1) & _has_tgt]   # validated (ligase-dependent)
         ## targets: first token of Px_Target_interest (';'-split), upper-cased
-        _l0 = sdf[(sdf['Px_Ligase_dependent(yes/no)'] == 0) & _has_tgt]['Px_Target_interest']
-        _l1 = sdf[(sdf['Px_Ligase_dependent(yes/no)'] == 1) & _has_tgt]['Px_Target_interest']
-        self.devalidated_targets = list({s.split(' ')[0].upper() for x in _l0 for s in x.split(';')})
-        self.validated_targets   = list({s.split(' ')[0].upper() for x in _l1 for s in x.split(';')})
+        self.devalidated_targets = list({s.split(' ')[0].upper() for x in _dep0['Px_Target_interest'] for s in x.split(';')})
+        self.validated_targets   = list({s.split(' ')[0].upper() for x in _dep1['Px_Target_interest'] for s in x.split(';')})
         ## compounds
-        self.devalidated_compounds = list(set(sdf[(sdf['Px_Ligase_dependent(yes/no)'] == 0) & _has_tgt]['compound']))
-        self.validated_compounds   = list(set(sdf[(sdf['Px_Ligase_dependent(yes/no)'] == 1) & _has_tgt]['compound']))
+        self.devalidated_compounds = list(set(_dep0['compound']))
+        self.validated_compounds   = list(set(_dep1['compound']))
 
         print(f'> target: {len(self.validated_targets)} validated - {len(self.devalidated_targets)} devalidated targets')
         print(f'> compound: {len(self.validated_compounds)} validated - {len(self.devalidated_compounds)} devalidated compounds')
@@ -297,11 +308,7 @@ class OUTPUT():
             R2_df = data.target2R2_df[['genes', 'R2']]
             ot_df = pd.read_parquet(params.OT_CACHE)
             assoc = ot_df.groupby('target_symbol')['overall_score'].max().rename('association_score')
-            PRIORITY = ['cancer or benign tumor', 'hematologic disease', 'cardiovascular disease',
-                        'immune system disease', 'musculoskeletal or connective tissue disease',
-                        'nervous system disease', 'psychiatric disorder',
-                        'nutritional or metabolic disease', 'endocrine system disease']
-            _rank = {a: i for i, a in enumerate(PRIORITY)}
+            _rank = {a: i for i, a in enumerate(PRIORITY_DISEASE_AREAS)}
             _areas = (ot_df[['target_symbol', 'overall_score', 'therapeutic_areas']]
                     .assign(area=lambda d: d['therapeutic_areas'].fillna('').str.split('|')).explode('area'))
             _areas = _areas[_areas['area'].isin(_rank)].copy()
@@ -343,8 +350,8 @@ class OUTPUT():
             compounds_df = compounds_df[compounds_df['compound'].isin(chemlib['compound'])]
             print(f'> {compounds_df["compound"].nunique():,}/{_n0c:,} compounds present in serac_df (rest excluded)')
             # MoleculeBatchID (per experiment) for the volcano label text, sourced from df_raw.
-            compounds_df['molecule_batch_id'] = compounds_df['uniquecontrast'].map(
-                data.df_raw.drop_duplicates('uniquecontrast').set_index('uniquecontrast')['MoleculeBatchID'])
+            _uc2mbid = data.df_raw.drop_duplicates('uniquecontrast').set_index('uniquecontrast')['MoleculeBatchID']
+            compounds_df['molecule_batch_id'] = compounds_df['uniquecontrast'].map(_uc2mbid)
             # Experiments absent from df_raw (the …WT/KO/Eval plates) have no MoleculeBatchID there,
             # but the batch id is embedded in uniquecontrast (SRB.0005514.001_vs_… -> SRB-0005514-001);
             # reconstruct it for those rows, keeping it only when it matches the row's own compound.
@@ -399,8 +406,7 @@ class OUTPUT():
                 add_df = (add_df.merge(rep[['uniquecontrast', 'activity']].drop_duplicates('uniquecontrast'), on='uniquecontrast', how='left')
                                 .merge(n_genes, on='uniquecontrast', how='left')
                                 .merge(chemlib, on='compound', how='left'))
-                add_df['molecule_batch_id'] = add_df['uniquecontrast'].map(
-                    data.df_raw.drop_duplicates('uniquecontrast').set_index('uniquecontrast')['MoleculeBatchID'])
+                add_df['molecule_batch_id'] = add_df['uniquecontrast'].map(_uc2mbid)
                 _cm = add_df['molecule_batch_id'].isna()
                 _cp = add_df.loc[_cm, 'uniquecontrast'].str.split('_vs_').str[0].str.replace('.', '-', regex=False)
                 _cv = [p.startswith(c) for p, c in zip(_cp, add_df.loc[_cm, 'compound'].astype(str))]
@@ -449,13 +455,16 @@ class OUTPUT():
         return None:
         """
         DISEASE_AREA_COLORS = {
-            'pharma': params.ACTIVE_C, 'BMS': '#BA09D9',
+            'pharma': params.ACTIVE_C, 'BMS': params.BMS_C,
             'cancer or benign tumor': '#DD870E', 'hematologic disease': '#FF0000',
             'cardiovascular disease': "#FB008A", 'immune system disease': '#2A9D8F',
             'musculoskeletal or connective tissue disease': '#264653',
             'nervous system disease': '#963802', 'psychiatric disorder': '#000000',
             'nutritional or metabolic disease': '#17E804', 'endocrine system disease': "#6EE5F5",
         }
+        # every priority disease area get_iface can assign must have a colour here
+        assert set(PRIORITY_DISEASE_AREAS).issubset(DISEASE_AREA_COLORS), \
+            f'DISEASE_AREA_COLORS missing: {set(PRIORITY_DISEASE_AREAS) - set(DISEASE_AREA_COLORS)}'
         # Validation-mode colours (V toggle): each category is a dark ring + light fill
         # (like the reference volcano). Purple = FBXO31 dependent, orange = FBXO31 independent,
         # light blue = every other gene; the grey backdrop turns light blue too.
@@ -500,8 +509,8 @@ class OUTPUT():
             volcano_source=self.meas, volcano_key='uniquecontrast', page_size=5,
             png_dir=params.SRB_PNG_DIR,   # real compound PNGs from config; RDKit-render fallback when absent
             thumb_external=True,   # reference srb_png/<compound>.png next to the HTML (not inline base64)
-            range_sliders=True, range_defaults={'x': 0.0, 'y': 0.0, 'z': 0.0}, # {SAR, OT, MS} # , {'x': 0.0, 'y': 0.0, 'z': 30} # {'x': 0.1, 'y': 0.5, 'z': 10}
-            activity_defaults=['Single', 'Low'],   # focus view: R2>0.1, assoc>0.6, MS>10 #
+            range_sliders=True, range_defaults={'x': 0.0, 'y': 0.0, 'z': 0.0}, # {SAR, OT, MS} sliders open fully; alt presets: {'x':0,'y':0,'z':30} or {'x':0.1,'y':0.5,'z':10}
+            activity_defaults=['Single', 'Low'],   # open with only Single/Low activity compounds ticked
             control_compounds=data.control_compounds, control_default_on=False,  # hide controls by default
             contaminant_compounds=data.contaminants, contaminant_default_on=False,  # hide contaminants by default
             gene_research=gene_research,
