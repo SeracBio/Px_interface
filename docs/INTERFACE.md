@@ -32,8 +32,9 @@ flowchart TD
 ```
 
 **One dot per gene**, positioned by three axes: **x = SAR predictability (R²)**, **y = OpenTargets
-association**, **z = MS score**. Hovering a dot opens a compound panel (structures + volcanoes);
-the volcanoes for WT/MLN/KO validation stems are linked by a cross-plate hover trace.
+association**, **z = MS score**. Hovering a dot opens the compound panel (structures only). **Clicking**
+a dot pins the panel and marks the gene with a **green ring**; volcanoes then appear on hovering a
+compound row (WT/MLN/KO stems are linked by a cross-plate hover trace). Esc/✕ unpins and reverts the ring.
 
 The whole thing is **static + offline**: one HTML, a deferred `_data.js` sidecar, a folder of SVG
 volcanoes, and thumbnails. No server; it runs from a `file://` double-click.
@@ -97,9 +98,11 @@ Keyword-only render function (~60 kwargs). Pipeline inside:
 | Index | Trace | Notes |
 |---|---|---|
 | `0` | grey backdrop (all genes) | `opacity=0`, `visible=True` — anchors the scene autorange. **Never** in `areaTraces`. |
-| `1..N` | one per `disease_area` + a `control` trace | recorded in `area_trace_indices`; **only these are re-sliced by the sliders**. `showlegend` only in D mode. |
-| `N+1` | pin overlay | empty; driven by search/pins. **Excluded** from `area_trace_indices` so filters never hide a pin. `→ __PIN_TRACE__`. |
-| `N+2..N+4` | 3 validation legend proxies | one `[None]` point each (gl3d won't show a legend key for a truly empty trace). The V/D toggle flips `showlegend` between these and the disease traces. `→ __VAL_LEGEND_TRACES__`. |
+| `1` | area **ring underlay** | larger dot per visible gene in the ring colour, drawn before the fills so the rim = the ring (gl3d caps `marker.line.width`). Repainted by `applyRanges` from the masks. `→ __AREA_RING_TRACE__`. |
+| `2..N+1` | one per `disease_area` + a `control` trace | recorded in `area_trace_indices`; **only these are re-sliced by the sliders**. `showlegend` only in D mode. Fills have `marker.line.width=0` (ring comes from the underlay). |
+| `N+2` | pin **ring underlay** | pin-overlay rings; repainted by `buildPinTrace`. `→ __PIN_RING_TRACE__`. |
+| `N+3` | pin overlay (fill) | empty; driven by search/pins. **Excluded** from `area_trace_indices` so filters never hide a pin. `→ __PIN_TRACE__`. |
+| `N+4..N+6` | 3 validation legend proxies | one `[None]` point each (gl3d won't show a legend key for a truly empty trace). The V/D toggle flips `showlegend` between these and the disease traces. `→ __VAL_LEGEND_TRACES__`. |
 
 **Do not reorder these.** Coordinates for the area traces are also emitted as plain arrays in
 `__AREA_DATA__` because Plotly stores `gd.data[ti].x` as base64 `{dtype,bdata}`, not JS arrays.
@@ -220,6 +223,22 @@ reads them. Every active global is both set and read (no orphans). Heavy per-gen
   `null` when `range_sliders=False` — the whole slider/count/export/pin machinery is gated on
   `if (R && Plotly)`.
 - **`stem_trace`** → `__STEM_TRACE__`. `{vk: {gene: [fx,fy,aspect,isHit]}}`.
+- **`gene_size`** → `__GENE_SIZE__`. `{gene: px}` — a **static** dot size: how many DISTINCT
+  compounds the gene is a significant (non-`is_completion`) hit in, across ALL plates/activities,
+  bucketed by `size_buckets` (`__SIZE_BUCKETS__`, default `[6,8,10,12,15,20]` for counts 1,2,3,4,5,>5).
+  Applied per-point via `sizeOf` in both `applyRanges` (`marker.size = ft.map(sizeOf)`) and
+  `buildPinTrace`, in **both** colour modes; a matching **size key** (`#size-legend`) is docked above
+  the top-right gene legend (`positionSizeLegend`, which nudges `legend.y=0.88` — set in `update_layout`
+  and re-applied by `fitBox` — to make room). It is a fixed gene property — the filters change which
+  dots *show*, never their size. (The old bottom-left `#axis-legend` + its `__AXIS_LABELS__`/`__AXIS_HELP__`
+  globals were removed 2026-07-21; axis meanings live on the range-panel slider labels.) The **SAR (x) axis
+  title is shown in 3D only** as a paper annotation added by `setMode` (`layout.annotations`, cleared in 2D) —
+  gl3d can't render the native x-axis title readably here, and the 2D view looks straight down that axis.
+- **Ring underlay** → `__AREA_RING_TRACE__` / `__PIN_RING_TRACE__` / `__RING_PX__`. gl3d caps outline
+  width, so each dot's ring is a larger dot (size `= fill + 2*RING_PX`, ring colour) drawn in a
+  dedicated trace *under* the fills. `applyRanges` repaints the area underlay from the masks
+  (per-point colour `valRingOf` in V / `#333` in D); `buildPinTrace` repaints the pin underlay. `RING_PX`
+  comes from `plot_3d_interface(ring_px=)` ← config `GENE_RING_PX`.
 
 ### Session `.iface` / URL-hash keys
 
@@ -246,9 +265,11 @@ Hash keys: `p=` (exact plate list), `pg`/`pc` (pinned), `hg`/`hc` (hidden), `sp=
 - **`_data.js` is a deferred `<script src>`** (not `fetch`) on purpose: `fetch()` of a local file is
   CORS-blocked under `file://`; `defer` keeps first paint fast while guaranteeing globals are set
   before `DOMContentLoaded`.
-- **gl3d marker rings**: per-point `marker.line.color` string arrays are officially only
-  numeric→colorscale for gl3d; the interface sets per-point ring strings anyway (renders in
-  practice) — legend swatches are unaffected regardless.
+- **gl3d caps `marker.line.width`** — a thick outline is impossible on scatter3d (verified: width
+  3.5 vs 8 render identically). Dot **rings are drawn as a larger underlay dot** (fill + `2*RING_PX`,
+  ring colour) beneath each fill, in a dedicated ring-underlay trace rendered *before* the fills.
+  No z-fighting (fill and underlay share the exact coordinate → trace order breaks the depth tie).
+  Fills therefore set `marker.line.width=0`; only the SVG legend swatches still use `marker.line`.
 - **Browsers cache `_data.js` by filename** — after a rebuild, hard-refresh (`Ctrl+Shift+R`) or the
   page may serve a stale sidecar.
 
@@ -257,7 +278,8 @@ Hash keys: `p=` (exact plate list), `pg`/`pc` (pinned), `hg`/`hc` (hidden), `sp=
 ## 8. Colours & config
 
 - `config.yaml`: `ACTIVE_C` (pharma dot), `BMS_C` (BMS dot), `VALIDATION_PLATE_SUFFIXES`
-  (`[WT, MLN, KO]`).
+  (`[WT, MLN, KO]`), `GENE_SIZE_BUCKETS` (6 dot px for #significant-compounds = 1,2,3,4,5,>5),
+  `GENE_RING_PX` (ring rim thickness in px; underlay dot = fill + 2×this).
 - `PRIORITY_DISEASE_AREAS` (module constant in `Px_interface.py`) is the **single source of truth**
   for disease-area ranking; `build_interface` asserts `DISEASE_AREA_COLORS` covers it.
 - `VALIDATION_COLORS` (fill + ring per category) is defined in `build_interface` and defaulted once
@@ -268,6 +290,6 @@ Hash keys: `p=` (exact plate list), `pg`/`pc` (pinned), `hg`/`hc` (hidden), `sp=
 ## 9. Testing
 
 `tests/make_synthetic.py` generates a deterministic fixture (synthetic data — no real structures);
-`tests/test_px_interface.py` runs the whole pipeline end-to-end (18 tests), including a regression
+`tests/test_px_interface.py` runs the whole pipeline end-to-end (19 tests), including a regression
 test that the stem trace builds on **both** the fresh-render and the `IFACE_OVERWRITE=false` cache
 path. Run: `conda run -n ML python -m unittest tests.test_px_interface`.

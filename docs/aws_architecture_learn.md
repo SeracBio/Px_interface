@@ -94,15 +94,13 @@ the cloud with its own IP address range, subnets, and routing rules. Ours is **`
 
 ### Subnets
 A VPC is divided into **subnets** — smaller address ranges, each living in one data-center
-(Availability Zone). We have two:
-- **Public subnet `172.20.1.0/24`** — has a route to the internet (via the Internet Gateway). We keep
-  it for future needs, but **the EC2 instance is deliberately NOT here.**
+(Availability Zone). We use **private subnets only**:
 - **Private subnet `172.20.2.0/24`** — no route to the internet. **This is where the EC2 lives**, which
   is what makes it unreachable from the public internet.
 
-### Internet Gateway (IGW)
-The VPC's door to the internet. Only the *public* subnet routes through it. The private subnet
-doesn't — which is the whole point.
+There is deliberately **no public subnet and no Internet Gateway.** A Site-to-Site VPN doesn't need
+one, and the EC2 reaches the AWS services it needs (S3, SSM) through VPC endpoints — see Part 5 — so
+nothing in this stack ever touches the public internet.
 
 ### Route tables
 A **route table** is a set of "to reach X, send traffic to Y" rules attached to a subnet. The private
@@ -117,7 +115,10 @@ the open internet.
 **EC2 (Elastic Compute Cloud)** is just "a virtual computer you rent in AWS." Ours:
 - **t3.micro** — the smallest practical size (1 GB RAM). Plenty, because it only *serves* pre-built
   static files; it doesn't run the heavy pipeline.
-- **Amazon Linux 2023 (AL2023)** — AWS's own Linux distribution.
+- **Amazon Linux 2023 (AL2023)** — AWS's own Linux distribution. **The AMI is pinned** (`ec2_ami_id` in
+  `terraform.tfvars`), not floating on "latest": a newer AL2023 build once shipped an `amazon-ssm-agent`
+  that wouldn't register, which — on a box you can only reach via SSM — locks out management on the next
+  replace. Bump the pin deliberately and confirm SSM comes back before trusting it.
 - **No public IP** — cannot be reached from the internet; only via the tunnel.
 - **Encrypted gp3 root disk** — its storage is encrypted at rest automatically.
 - **IMDSv2 enforced** — a hardening setting. Every EC2 has an internal "metadata service" that hands
@@ -269,7 +270,7 @@ gateway instead of endpoints would be ~$32 and less secure.)
 - **VPC** — your private network inside AWS.
 - **Subnet** — a slice of a VPC in one data center; "public" = has internet route, "private" = doesn't.
 - **CIDR** (e.g. `172.20.0.0/16`) — a way of writing a range of IP addresses; the `/16` says how big.
-- **IGW (Internet Gateway)** — a VPC's connection to the internet.
+- **IGW (Internet Gateway)** — a VPC's connection to the internet (not used in this stack).
 - **VGW (Virtual Private Gateway)** — the AWS end of a VPN.
 - **CGW (Customer Gateway)** — AWS's record of *your* VPN device (the FortiGate).
 - **Site-to-Site VPN** — an encrypted tunnel joining two whole networks.

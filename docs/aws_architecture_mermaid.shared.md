@@ -27,10 +27,6 @@ flowchart TB
         VPN["Site-to-Site VPN connection<br/>2 x IPsec IKEv2 tunnels<br/>static routes: office LAN + VPN client ranges"]
 
         subgraph VPC["VPC - private range"]
-            IGW["Internet Gateway<br/>(egress for public subnet)"]
-            subgraph PUBSN["Public subnet"]
-                PUBNOTE["reserved - EC2 is NOT here"]
-            end
             subgraph PRIVSN["Private subnets (2 AZs)"]
                 EC2["EC2 t3.micro (fixed private IP) - Amazon Linux 2023<br/>NO public IP<br/>nginx: HTTPS + Basic Auth, serves /Px_interface/<br/>IMDSv2, encrypted gp3 root"]
                 E1["VPC endpoint: ssm"]
@@ -77,7 +73,6 @@ flowchart TB
     SG2 -. protects .-> E1
     SG2 -. protects .-> E2
     SG2 -. protects .-> E3
-    IGW --- PUBSN
 
     IAM -. attached .-> EC2
     EC2 -. reads at boot .-> SSM

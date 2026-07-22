@@ -525,6 +525,8 @@ class OUTPUT():
             volcano_xlim=(-8, 8), volcano_size_px=350,
             disease_area_colors=DISEASE_AREA_COLORS, nb_display=False,
             validation_colors=VALIDATION_COLORS, color_mode_default='V',  # V/D colour toggle; open in validation colouring
+            size_buckets=getattr(params, 'GENE_SIZE_BUCKETS', [6, 8, 10, 12, 15, 20]),  # dot px by #significant-compounds (1,2,3,4,5,>5)
+            ring_px=getattr(params, 'GENE_RING_PX', 4),   # thickness (px) of the dark ring drawn around each gene dot
             html_path=os.path.join(output_dir, 'interfaces', 'Serac_Px_interface.html'), # 20260612_3d_interface_PX_R2_assoc_ms.html
         )
 

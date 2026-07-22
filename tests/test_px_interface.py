@@ -248,6 +248,43 @@ class TestRender(unittest.TestCase):
         # the cache path emits the SAME positions (not an empty map)
         self.assertEqual(cached, fresh)
 
+    def test_gene_size_buckets(self):
+        """Dots are sized by #compounds each gene is significant in. The config's
+        GENE_SIZE_BUCKETS must reach the client as __SIZE_BUCKETS__, and every plotted
+        gene must be assigned one of those bucket sizes in __GENE_SIZE__."""
+        import re
+        js = open(os.path.join(self.out_dir, 'interfaces', 'Serac_Px_interface_data.js')).read()
+
+        def grab(name):
+            m = re.search(r'__' + name + r'__ = JSON\.parse\("(.*?)"\);', js, re.S)
+            return json.loads(json.loads('"' + m.group(1) + '"'))
+        buckets, gene_size = grab('SIZE_BUCKETS'), grab('GENE_SIZE')
+        # the config value (set in make_synthetic) is what reached the client
+        self.assertEqual(buckets, [5, 7, 9, 11, 13, 16])
+        # every plotted gene got a size, and it's always one of the buckets
+        self.assertGreater(len(gene_size), 0)
+        self.assertTrue(set(gene_size.values()) <= set(buckets))
+        # sizing is not degenerate: more than one bucket is actually used
+        self.assertGreater(len(set(gene_size.values())), 1)
+
+    def test_ring_underlay(self):
+        """Thick dot rings are drawn as an underlay dot (gl3d caps marker outline width). The
+        config GENE_RING_PX must reach the client as __RING_PX__, and the two ring-underlay
+        traces must be emitted: __AREA_RING_TRACE__ right after the backdrop (index 1) and
+        __PIN_RING_TRACE__ immediately before the pin fill trace."""
+        import re
+        js = open(os.path.join(self.out_dir, 'interfaces', 'Serac_Px_interface_data.js')).read()
+
+        def num(name):
+            m = re.search(r'window\.__' + name + r'__ = ([0-9.]+);', js)
+            return float(m.group(1)) if m else None
+        # the config ring thickness (set in make_synthetic) reached the client
+        self.assertEqual(num('RING_PX'), 5.0)
+        # area ring underlay renders right after the backdrop, before every fill trace
+        self.assertEqual(num('AREA_RING_TRACE'), 1.0)
+        # pin ring underlay is emitted and sits just below (before) the pin fill trace
+        self.assertEqual(num('PIN_RING_TRACE'), num('PIN_TRACE') - 1)
+
 
 if __name__ == '__main__':
     unittest.main(verbosity=2)

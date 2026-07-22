@@ -900,8 +900,8 @@ def plot_activity_area_absolute(
 
 # JS/HTML injected by plot_3d_interface: the live interface's CSS + overlay chrome
 # (filter panel, compound panel with a paginated ◀/▶ walk of a target's compounds,
-# grouped volcanoes, pin/search overlay, range sliders) + an axis legend driven by
-# window.__AXIS_LABELS__. Spliced in before </body>; reads the injected window.__X__ globals.
+# grouped volcanoes, pin/search overlay, range sliders) + a size legend docked above the
+# gene legend. Spliced in before </body>; reads the injected window.__X__ globals.
 _INTERFACE_INJECT = '''
 <style>
   html, body { height: 100%; margin: 0; padding: 0; background: white; }
@@ -1134,17 +1134,17 @@ _INTERFACE_INJECT = '''
             text-transform: none; letter-spacing: 0; color: #fff; background: #1D3557; border: none; border-radius: 4px; }
   #sess-save-btn:hover, #sess-load-btn:hover { background: #16324f; }
   #sess-note { margin-top: 5px; font: 11px sans-serif; color: #2A9D8F; word-break: break-all; }
-  #axis-legend {            /* bottom-left, immediately above the slider box */
-    position: fixed; bottom: 104px; left: 12px; z-index: 9998;
+  #size-legend {           /* docked just above the top-right gene legend (positioned in JS) */
+    position: fixed; top: 64px; right: 18px; z-index: 9998;
     background: white; border: 1px solid #bbb; padding: 6px 8px;
     border-radius: 6px; box-shadow: 0 2px 8px rgba(0,0,0,0.12);
-    font: 11px sans-serif; color: #333; max-width: 360px; user-select: text;
+    font: 11px sans-serif; color: #333; user-select: none;
   }
-  #axis-legend .title { font-weight: 700; padding-bottom: 3px; }
-  #axis-legend .ax { display: block; padding: 1px 0; cursor: help; }
-  #axis-legend .ax:hover { background: #f3f3f3; border-radius: 3px; }
-  #axis-legend .ax b  { display: inline-block; min-width: 1.2em; color: #555; }
-  #axis-legend .ax .lab { font-weight: 600; }
+  #size-legend .szl-title { font-weight: 600; color: #555; padding-bottom: 4px; }
+  #size-legend .szl-row { display: flex; align-items: flex-end; gap: 7px; }
+  #size-legend .szl-item { display: flex; flex-direction: column; align-items: center; gap: 2px; }
+  #size-legend .szl-dot { border-radius: 50%; background: #cfd8dc; border: 1.5px solid #607d8b; }
+  #size-legend .szl-n { font-size: 9px; color: #666; line-height: 1; }
   /* Per-gene degradation-research box (bottom-right). */
   #research-box { position: fixed; right: 12px; bottom: 12px; z-index: 9998;
                   background: white; border: 1px solid #bbb; border-radius: 6px;
@@ -1297,7 +1297,7 @@ _INTERFACE_INJECT = '''
   <div class="row" id="ifx-row"></div>
   <div class="volcano" id="ifx-volcano"></div>
 </div>
-<div id="axis-legend"></div>
+<div id="size-legend"></div>
 <div id="pin-toggle" title="Show or hide pinned genes (double-click to show ONLY pinned genes)">
   <label><input type="checkbox" id="pin-toggle-cb" checked> ★ pinned <span id="pin-toggle-n">0</span><span id="pin-toggle-solo"></span></label>
 </div>
@@ -1337,7 +1337,7 @@ _INTERFACE_INJECT = '''
     var volBox = document.getElementById("ifx-volcano");
     var researchBox = document.getElementById("research-box");
     var research = window.__GENE_RESEARCH__ || {};
-    var legEl  = document.getElementById("axis-legend");
+    var sizeEl = document.getElementById("size-legend");
     var pf     = document.getElementById("filter-panel");
     var pfBoxes = document.getElementById("pf-boxes");
     var afBoxes = document.getElementById("af-boxes");
@@ -1347,8 +1347,6 @@ _INTERFACE_INJECT = '''
     var vfBoxes = document.getElementById("vf-boxes");
     var vcfBoxes = document.getElementById("vcf-boxes");
     var pageSize = window.__PAGE_SIZE__ || 5;
-    var axis = window.__AXIS_LABELS__ || {x: "X", y: "Y", z: "Z"};
-    var axisHelp = window.__AXIS_HELP__ || {};
     var plates = window.__PLATES__ || [];
     var ticked = {};
     var plateDefaults = window.__PLATE_DEFAULTS__ || null;   // plates to start ticked; null/absent = all
@@ -1455,6 +1453,17 @@ _INTERFACE_INJECT = '''
                                                 background: "#CFE3F0"};
     var VAL_LEGEND_TRACES = window.__VAL_LEGEND_TRACES__ || [];   // legend-proxy traces carrying the V-mode keys
     var COLOR_MODE = (window.__COLOR_MODE_DEFAULT__ === "D") ? "D" : "V";
+    // Static marker size: px keyed by how many compounds a gene is significant in (grand
+    // total, filter-independent). applyRanges/buildPinTrace paint it via sizeOf on every render.
+    var SIZE_BUCKETS = window.__SIZE_BUCKETS__ || [6, 8, 10, 12, 15, 20];
+    var GENE_SIZE = window.__GENE_SIZE__ || {};
+    function sizeOf(g) { return GENE_SIZE[g] || SIZE_BUCKETS[0]; }
+    // Thick rings: gl3d caps marker.line.width, so the ring is a LARGER dot (fill + 2*RING_PX)
+    // in the ring colour, drawn in a dedicated underlay trace under the fills (see applyRanges/buildPinTrace).
+    var RING_PX = window.__RING_PX__ || 4;
+    var AREA_RING_TRACE = window.__AREA_RING_TRACE__;   // undefined-safe; guarded before use
+    var PIN_RING_TRACE = window.__PIN_RING_TRACE__;
+    var CLICK_RING = "#2ca02c";   // ring colour marking the currently clicked (panel-pinned) gene
     // FBXO31 category → dark ring + light fill (like the reference volcano circles).
     function valCatOf(g) { return validatedSet[g] ? "dependent" : (devalidatedSet[g] ? "independent" : "rest"); }
     function valFillOf(g) { return (VCOL[valCatOf(g)] || {}).fill || "#cccccc"; }
@@ -1501,17 +1510,39 @@ _INTERFACE_INJECT = '''
     var gd = document.querySelector(".plotly-graph-div") || document.querySelector(".js-plotly-plot");
     if (!gd) return;
 
-    // Axis legend with per-axis explanations shown as a hover tooltip. Build via
-    // DOM + the title property so help text needs no HTML escaping.
-    legEl.innerHTML = '<div class="title">ⓘ Axis legend (hover for details)</div>';
-    ['x', 'y', 'z'].forEach(function(k, i) {
-      var sp = document.createElement('span');
-      sp.className = 'ax';
-      if (axisHelp[k]) sp.title = axisHelp[k];
-      sp.innerHTML = '<b>' + ['X', 'Y', 'Z'][i] + '</b> <span class="lab"></span>';
-      sp.querySelector('.lab').textContent = axis[k] || '';
-      legEl.appendChild(sp);
-    });
+    // Size key: dots grow with the number of compounds a gene is significant in (1…>N).
+    // Docked just ABOVE the top-right gene legend (see positionSizeLegend).
+    if (sizeEl && Object.keys(GENE_SIZE).length) {
+      var _last = SIZE_BUCKETS.length - 1;
+      var _items = SIZE_BUCKETS.map(function(px, i) {
+        var lab = (i < _last) ? String(i + 1) : ('>' + _last);
+        return '<span class="szl-item"><span class="szl-dot" style="width:' + px + 'px;height:' + px +
+               'px"></span><span class="szl-n">' + lab + '</span></span>';
+      }).join('');
+      sizeEl.innerHTML = '<div class="szl-title">size = # significant compounds</div>' +
+                         '<div class="szl-row">' + _items + '</div>';
+    } else if (sizeEl) {
+      sizeEl.style.display = "none";
+    }
+    // Park the size key just above the native gene legend; re-placed on resize +
+    // plotly_afterplot (the legend moves on 2D/3D toggle, relayout, V/D swap).
+    function positionSizeLegend() {
+      if (!sizeEl || sizeEl.style.display === "none") return;
+      var lg = gd.querySelector(".legend");
+      if (lg) {
+        var r = lg.getBoundingClientRect();
+        // dock just above the gene legend, left-aligned with it — but clamp so the (wider)
+        // size box never runs off the right edge of the window.
+        var left = Math.min(r.left, window.innerWidth - sizeEl.offsetWidth - 12);
+        sizeEl.style.left = Math.max(8, left) + "px";
+        sizeEl.style.top = Math.max(8, r.top - sizeEl.offsetHeight - 8) + "px";
+        sizeEl.style.right = "auto";
+      } else {   // legend not drawn yet — fall back to fixed top-right
+        sizeEl.style.top = "64px"; sizeEl.style.right = "18px"; sizeEl.style.left = "auto";
+      }
+    }
+    positionSizeLegend();
+    window.addEventListener("resize", positionSizeLegend);
 
     // declared before the display IIFE (which assigns it) so a later var-initializer can't clobber it
     var setMode2DHook = function(two) {};         // set in the display block; switches 2D/3D view
@@ -1536,7 +1567,14 @@ _INTERFACE_INJECT = '''
           "scene.xaxis.visible": !two,
           // 2D: 'pan' lets you drag the plot to reposition it (and scroll to zoom)
           // without rotating out of the flat view; 3D restores rotate (turntable).
-          "scene.dragmode": two ? "pan" : "turntable"
+          "scene.dragmode": two ? "pan" : "turntable",
+          // SAR (x) axis title: gl3d won't place the native x-axis title readably in this layout,
+          // so show it as a paper annotation near the SAR (bottom-right) axis in 3D only. 2D looks
+          // straight down this axis and stays unlabelled by design. Uses layout.annotations (unused elsewhere).
+          "annotations": two ? [] : [{text: "SAR predictability", showarrow: false,
+            xref: "paper", yref: "paper", x: 0.70, y: 0.06, xanchor: "center", yanchor: "bottom",
+            font: {size: 13, color: "#2a3f5f"}, bgcolor: "rgba(255,255,255,0.78)",
+            bordercolor: "#cccccc", borderpad: 2}]
         });
       }
       tg.addEventListener("click", function (e) {
@@ -1571,7 +1609,8 @@ _INTERFACE_INJECT = '''
         var relayout = {
           "scene.domain.x": [0, fx],
           "scene.aspectmode": "manual", "scene.aspectratio": {x: 1, y: 1.15, z: 1.15},
-          "legend.x": legx, "legend.xanchor": "left", "legend.y": 1, "legend.yanchor": "top"};
+          // legend.y < 1 leaves room at the top-right for the HTML size-key to dock above it
+          "legend.x": legx, "legend.xanchor": "left", "legend.y": 0.88, "legend.yanchor": "top"};
         // The pan is a 2D-only camera move; only apply it in 2D so a window resize in 3D
         // doesn't clobber the turntable camera with the flat ortho view.
         if (tg.querySelector(".seg2d").classList.contains("active")) {
@@ -1618,6 +1657,7 @@ _INTERFACE_INJECT = '''
 
     var pinned = false;
     var currentGene = "";
+    var clickedGene = "";   // gene whose panel is pinned (clicked) -> drawn with a green ring
     var fullArr = [];
     var entries = [];      // [{t: row, idx: absolute index in fullArr}] minus __META__
     var page = 0;
@@ -1888,11 +1928,13 @@ _INTERFACE_INJECT = '''
     }
     function unpin() {
       pinned = false;
+      clickedGene = "";   // clear the clicked-gene green ring
       volPinIdx = null;
       box.classList.remove("pinned");
       box.style.display = "none";
       volBox.style.display = "none";
       if (researchBox) { researchBox.classList.remove("pinned"); researchBox.style.display = "none"; }
+      recolor3d();        // repaint so the green ring reverts to its category colour
     }
     function goPage(delta) {
       var vis = entries.filter(function(e) { return entryVisible(e.t); });
@@ -2082,13 +2124,6 @@ _INTERFACE_INJECT = '''
     window.addEventListener("resize", function() {
       _stems.forEach(function(vstem) { clearTrace(vstem); placeHotspots(vstem); });
     });
-    // Does this compound cell have any validation plate among its visible plates? (drives the
-    // auto-show of grouped volcanoes on plain gene hover.)
-    function cellHasValidation(cell) {
-      var t = fullArr[parseInt(cell.getAttribute("data-eidx"), 10)];
-      if (!t || !isPaged(t)) return false;
-      return visPlates(t).some(function(pl) { return isValidationPlate(pl[0]); });
-    }
     function markVolPin(cell) {
       var prev = row.querySelector(".cell.vpin");
       if (prev) prev.classList.remove("vpin");
@@ -2130,13 +2165,9 @@ _INTERFACE_INJECT = '''
     });
     gd.on("plotly_hover", function(e) {
       if (pinned) return;
-      if (render(e.points && e.points[0])) {
-        box.style.display = "block";
-        // Auto-show the grouped WT/MLN/KO volcanoes for the first compound when it was run on
-        // validation plates, so a plain hover surfaces the gene's location across conditions.
-        var firstCell = row.querySelector(".cell");
-        if (firstCell && cellHasValidation(firstCell)) showVolcano(firstCell);
-      } else box.style.display = "none";
+      // Hover only opens the compound panel — volcanoes appear once a gene is CLICKED (pinned)
+      // and then you hover a compound row (see the row "mouseover" handler above).
+      box.style.display = render(e.points && e.points[0]) ? "block" : "none";
     });
     gd.on("plotly_unhover", function() {
       if (pinned) return;
@@ -2152,9 +2183,11 @@ _INTERFACE_INJECT = '''
       }
       if (render(_p)) {
         pinned = true;
+        clickedGene = currentGene;   // mark the clicked gene -> green ring
         box.classList.add("pinned");
         box.style.display = "block";
         if (researchBox) researchBox.classList.add("pinned");
+        setTimeout(recolor3d, 0);    // repaint the green ring (deferred: redraw is re-entrant inside plotly_click)
       }
     });
     clo.addEventListener("click", unpin);
@@ -2387,16 +2420,6 @@ _INTERFACE_INJECT = '''
     if (R && typeof Plotly !== "undefined") {
       var rp = document.getElementById("range-panel");
       rp.style.display = "block";          // always visible once sliders are configured
-      // park the axis legend immediately above the (variable-height) slider box.
-      // Use offsetHeight (stable once laid out) + a ResizeObserver so it tracks the
-      // panel's final size instead of a stale pre-layout measurement.
-      function positionAxisLegend() {
-        if (legEl) legEl.style.bottom = (12 + rp.offsetHeight + 8) + "px";
-      }
-      positionAxisLegend();
-      window.addEventListener("resize", positionAxisLegend);
-      if (window.ResizeObserver) new ResizeObserver(positionAxisLegend).observe(rp);
-      else setTimeout(positionAxisLegend, 200);
       var AX = ["x", "y", "z"];
       var els = {}, orig = {}, origColor = {};   // origColor[ti] = the trace's disease-area colour (D mode)
       function fmt(v) { return (Math.abs(v) >= 100 ? v.toFixed(0) : v.toFixed(2)); }
@@ -2527,6 +2550,7 @@ _INTERFACE_INJECT = '''
         // Mutate the trace data directly, then force a full redraw (Plotly.restyle of
         // x/y/z on a gl3d scatter3d updates the data but doesn't reliably repaint the
         // 3D scene — Plotly.redraw() does).
+        var urx = [], ury = [], urz = [], urs = [], urc = [];   // shared ring-underlay: coords, sizes, colours
         R.areaTraces.forEach(function(ti) {
           var o = orig[ti], m = masks[ti]; if (!o || !m || !gd.data[ti]) return;
           var fx = [], fy = [], fz = [], ft = [], fcd = [], fhov = [];
@@ -2537,18 +2561,29 @@ _INTERFACE_INJECT = '''
           var tr = gd.data[ti];
           tr.x = fx; tr.y = fy; tr.z = fz; tr.text = ft; tr.customdata = fcd;
           tr.hovertext = fhov;   // keep the tooltip aligned with the filtered points
-          // V mode: light fill + dark ring per FBXO31 category; D mode: solid disease colour + grey ring.
+          // V mode: light fill per FBXO31 category; D mode: solid disease colour. The dark ring is
+          // NOT marker.line (gl3d caps its width) — it's the underlay dot drawn beneath each fill.
           if (tr.marker) {
+            var szs = ft.map(sizeOf);   // static per-gene size = #compounds it's significant in
+            tr.marker.size = szs;
             if (!tr.marker.line) tr.marker.line = {};
-            if (COLOR_MODE === "V") {
-              tr.marker.color = ft.map(valFillOf);
-              tr.marker.line.color = ft.map(valRingOf); tr.marker.line.width = 2.4;
-            } else {
-              tr.marker.color = origColor[ti];
-              tr.marker.line.color = "#333"; tr.marker.line.width = 1;
+            tr.marker.line.width = 0;
+            tr.marker.color = (COLOR_MODE === "V") ? ft.map(valFillOf) : origColor[ti];
+            for (var j = 0; j < ft.length; j++) {
+              urx.push(fx[j]); ury.push(fy[j]); urz.push(fz[j]);
+              urs.push(szs[j] + 2 * RING_PX);
+              urc.push(ft[j] === clickedGene ? CLICK_RING
+                       : (COLOR_MODE === "V" ? valRingOf(ft[j]) : "#333"));   // green ring = clicked gene
             }
           }
         });
+        // paint the shared ring underlay (rendered before the fills -> the exposed rim = the ring)
+        if (AREA_RING_TRACE != null && gd.data[AREA_RING_TRACE]) {
+          var _ur = gd.data[AREA_RING_TRACE];
+          _ur.x = urx; _ur.y = ury; _ur.z = urz;
+          if (!_ur.marker) _ur.marker = {};
+          _ur.marker.size = urs; _ur.marker.color = urc;
+        }
         // Labels are rebuilt by refreshLabels() (scene.annotations) — see there for the
         // visible-traces + top-N-by-MS logic. Stash the masks/total so a later legend
         // toggle can re-derive labels without recomputing the range filter.
@@ -2687,17 +2722,26 @@ _INTERFACE_INJECT = '''
       // applyRanges can fold this into its single Plotly.redraw.
       function buildPinTrace() {
         var genes = Object.keys(shownPinSet());
-        var xs = [], ys = [], zs = [], ts = [], cds = [], hov = [], cols = [], syms = [];
+        var xs = [], ys = [], zs = [], ts = [], cds = [], hov = [], cols = [], syms = [], szs = [], rss = [], rcs = [];
         genes.forEach(function(g) {
           var c = GENE_XYZ[g]; if (!c) return;
           xs.push(c[0]); ys.push(c[1]); zs.push(c[2]); ts.push(g); cds.push(g); hov.push(g);
           cols.push(GENE_COLOR[g] || "#1D3557");   // colour by disease/pharma category
           syms.push(geneHasVisibleCompound(g) ? "circle" : "diamond");
+          var s = sizeOf(g); szs.push(s); rss.push(s + 2 * RING_PX);   // fill size + ring-underlay size
+          rcs.push(g === clickedGene ? CLICK_RING : "#333");           // green ring = clicked gene
         });
         if (gd.data && gd.data[PIN_TRACE]) {
           var tr = gd.data[PIN_TRACE];
           tr.x = xs; tr.y = ys; tr.z = zs; tr.text = ts; tr.customdata = cds; tr.hovertext = hov;
-          tr.marker.color = cols; tr.marker.symbol = syms;
+          tr.marker.color = cols; tr.marker.symbol = syms; tr.marker.size = szs;
+          // pin ring underlay: larger dot per pin (same symbol), drawn beneath the pin fill
+          if (PIN_RING_TRACE != null && gd.data[PIN_RING_TRACE]) {
+            var ur = gd.data[PIN_RING_TRACE];
+            ur.x = xs; ur.y = ys; ur.z = zs;
+            if (!ur.marker) ur.marker = {};
+            ur.marker.size = rss; ur.marker.symbol = syms; ur.marker.color = rcs;
+          }
           return true;
         }
         return false;
@@ -2763,6 +2807,7 @@ _INTERFACE_INJECT = '''
       });
       window.addEventListener("resize", placePinToggle);
       if (gd && gd.on) gd.on("plotly_afterplot", placePinToggle);   // legend moves on 2D/3D + relayout
+      if (gd && gd.on) gd.on("plotly_afterplot", positionSizeLegend);   // keep the size key pinned above the legend
       function nTargets(c) {
         return (COMPOUND_GENES[c] || []).filter(function(g) { return GENE_XYZ[g]; }).length;
       }
@@ -3162,7 +3207,6 @@ def plot_3d_interface(
     x_label='SAR predictability (R²)',
     y_label='OpenTargets association_score',
     z_label='MS score',
-    axis_help=None,
     z_log=False,
     z_clip_upper=None,
     gene_col='gene',
@@ -3193,6 +3237,8 @@ def plot_3d_interface(
     na_area_color='#bbbbbb',
     validation_colors=None,
     color_mode_default='V',
+    size_buckets=(6, 8, 10, 12, 15, 20),   # dot px by #compounds a gene is significant in: 1,2,3,4,5,>5
+    ring_px=4,   # thickness (px) of the dark ring around each dot (drawn as a larger dot under the fill; gl3d caps marker outlines)
     title='',
     range_sliders=False,
     range_defaults=None,
@@ -3288,23 +3334,6 @@ def plot_3d_interface(
                              'independent': {'fill': '#F2B366', 'ring': '#D07C1A'},
                              'rest':        {'fill': '#B3D4E6', 'ring': '#6BA3C7'},
                              'background': '#CFE3F0'}
-
-    # Per-axis explanations shown on hover over the axis legend.
-    # Defaults describe the FBX interface axes; override any via `axis_help`.
-    _axis_help = {
-        'x': ('SAR predictability (R²): 5-fold cross-validated R² between '
-              'chemistry-predicted and observed per-compound logfc for this gene. '
-              'Higher = the compound structure explains more of its effect on the '
-              'target, i.e. the SAR is more learnable/predictable.'),
-        'y': ('OpenTargets association_score: target–disease association score '
-              '(max across the priority disease areas). Higher = more '
-              'genetic/clinical/literature evidence linking the gene to disease.'),
-        'z': ('MS score: the FBX mass-spec proteomics score for the target — its '
-              'strongest down-modulation signal across compounds. Higher = a '
-              'stronger / more reproducible significant down-regulation.'),
-    }
-    if axis_help:
-        _axis_help.update(axis_help)
 
     # 0) normalise the gene column to 'gene'
     df = target_df.copy()
@@ -3908,6 +3937,25 @@ def plot_3d_interface(
         print(f'> stem trace: {sum(len(v) for v in stem_trace.values()):,} gene positions '
               f'across {len(stem_trace):,} validation contrasts')
 
+    # gene → marker size (px) by how many DISTINCT compounds the gene is a significant hit
+    # in — a grand total across all plates/activities, so it's a fixed per-gene property, NOT
+    # filter-reactive. Counts 1..N-1 and >N-1 map to size_buckets; a gene with 0 hits (rare,
+    # meta-only) falls to the smallest bucket but is masked out of the view anyway.
+    _sb = [int(s) for s in size_buckets]
+    assert _sb, 'size_buckets must be non-empty'
+
+    def _sig_count(entries):
+        n = 0
+        for e in entries[1:]:                       # entries[0] = __META__
+            pr = e[3]
+            if not isinstance(pr, list):
+                n += 1                              # single-volcano entry (a real hit)
+            elif any(not (len(row) > 6 and row[6]) for row in pr):
+                n += 1                              # ≥1 non-completion (real hit) plate-row
+        return n
+    gene_size = {str(g): _sb[min(max(_sig_count(e), 1), len(_sb)) - 1]
+                 for g, e in custom.items()}
+
     # bundle the (built or loaded) panel data so callers can cache + replay it (return_panels)
     _panels_out = ({'custom': custom, 'all_plates': list(all_plates),
                     'all_activities': list(all_activities), 'volcano_base': _volcano_base,
@@ -3937,6 +3985,16 @@ def plot_3d_interface(
         name=f'all ({len(plot_df):,})',
         hoverinfo='skip', showlegend=False,
     ))
+    # Ring underlay: one LARGER dot per visible gene, in the gene's ring colour, drawn BEFORE
+    # the fill traces so the exposed rim reads as a thick ring. gl3d hard-caps marker outline
+    # width (marker.line.width), so a genuinely thick ring needs this two-marker trick.
+    # Populated (V/D-aware, from the same masks) by applyRanges; empty until then.
+    fig.add_trace(go.Scatter3d(
+        x=[], y=[], z=[], mode='markers',
+        marker=dict(size=6, color='#333', opacity=1.0, line=dict(width=0)),
+        hoverinfo='skip', showlegend=False, name='ring',
+    ))
+    area_ring_index = len(fig.data) - 1
 
     NA_LABEL = '— no priority area —'
     hl = highlighted.copy()
@@ -3955,7 +4013,7 @@ def plot_3d_interface(
     area_data = []          # plain coord arrays per colour trace, for the slider JS
     area_trace_indices = []  # trace indices that the sliders restyle (colour traces)
 
-    def _add_colour_trace(grp, name, color, symbol='circle', size=6):
+    def _add_colour_trace(grp, name, color, symbol='circle'):
         # Rendering a gene-name text label for every point is the dominant cost in a
         # gl3d scatter (thousands of 3D text sprites can take tens of seconds to lay
         # out at the initial Plotly.newPlot). When the range sliders are present, start
@@ -3968,8 +4026,9 @@ def plot_3d_interface(
         trace_kw = dict(
             x=grp[x_col], y=grp[y_col], z=grp['_zplot'],
             mode=_init_mode,
-            marker=dict(size=size, color=color, symbol=symbol, opacity=0.95,
-                        line=dict(color='#333', width=1)),
+            marker=dict(size=[gene_size.get(str(g), _sb[0]) for g in grp['gene']],
+                        color=color, symbol=symbol, opacity=1.0,
+                        line=dict(color='#333', width=(0 if range_sliders else 1))),  # ring drawn by the underlay when sliders present
             text=grp['gene'], textposition='top center',
             textfont=dict(size=10, color='black'),
             hovertext=_hov, hoverinfo='text',
@@ -4000,7 +4059,7 @@ def plot_3d_interface(
     ctrl_grp = hl[hl['_ctrl']]
     if not ctrl_grp.empty:
         _add_colour_trace(ctrl_grp, f'control ({len(ctrl_grp)})',
-                          '#9e9e9e', symbol='diamond', size=7)
+                          '#9e9e9e', symbol='diamond')
 
     # Pinned-genes overlay — initially empty; the search box drives it (JS sets
     # x/y/z/text/customdata/symbol on pin). Per-point shape: circle when the pin has a
@@ -4012,10 +4071,18 @@ def plot_3d_interface(
     # showlegend=False: the master "★ pinned" toggle (HTML, below the legend) is the single
     # control for the overlay; a native legend key would be redundant and, since pins can be
     # circles or diamonds, its single glyph would misrepresent the shapes.
+    # Pin ring underlay (same two-marker trick for the pin overlay); drawn before the pin
+    # fill trace so the fill sits on top. Populated (size/colour/symbol per pin) by buildPinTrace.
+    fig.add_trace(go.Scatter3d(
+        x=[], y=[], z=[], mode='markers',
+        marker=dict(size=6, color='#333', symbol='diamond', opacity=1.0, line=dict(width=0)),
+        hoverinfo='skip', showlegend=False, name='pin ring',
+    ))
+    pin_ring_index = len(fig.data) - 1
     fig.add_trace(go.Scatter3d(
         x=[], y=[], z=[], mode='markers',
         marker=dict(size=6, color='#1D3557', symbol='diamond',
-                    opacity=1.0, line=dict(color='#333', width=1)),
+                    opacity=1.0, line=dict(width=0)),   # ring drawn by the pin underlay
         text=[], customdata=[], hovertext=[], hoverinfo='text', name='★ pinned',
         showlegend=False,
     ))
@@ -4033,13 +4100,13 @@ def plot_3d_interface(
         fig.add_trace(go.Scatter3d(
             x=[None], y=[None], z=[None], mode='markers',
             marker=dict(size=7, color=_c.get('fill', '#cccccc'), opacity=0.95,
-                        line=dict(color=_c.get('ring', '#333'), width=2.4)),
+                        line=dict(color=_c.get('ring', '#333'), width=3.5)),
             name=_vlab, hoverinfo='skip', showlegend=_val_default_show,
         ))
         val_legend_trace_indices.append(len(fig.data) - 1)
 
-    # Range-slider config. The colour traces are indices 1..N (trace 0 = grey
-    # backdrop); the JS slices them to the in-range subset on each slider move.
+    # Range-slider config. Trace 0 = grey backdrop, trace 1 = ring underlay; the colour
+    # traces follow (area_trace_indices); the JS slices them to the in-range subset per move.
     ranges_cfg = None
     if range_sliders:
         # Sliders span the full plotted range. Default handles = a box that keeps
@@ -4108,7 +4175,9 @@ def plot_3d_interface(
                        showbackground=False, gridcolor='lightgrey', zeroline=False),
             bgcolor='white',
         ),
-        legend=dict(itemsizing='constant'),
+        # nudge the gene legend down from the very top so the HTML size-key can dock above it
+        # (fitBox re-applies the same y=0.88 on every resize/2D toggle — keep them in sync)
+        legend=dict(itemsizing='constant', yanchor='top', y=0.88),
         margin=dict(l=0, r=0, b=0, t=(40 if title else 10)),
     )
 
@@ -4310,9 +4379,14 @@ def plot_3d_interface(
             'window.__RANGES__ = ' + _jsp(ranges_cfg) + ';\n'
             'window.__AREA_DATA__ = ' + _jsp(area_data) + ';\n'
             'window.__PIN_TRACE__ = ' + str(int(pin_trace_index)) + ';\n'
+            'window.__AREA_RING_TRACE__ = ' + str(int(area_ring_index)) + ';\n'   # ring-underlay trace (area dots)
+            'window.__PIN_RING_TRACE__ = ' + str(int(pin_ring_index)) + ';\n'     # ring-underlay trace (pin overlay)
+            'window.__RING_PX__ = ' + _json.dumps(float(ring_px)) + ';\n'          # ring rim thickness (px)
             'window.__ALL_GENES__ = ' + _jsp(_all_genes) + ';\n'
             'window.__GENE_XYZ__ = ' + _jsp(_gene_xyz) + ';\n'
             'window.__GENE_COLOR__ = ' + _jsp(_gene_color) + ';\n'
+            'window.__GENE_SIZE__ = ' + _jsp(gene_size) + ';\n'          # gene -> dot px (static #significant-compounds)
+            'window.__SIZE_BUCKETS__ = ' + _jsp(_sb) + ';\n'             # the 6 bucket sizes, for the size legend
             'window.__ALL_COMPOUNDS__ = ' + _jsp(_all_compounds) + ';\n'
             'window.__COMPOUND_GENES__ = ' + _jsp(_compound_genes) + ';\n'
             'window.__VOLCANO_MODE__ = '
@@ -4323,9 +4397,6 @@ def plot_3d_interface(
             'window.__STEM_TRACE__ = ' + _jsp(stem_trace) + ';\n'   # {vk: {gene: [fx,fy,aspect,isHit]}} for the hover trace (http + file://)
             'window.__THUMB_MODE__ = ' + _json.dumps('path' if _thumb_ext else 'b64') + ';\n'
             'window.__THUMB_DIR__ = ' + _json.dumps(_thumb_rel) + ';\n'
-            'window.__AXIS_LABELS__ = '
-            + _jsp({'x': x_label, 'y': y_label, 'z': z_label}) + ';\n'
-            'window.__AXIS_HELP__ = ' + _jsp(_axis_help) + ';\n'
             'window.__GENE_RESEARCH__ = ' + _jsp(gene_research or {}) + ';\n'
             'window.__GENE_DEPMAP__ = ' + _jsp(gene_depmap) + ';\n'
             'window.__DEPMAP_CATS__ = ' + _jsp(depmap_cats) + ';\n'

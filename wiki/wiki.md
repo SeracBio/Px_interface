@@ -107,10 +107,16 @@ data shares the namespace); no real PNGs so thumbnails are RDKit-rendered from `
   lives in the **volcano panel**: `buildVolcanoHtml` splits a compound's visible plate-rows into
   validation (grouped by stem → one `.vstem` flex row per stem, conditions side by side in WT/MLN/KO
   order, each volcano highlighting the gene) vs dated (stacked as before; CSS `.vstem`/`.vstem-lab`).
-  Plain **gene hover auto-shows** the first visible compound's grouped volcanoes when that compound has
-  validation plates (`cellHasValidation` gate in the `plotly_hover` handler); the panel widens (max
-  96vw, `.vstem` scrolls if needed). Multiple compounds: paged via the existing ◀▶ (one compound at a
-  time).
+  **Volcanoes only show after a gene is CLICKED (2026-07-21).** Hover just opens the compound panel; the
+  `plotly_hover` handler no longer auto-shows any volcano (the old `cellHasValidation` auto-show + helper
+  were removed). Once a gene is clicked (panel `pinned`), hovering a compound row shows that compound's
+  grouped volcanoes (`row` `mouseover` → `showVolcano`, gated on `pinned`); the panel widens (max 96vw,
+  `.vstem` scrolls if needed). Multiple compounds: paged via the existing ◀▶ (one compound at a time).
+  - **Clicked gene → green ring (2026-07-21).** Clicking a dot sets `clickedGene = currentGene`; the ring
+    underlay paints that gene's ring `CLICK_RING` (`#2ca02c`) instead of its category/`#333` colour, in both
+    the area underlay (`applyRanges`) and the pin underlay (`buildPinTrace`). `plotly_click` defers
+    `recolor3d` via `setTimeout(…,0)` (a synchronous `Plotly.redraw` inside the click dispatch re-enters and
+    hangs); `unpin` clears `clickedGene` + repaints (sync is safe — it fires from the close button / Esc).
   - **Hover-any-gene trace across a stem's volcanoes (2026-07-20).** In a WT/MLN/KO stem, **hovering any
     significant-down gene point** draws a polyline connecting that gene's position across the stem's
     conditions (incl. where it's no longer significant — e.g. suppressed in WT, gone in KO), like a slope
@@ -263,9 +269,10 @@ data shares the namespace); no real PNGs so thumbnails are RDKit-rendered from `
   Scatter3d trace's fixed `disease_area` colour, solid + `#333` ring). Colours from `VALIDATION_COLORS`
   (Px_interface `build_interface`) → `validation_colors` param → `__VALIDATION_COLORS__`; default via
   `color_mode_default='V'` → `__COLOR_MODE_DEFAULT__`. **No re-render** — recolouring rides `recolor3d`
-  (`applyRanges`): in V each area trace's `marker.color` becomes `ft.map(valFillOf)` (light fill) + its
-  `marker.line.color` becomes `ft.map(valRingOf)` (dark ring, width 1.4); in D → `origColor[ti]` fill (the disease
-  colour, captured in `captureOrig` from `area_data[i].color`) + `#333` ring. (Trace 0 backdrop is `opacity=0`, so
+  (`applyRanges`): in V each area trace's `marker.color` becomes `ft.map(valFillOf)` (light fill); in D →
+  `origColor[ti]` (solid disease colour, captured in `captureOrig` from `area_data[i].color`). The dark **ring** is
+  NOT `marker.line` — gl3d caps outline width (verified: 3.5 vs 8 render identically) — but a larger dot drawn
+  underneath (ring underlay; see the dot-size/ring-thickness entry). (Trace 0 backdrop is `opacity=0`, so
   its colour flip is a no-op — the visible dots are the highlighted/area traces only.) **Caveat:** gl3d officially
   supports per-point `marker.color` string arrays but only numeric→colorscale for `marker.line.color`; the per-point
   string ring array is accepted by plotly.py and *may* render — if a build shows uniform/black rings on the plot,
@@ -280,8 +287,47 @@ data shares the namespace); no real PNGs so thumbnails are RDKit-rendered from `
   for the 3 proxy curves (return `false` to suppress default): click toggles one `valCatShown` category, double-click
   isolates it (or restores all). The mask in `applyRanges` gates V-mode points by `valCatShown[valCatOf(gene)]`, and
   `_syncValLegendDim` parks a hidden category's proxy at `visible:'legendonly'` so its key dims. Non-validation keys
-  (disease areas in D) keep Plotly's default toggle. Ring width 2.4. Persisted in session (`s.colorMode`) + hash
+  (disease areas in D) keep Plotly's default toggle. **Plotted rings are an underlay dot, not `marker.line`
+  (2026-07-21)** — see the ring-thickness entry; the SVG legend swatches still use `marker.line` (width 3.5), which
+  SVG honours. Persisted in session (`s.colorMode`) + hash
   (`cm=D`, default V omitted) via `setColorModeHook`.
+- **Dot size = # significant compounds (2026-07-21):** each gene's marker is sized by how many DISTINCT compounds it
+  is a significant (non-`is_completion`) hit in — a **static grand total across all plates/activities** (a fixed gene
+  property; filters change which dots *show*, never their size — user's explicit choice over the dynamic/current-filter
+  alternative). Buckets 1,2,3,4,5,>5 → `size_buckets` px (config `GENE_SIZE_BUCKETS`, default `[6,8,10,12,15,20]`;
+  `plot_3d_interface` param → `__SIZE_BUCKETS__`). Count computed once from `custom[gene]` (`_sig_count`: entries with
+  ≥1 non-completion plate-row, or a scalar-volcano entry) → `gene_size` → `__GENE_SIZE__` (`{gene: px}`). Painted
+  per-point via `sizeOf` in **both** colour modes: `applyRanges` sets `marker.size = ft.map(sizeOf)` on every area
+  trace and `buildPinTrace` sets it on the pin overlay; `_add_colour_trace` seeds the same array so it's right before
+  the first `applyRanges`. A **size key** (`#size-legend`: 6 grey dots at the bucket px, labels `1…>5`, title
+  *size = # significant compounds*) is docked **above the top-right gene legend** by `positionSizeLegend` (anchored to
+  the `.legend` rect on load + `plotly_afterplot` + resize; left-aligned but clamped so the wider box never clips the
+  right edge). To make room, the gene legend is nudged down to `legend.y=0.88` — set in `update_layout` AND re-applied
+  by `fitBox` on every resize/2D toggle (keep the two in sync). gl3d per-point `marker.size` arrays are fully supported
+  (unlike the ring-colour caveat above). **The old bottom-left `#axis-legend` (X/Y/Z descriptions) was removed
+  entirely (2026-07-21)** with its `__AXIS_LABELS__`/`__AXIS_HELP__` globals + the `axis_help` param + `_axis_help`
+  dict — axis meanings still show on the range-panel slider labels. Verified in-browser (swiftshader WebGL): size key
+  stacked above the FBX legend, dots at varied sizes with thick rings, 0 console errors.
+- **SAR axis title in 3D only (2026-07-22):** removing `#axis-legend` also dropped the only on-plot mention of the SAR
+  (x) axis in the default 2D view — which looks straight down that axis, so gl3d can't render a native x-axis title
+  there (verified: forcing `xaxis.visible` in 2D shows nothing). Native gl3d also won't place the 3D x-axis title
+  readably in this dense, fitBox-tuned layout (its title lands off the bottom/right edge; the plot renders wider/taller
+  than the viewport). Fix: **`setMode` adds a paper annotation** `"SAR predictability"` (`layout.annotations`, unused
+  elsewhere) at `x=0.70,y=0.06` (paper, near the bottom-right SAR axis) **in 3D, and clears it (`[]`) in 2D** — per the
+  user's ask, 2D stays unlabelled. y/z axis titles (association/MS) show natively. Verified: chip visible near the SAR
+  axis in 3D, absent in 2D, 0 console errors.
+- **Thick rings via an underlay dot (2026-07-21):** gl3d **hard-caps `marker.line.width`** — bumping it does nothing
+  (proven in-browser: width 3.5 vs 8 render identically). So the visible ring is drawn as a **larger dot underneath
+  each fill**: a dedicated ring-underlay trace holds one dot per visible gene at `sizeOf(gene) + 2*RING_PX`, in the
+  gene's ring colour, and renders BEFORE the fills so the exposed rim = the ring. Thickness `RING_PX` is config
+  `GENE_RING_PX` (default 4) → `plot_3d_interface(ring_px=)` → `__RING_PX__`. **Two underlay traces**: the area one
+  (`__AREA_RING_TRACE__`, index 1, right after the backdrop) is repainted by `applyRanges` from the same masks
+  (per-point ring colour = `valRingOf` in V / `#333` in D); the pin one (`__PIN_RING_TRACE__`, just before the pin
+  fill) by `buildPinTrace` (`#333`, per-pin symbol). Fill traces set `marker.line.width=0` + `opacity=1.0` (no
+  bleed-through); trace order is backdrop → area-ring → area-fills → pin-ring → pin-fill → legend proxies (all indices
+  captured dynamically). **No z-fighting** in 2D or 3D — the fill and its underlay share the exact same coordinate, so
+  depth ties break by trace order (fill always on top). Legend swatches keep `marker.line` (SVG honours it). Verified
+  in-browser: 291 area dots with thick per-category coloured rings, pins with thick `#333` rings, 0 console errors.
 - **Range readouts are edit-in-place (2026-07-14):** each axis's `lo – hi` readout (`#x-val` etc.) is two
   `contenteditable` `.rp-edit` spans (dotted underline = editable hint). Click a number, type, and **Enter/blur
   commits** (Esc reverts): `commitEdit` clamps to `[min,max]`, keeps `lo ≤ hi` (editing lo can't exceed hi and
@@ -624,3 +670,27 @@ and a *merged* cluster means either a <55px (tight, good) gap or an overlap (loo
   `https://advantedge.seracbio.com/Px_interface/` resolves over the VPN (verify with
   `nslookup advantedge.seracbio.com` → `172.20.2.10`). Until then, use the IP URL. **This is the last open item
   on the AWS deployment.**
+- 2026-07-22 — **removed the unused public subnet + Internet Gateway** (AWS contact asked why they were in the
+  shared diagram). They carried no traffic: the EC2 lives in the private subnet, a S2S VPN needs no IGW, and all
+  outbound goes via VPC endpoints (S3 gateway + SSM) — the public subnet/IGW were reserved-for-future scaffolding
+  only. Deleted from `aws-vpn/vpc.tf` (`aws_subnet.public`, `aws_internet_gateway.main`, `aws_route_table.public`
+  + its association), plus the now-orphaned `public_subnet_cidr` var (`variables.tf`, `terraform.tfvars`,
+  `.tfvars.example`) and `public_subnet_id` output (`outputs.tf`). **Applied** (in the same apply as the AMI pin
+  below). Docs synced: both mermaid diagrams (`.md` + `.shared.md`) drop the IGW/PUBSN nodes;
+  `aws_architecture_learn.md` Subnets/IGW sections rewritten to "private subnets only, no IGW by design". Makes
+  the "zero internet exposure" story self-evident with no reviewer footnote.
+- 2026-07-22 — **AMI now PINNED — unpinned `most_recent` AL2023 broke SSM (root cause found & fixed).** After a
+  `terraform apply` replaced the EC2, `SSM ping: None` (Session Manager unreachable, `healthcheck.sh` 5 ok/2 fail)
+  **even though the webapp kept serving** over the VPN. Full control-plane diagnosis came back 100% green — 4/4
+  endpoints available w/ private-DNS + correct SG + same subnet as the box, vpce-sg allows 443 from VPC, ec2-sg
+  egress correct, IAM instance profile attached, clock fine (the boot-time Parameter-Store TLS fetch succeeded, so
+  SigV4/IMDS/DNS all work). SSM stayed dead across **reboot AND stop/start** → not a boot race. **The one variable
+  that changed:** `ec2.tf` `data.aws_ami` uses `most_recent = true` (unpinned), so the replace jumped from the
+  07-17 known-good image to **`al2023-ami-2023.12.20260720.0-kernel-6.18`** (`ami-0ac1f955d6e62f3f1`) — a newer
+  kernel + `amazon-ssm-agent` that fails to register in this endpoint-only VPC. nginx (separate service) was
+  unaffected, which is why the site worked while SSM didn't. **Fix:** pinned `ec2_ami_id =
+  "ami-068b5bc67e48209c1"` (`...20260710.0-kernel-6.18`, 07-10 known-good) in `terraform.tfvars` (code already
+  honors `var.ec2_ami_id` when non-empty); `apply` → new box `i-086fbee9fb9a1d9c6` on the pinned AMI →
+  `healthcheck.sh` **7 ok / 0 fail, SSM Online, nginx active**. Closes the deferred **L3 "pin AMI"** hardening
+  item. **Lesson:** never leave AL2023 on `most_recent` for a box you can only manage via SSM — a bad agent build
+  silently locks you out on the next replace. Bump the pin deliberately (test SSM comes up) rather than floating.

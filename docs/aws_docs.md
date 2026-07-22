@@ -281,8 +281,22 @@ delete for hygiene.
   endpoints/routing were ready, so `dnf` had no route and `set -e` aborted the whole script (symptom:
   no nginx, `/var/www/webapp` + `/etc/nginx/ssl` missing; `cloud-init status` = error). Fixed once by
   re-running `sudo bash /var/lib/cloud/instance/scripts/part-001`. **Will recur on reboot/replacement
-  (incl. cert renewal via `user_data_replace_on_change`).** RECOMMENDED (not yet applied): wrap the
-  `dnf` + `aws ssm get-parameter` calls in a retry/wait loop so boot self-heals.
+  (incl. cert renewal via `user_data_replace_on_change`).** FIXED: the boot logic now lives in a
+  network-gated systemd unit (`user_data.sh.tftpl` → `provision-webapp.service`) that retries until the
+  endpoints answer, so a fresh/replaced box self-provisions with no manual re-run.
+- **Unpinned AMI locked us out of SSM (2026-07-22)** — `data.aws_ami` used `most_recent = true`, so a
+  `terraform apply` that replaced the EC2 jumped to a brand-new AL2023 build
+  (`al2023-ami-2023.12.20260720.0-kernel-6.18`) whose `amazon-ssm-agent` **would not register** in this
+  endpoint-only VPC. Symptom: `healthcheck.sh` `SSM ping: None` (can't shell in) **while the webapp kept
+  serving** — nginx is a separate service, so the site was fine but management access was gone. Everything
+  else checked out green (endpoints available + private-DNS + SG, IAM profile attached, clock OK via the
+  successful boot-time Parameter-Store fetch), and it survived **both reboot and stop/start** → the agent
+  is baked into the AMI. **Fix: pin `ec2_ami_id` to a known-good image** (used `ami-068b5bc67e48209c1` =
+  `...20260710.0-kernel-6.18`) in `terraform.tfvars`, `apply` → SSM `Online`, `healthcheck.sh` 7 ok/0 fail.
+  **Rule going forward:** keep the AMI pinned; when bumping it, apply and confirm `SSM ping: Online`
+  *before* trusting the new image — a bad agent build silently locks out an SSM-only box on the next replace.
+  Diagnose without a shell via `aws ec2 get-console-output --latest` (Nitro truncates to early boot) and the
+  control-plane checks in `healthcheck.sh`.
 
 ## TODO / pending
 **Done:** bootstrap + apply (29 resources), IT's FortiGate side, tunnel UP, end-to-end browser test.

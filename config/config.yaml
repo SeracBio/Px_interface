@@ -55,14 +55,13 @@ CHEMLIB_PATH: /home/gtamo/MS_ML/data/chemical_libs/SERAC_lib.csv
 DFRAW_PATH: /home/gtamo/Px_interface/output/MS/df_raw.parquet
 MS_PATH: /home/gtamo/Px_interface/output/MS/MS.parquet
 
-CHEMLIB_OVERWRITE: false
-DFRAW_OVERWRITE: false
-IFACE_OVERWRITE: true           # true -> rebuild + save the interface inputs; false -> load them from IFACE_DIR + free RAM
 IFACE_DIR: output/interface            # iface_df / compounds_df / meas / plate2date checkpoint for the 3D interface
 VALIDATION_PLATE_SUFFIXES:         # plate-name suffixes forming a validation stem (…WT/…MLN/…KO shown side by side)
 - WT
 - MLN
 - KO
+GENE_SIZE_BUCKETS: [6, 8, 10, 12, 15, 20]   # 3D dot px by #compounds the gene is significant in: 1,2,3,4,5,>5
+GENE_RING_PX: 2                              # thickness (px) of the dark ring around each gene dot (gl3d caps marker outlines, so the ring is drawn as a larger dot under the fill)
 
 CONTAMINANTS: /home/gtamo/MS_ML/data/MS/20260611_contaminants.csv
 CONTROLS: 
@@ -71,3 +70,7 @@ CONTROLS:
 
 # disease association research:
 GENE_RESEARCH: /mnt/c/Users/gtamo/Desktop/GT/disease_association/20260623_10Kgenes_research.json
+
+CHEMLIB_OVERWRITE: false
+DFRAW_OVERWRITE: false
+IFACE_OVERWRITE: false           # true -> rebuild + save the interface inputs; false -> load them from IFACE_DIR + free RAM
