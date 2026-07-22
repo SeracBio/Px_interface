@@ -1385,6 +1385,10 @@ _INTERFACE_INJECT = '''
     activities.forEach(function(a) {
       tickedAct[a] = actDefaults ? (actDefaults.indexOf(a) !== -1) : true;
     });
+    // Current MS-score (z) slider window, set by applyRanges. The MS slider filters each compound
+    // experiment by its OWN per-(gene,compound,plate) MS score (plate-row index 8), NOT the gene's
+    // plotted z (which stays at the gene max so dots keep their position); see geneHasVisibleCompound.
+    var msLo = -Infinity, msHi = Infinity;
     // Control-compound filter: a single tickbox in the Activity panel. When OFF,
     // every entry whose compound id is a control is hidden everywhere — panel list,
     // volcanoes, and gene greying — exactly like an activity level being unticked.
@@ -1567,15 +1571,11 @@ _INTERFACE_INJECT = '''
           "scene.xaxis.visible": !two,
           // 2D: 'pan' lets you drag the plot to reposition it (and scroll to zoom)
           // without rotating out of the flat view; 3D restores rotate (turntable).
-          "scene.dragmode": two ? "pan" : "turntable",
-          // SAR (x) axis title: gl3d won't place the native x-axis title readably in this layout,
-          // so show it as a paper annotation near the SAR (bottom-right) axis in 3D only. 2D looks
-          // straight down this axis and stays unlabelled by design. Uses layout.annotations (unused elsewhere).
-          "annotations": two ? [] : [{text: "SAR predictability", showarrow: false,
-            xref: "paper", yref: "paper", x: 0.70, y: 0.06, xanchor: "center", yanchor: "bottom",
-            font: {size: 13, color: "#2a3f5f"}, bgcolor: "rgba(255,255,255,0.78)",
-            bordercolor: "#cccccc", borderpad: 2}]
+          "scene.dragmode": two ? "pan" : "turntable"
         });
+        // Re-run the label pass so the SAR (x) axis annotation is added/removed for the new mode.
+        // Deferred so it lands after the camera relayout settles (avoids a merge/clobber race).
+        setTimeout(refreshLabelsHook, 0);
       }
       tg.addEventListener("click", function (e) {
         var seg = e.target.closest(".seg");
@@ -1722,7 +1722,7 @@ _INTERFACE_INJECT = '''
             if (pl[6]) continue;   // completion (context) rows don't make a gene "have a compound"
             var plateOk = (!plates.length) || ticked[pl[0]];
             var actOk = (!activities.length) || !pl[3] || tickedAct[pl[3]];
-            if (plateOk && actOk) return true;
+            if (plateOk && actOk && msOk(pl)) return true;
           }
         } else {
           return true;   // single-volcano (non-plate) entry — always counts
@@ -1775,6 +1775,9 @@ _INTERFACE_INJECT = '''
     //   * a base64 string                                    (single-volcano legacy mode).
     // A plate-row is visible only if BOTH its plate and its activity are ticked.
     function isPaged(t) { return Array.isArray(t[3]); }
+    // A plate-row passes the MS slider if its per-compound MS score (pl[8]) is in the window.
+    // Rows without a score (null — e.g. completion rows) are never dropped by the MS filter.
+    function msOk(pl) { var v = pl[8]; return v == null || (v >= msLo && v <= msHi); }
     // pl[6] flags a validation-stem "completion" row — a condition (e.g. KO) where the gene
     // is NOT significant, shown only so the WT/MLN/KO volcanoes stay side-by-side complete.
     // Real (hit) rows obey the plate + activity ticks; completion rows ride along whenever
@@ -1782,7 +1785,7 @@ _INTERFACE_INJECT = '''
     // bypass the activity filter so an off-activity KO still appears next to its WT hit).
     function visPlates(t) {
       var real = t[3].filter(function(pl) {
-        return !pl[6] && ticked[pl[0]] && (!activities.length || !pl[3] || tickedAct[pl[3]]);
+        return !pl[6] && ticked[pl[0]] && (!activities.length || !pl[3] || tickedAct[pl[3]]) && msOk(pl);
       });
       if (real.length === t[3].length) return real;   // no completion rows -> fast path
       var okStems = {};
@@ -2504,10 +2507,28 @@ _INTERFACE_INJECT = '''
         Object.keys(shownPinSet()).forEach(function(g) {
           var c = _gx[g]; if (c) cand.push({x: c[0], y: c[1], z: c[2], text: g});
         });
-        Plotly.relayout(gd, {"scene.annotations": cand.map(function(c) {
+        var anns = cand.map(function(c) {
           return {x: c.x, y: c.y, z: c.z, text: c.text, showarrow: false,
                   yshift: 9, font: {size: 11, color: "#000"}};
-        })});
+        });
+        // SAR (x) axis title as a scene annotation anchored to the x-axis midpoint (bottom-front
+        // edge) — it rides the cube, so it stays ON the axis and rotates with it, unlike a paper
+        // label. 3D ONLY: the 2D view looks straight down this axis and stays unlabelled by design.
+        var _seg2d = document.querySelector("#disp-toggle .seg2d");
+        if (R.x && R.y && R.z && !(_seg2d && _seg2d.classList.contains("active"))) {
+          // gl3d renders its OWN x-axis title off-screen in this wide layout, so we place the label
+          // as a scene annotation ON the SAR (x) axis. gl3d always draws that axis on the MS floor
+          // (z=min) and on whichever association (y) edge faces the viewer at the bottom; that edge
+          // is y_max when eye.y and eye.z share a sign, else y_min. Calibrated against the rendered
+          // x-ticks at default / side / below cameras, so the label rides the axis through rotation.
+          var _eye = (gd._fullLayout.scene && gd._fullLayout.scene.camera && gd._fullLayout.scene.camera.eye) || {y: 1, z: 1};
+          anns.push({x: (R.x.min + R.x.max) / 2,
+                     y: (_eye.y * _eye.z > 0) ? R.y.max : R.y.min,
+                     z: R.z.min,
+                     text: "SAR predictability", showarrow: false, yshift: -22,
+                     font: {size: 13, color: "#2a3f5f"}});
+        }
+        Plotly.relayout(gd, {"scene.annotations": anns});
       }
       function applyRanges() {
         var b = {};
@@ -2524,6 +2545,9 @@ _INTERFACE_INJECT = '''
           b[a] = [(loV <= R[a].min + st) ? -Infinity : loV,
                   (hiV >= R[a].max - st) ?  Infinity : hiV];
         });
+        // The MS (z) slider filters each compound experiment by its own MS score, not the gene's
+        // plotted z (its max) — so dots keep their position while the panel prunes out-of-range hits.
+        msLo = b.z[0]; msHi = b.z[1];
         var total = 0, masks = {}, _pinSet = shownPinSet();
         R.areaTraces.forEach(function(ti) {
           var o = orig[ti]; if (!o) return;
@@ -2535,7 +2559,8 @@ _INTERFACE_INJECT = '''
               ? !!_pinSet[o.text[k]]
               : (o.x[k] >= b.x[0] && o.x[k] <= b.x[1]
                    && o.y[k] >= b.y[0] && o.y[k] <= b.y[1]
-                   && o.z[k] >= b.z[0] && o.z[k] <= b.z[1]
+                   // z (MS) is NOT range-tested on the gene's plotted max — the MS window (msLo/msHi)
+                   // is applied per compound experiment inside geneHasVisibleCompound instead.
                    && geneHasVisibleCompound(o.text[k])
                    && depAllowed(o.text[k])
                    && confAllowed(o.text[k])
@@ -2607,6 +2632,15 @@ _INTERFACE_INJECT = '''
       // Toggling a disease area in the legend changes trace visibility (plotly fires
       // plotly_restyle); re-derive labels so hidden areas drop their labels too.
       if (gd.on) gd.on("plotly_restyle", refreshLabels);
+      // Re-place the SAR axis annotation when the camera rotates (it must follow the front-bottom
+      // x-edge). React ONLY to camera changes — not our own scene.annotations relayout — to avoid a
+      // loop; rAF-debounce so a rotate drag coalesces to one rebuild per frame.
+      var _camRaf = 0;
+      if (gd.on) gd.on("plotly_relayout", function(e) {
+        if (!e || _camRaf) return;
+        if (!Object.keys(e).some(function(k) { return k.indexOf("camera") !== -1; })) return;
+        _camRaf = requestAnimationFrame(function() { _camRaf = 0; refreshLabels(); });
+      });
       // V-mode legend keys are empty proxy traces, so Plotly's default toggle would do nothing
       // to the real points (they live in the disease-area traces). Intercept click/double-click on
       // those keys and filter the points by FBXO31 category instead. Click = toggle one category;
@@ -3601,6 +3635,7 @@ def plot_3d_interface(
                 has_ng = 'n_genes' in compounds_df.columns   # genes measured in the experiment
                 has_mbid = 'molecule_batch_id' in compounds_df.columns  # per-plate batch id
                 has_comp = 'is_completion' in compounds_df.columns  # ride-along validation-stem condition (gene not significant here)
+                has_ms = 'ms_score' in compounds_df.columns  # per-(gene,compound,plate) MS score for the slider
                 import re as _re_v   # validation-plate matcher: only these rows carry a contrast id (vk) for the trace
                 _vp_suf = [str(s).upper() for s in (plate_validation_suffixes or [])]
                 _vp_re = _re_v.compile('(' + '|'.join(_vp_suf) + ')$', _re_v.I) if _vp_suf else None
@@ -3633,6 +3668,7 @@ def plot_3d_interface(
                         _ng = cg['n_genes'].to_numpy() if has_ng else None
                         _mbid = cg['molecule_batch_id'].to_numpy() if has_mbid else None
                         _comp = cg['is_completion'].to_numpy() if has_comp else None
+                        _ms = cg['ms_score'].to_numpy() if has_ms else None
                         _vk = cg[vkey_col].to_numpy()
                         for pi in range(len(cg)):
                             lf = _logfc[pi]
@@ -3645,6 +3681,7 @@ def plot_3d_interface(
                                 (str(_mbid[pi]) if has_mbid and pd.notna(_mbid[pi]) else ''),
                                 (1 if has_comp and bool(_comp[pi]) else 0),
                                 (str(_vk[pi]) if (_is_valp(_plate[pi]) and pd.notna(_vk[pi])) else ''),  # contrast id (validation rows only) for the trace
+                                (round(float(_ms[pi]), 3) if (has_ms and pd.notna(_ms[pi])) else None),  # per-compound MS score (pl[8]); null on completion rows
                             ])
                             vk = _vk[pi]
                             if pd.notna(vk):

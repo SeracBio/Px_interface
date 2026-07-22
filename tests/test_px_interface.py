@@ -163,6 +163,25 @@ class TestDataPipeline(unittest.TestCase):
         self.assertTrue(set(self.output.compounds_df['compound'])
                         .issubset(set(self.data.serac_df['compound'])))
 
+    def test_compounds_df_ms_score(self):
+        """Each compound experiment carries its OWN per-(gene,compound,plate) MS score, on the
+        same scale as the plotted z (the gene's max). Real (non-completion) hit rows always have
+        a score; completion rows are null (they bypass the MS filter). No gene's per-entry MS may
+        exceed its plotted z — the dot sits at the gene max, entries are that max or below."""
+        cdf = self.output.compounds_df
+        # the per-compound MS column reached compounds_df
+        self.assertIn('ms_score', cdf.columns)
+        comp = cdf['is_completion'].fillna(False)
+        # every real hit row has a numeric MS score
+        self.assertEqual(int(cdf.loc[~comp, 'ms_score'].isna().sum()), 0)
+        # completion rows carry no score (never filtered out by the MS slider)
+        self.assertTrue(cdf.loc[comp, 'ms_score'].isna().all())
+        # coherence: a gene's largest per-entry MS never exceeds its plotted z (the gene max)
+        gmax = cdf.loc[~comp].groupby('gene')['ms_score'].max()
+        z = self.output.iface_df.set_index('gene')['ms_score']
+        j = pd.concat([gmax.rename('e'), z.rename('z')], axis=1).dropna()
+        self.assertEqual(int((j['e'] > j['z'] + 1e-6).sum()), 0)
+
     def test_validation_stem_completion(self):
         """Stem completion adds ride-along rows for measured-but-not-significant conditions,
         and omits conditions where the compound was never run.
@@ -284,6 +303,33 @@ class TestRender(unittest.TestCase):
         self.assertEqual(num('AREA_RING_TRACE'), 1.0)
         # pin ring underlay is emitted and sits just below (before) the pin fill trace
         self.assertEqual(num('PIN_RING_TRACE'), num('PIN_TRACE') - 1)
+
+
+    def test_ms_score_platerows(self):
+        """The MS slider filters each compound experiment by its own MS score. Every real
+        plate-row in the injected panel must carry a numeric MS at index 8, and the client must
+        wire that value into the per-entry filter (msOk / msLo / msHi)."""
+        import re
+        js = open(os.path.join(self.out_dir, 'interfaces', 'Serac_Px_interface_data.js')).read()
+        m = re.search(r'__GENE_COMPOUNDS__ = JSON\.parse\("(.*?)"\);', js, re.S)
+        gc = json.loads(json.loads('"' + m.group(1) + '"'))
+        vals, real_rows = [], 0
+        for entries in gc.values():
+            for t in entries:
+                if isinstance(t, list) and len(t) > 3 and isinstance(t[3], list):
+                    for pl in t[3]:
+                        if not pl[6]:              # skip completion rows (null MS by design)
+                            real_rows += 1
+                            if pl[8] is not None:
+                                vals.append(pl[8])
+        # real plate-rows exist and carry a numeric MS at index 8
+        self.assertGreater(real_rows, 0)
+        self.assertEqual(len(vals), real_rows)
+        self.assertTrue(all(isinstance(v, (int, float)) for v in vals))
+        # the client filter is wired: msOk() gated on the msLo/msHi window
+        html = open(os.path.join(self.out_dir, 'interfaces', 'Serac_Px_interface.html')).read()
+        self.assertIn('function msOk(pl)', html)
+        self.assertIn('msLo = b.z[0]', html)
 
 
 if __name__ == '__main__':

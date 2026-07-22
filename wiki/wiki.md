@@ -28,6 +28,27 @@ _Durable, aggregate memory of this repo — read at session start. Aggregate onl
   were dropped (they were unused); `get_df` still comes from the sibling `CDD_Vault_API` repo via
   `sys.path` → `~/CDD_Vault_API/python`.
 
+## Compound prioritization / selection reconciliation — `vignettes/MS_Prioritization.ipynb` (2026-07-22)
+Notebook to reproduce the interface's compound selection outside the browser and produce a deliverable table.
+- **KEY GOTCHA — the interface's association (y) axis is the OpenTargets `overall_score` per gene
+  (`OT_CACHE`, max per gene), NOT `mscore['association_score']`** (which varies per plate, so it's wrong to
+  filter on). This was the whole reconciliation blocker. At `ms_score>10 & assoc>0.6`: 5,127 genes clear ms>10;
+  adding assoc>0.6 gives **839 genes via `mscore.association_score`** vs **1,723 via OT** (the interface uses OT).
+- **The interface's gene z = `mscore.groupby('genes')['ms_score'].max()`** (best plate per gene) — the dot's fixed
+  *position* only; the MS slider filters per compound experiment on its own `ms_score` (see the per-compound MS bullet
+  in the interface section). Compounds =
+  significant-down hits from `measure` (`significant==1 & logfc<0`), non-noisy plates (`Plate12/15/23` dropped),
+  compound in `serac_df`, `activity != 'Silent'`, one per (gene,compound,plate). Reproduces ≈2,252 compounds for
+  the MS>10 & assoc>0.6 & Single+Low view (2,297 before the drop-plates + serac-library filters close the gap).
+- **`USE_MAX_MS` toggle** (reconcile cell): max>ctf (gene set = "any plate clears ctf", interface behaviour) vs
+  as-is per (gene,plate) — same gene set, but as-is is stricter on hits (a hit counts only on the plate where the
+  gene actually cleared the ctf) → fewer compounds.
+- **Deliverable table (pptx):** `## making the deliverable table:` cell builds a 3×6 grid — rows = MS ctf {5,10,20},
+  cols = 3 activity groups {Single / +Low / +Medium(11-25)} × assoc ctf {0.6,0.7} — of distinct **NEW** compounds
+  (not in `val_cmps`, `compound_no ≥ 6400`) meeting each threshold, and emits a styled `python-pptx` table (blue/
+  purple/orange group headers, thick black group separators) to `GTLOCAL/Claude_ppt/YYYYMMDD_Px_selection_deliverable.pptx`.
+  Uses `USE_MAX_MS=False`. `compound_no` = int of `compound.replace('SRB-','')`. `python-pptx==1.0.2` added to requirements.
+
 ## How it runs
 - Launch Jupyter from the **repo root**; cell 0 `%cd ../.` sets cwd so `import python.functions` resolves.
 - `IFACE_OVERWRITE=True` rebuilds the four render inputs (`iface_df`, `compounds_df`, `meas`,
@@ -308,14 +329,34 @@ data shares the namespace); no real PNGs so thumbnails are RDKit-rendered from `
   entirely (2026-07-21)** with its `__AXIS_LABELS__`/`__AXIS_HELP__` globals + the `axis_help` param + `_axis_help`
   dict — axis meanings still show on the range-panel slider labels. Verified in-browser (swiftshader WebGL): size key
   stacked above the FBX legend, dots at varied sizes with thick rings, 0 console errors.
-- **SAR axis title in 3D only (2026-07-22):** removing `#axis-legend` also dropped the only on-plot mention of the SAR
+- **SAR axis title in 3D only (2026-07-22):** removing `#axis-legend` dropped the only on-plot mention of the SAR
   (x) axis in the default 2D view — which looks straight down that axis, so gl3d can't render a native x-axis title
-  there (verified: forcing `xaxis.visible` in 2D shows nothing). Native gl3d also won't place the 3D x-axis title
-  readably in this dense, fitBox-tuned layout (its title lands off the bottom/right edge; the plot renders wider/taller
-  than the viewport). Fix: **`setMode` adds a paper annotation** `"SAR predictability"` (`layout.annotations`, unused
-  elsewhere) at `x=0.70,y=0.06` (paper, near the bottom-right SAR axis) **in 3D, and clears it (`[]`) in 2D** — per the
-  user's ask, 2D stays unlabelled. y/z axis titles (association/MS) show natively. Verified: chip visible near the SAR
-  axis in 3D, absent in 2D, 0 console errors.
+  there (verified: forcing `xaxis.visible` in 2D shows nothing). Native gl3d also won't place the *3D* x-axis title
+  readably in this fitBox-tuned layout (it lands off the bottom/right edge; the plot renders larger than the viewport).
+  A **paper annotation** was tried first but *floats* (paper coords don't track the axis as the camera/zoom/window
+  change). Fix: **`refreshLabels` appends a scene annotation** `"SAR predictability"` at a bottom x-edge (data coords,
+  so it rides the cube) — **3D only** (guarded by the `#disp-toggle .seg2d` active check; 2D stays unlabelled per the
+  user's ask). **Tracks rotation (fixed 2026-07-22):** gl3d always draws the x-axis on the MS floor (`z=z_min`) and on
+  the association (y) edge facing the viewer at the bottom. That edge is **`y = (eye.y·eye.z > 0) ? y_max : y_min`,
+  `z = z_min`** — calibrated by rendering the actual x-ticks (enlarged, red) at default / side / below cameras and
+  matching a per-edge marker line to them. (The earlier per-axis `eye`-sign rule *and* a gl-axes3d `lastCubeProps.axis`
+  decode both failed: the edge choice is a *coupled* function of the whole camera — e.g. default `axis=[-1,-1,-1]`→y_max
+  vs below-view `axis=[-1,-1,1]`→y_min with `axis[1]` unchanged — so neither separable rule holds.) A `plotly_relayout`
+  listener (camera-key-guarded to avoid a scene.annotations→relayout loop, rAF-debounced) re-runs `refreshLabels` on
+  rotate; `setMode` does `setTimeout(refreshLabelsHook, 0)` so the 2D/3D toggle adds/removes it. Needs `refreshLabels`
+  to run — it does whenever in-range dots exist (real data; the synthetic 0-dot default doesn't, which only affects
+  testing). Verified with dots at 4 orientations incl. a below-view: the label rides the SAR axis; 0 console errors.
+- **MS slider filters per compound, not the gene max (2026-07-22):** the dot's z stays at the gene's max MS
+  (`mscore.groupby('genes')['ms_score'].max()`) so genes keep their position under any filter — but the MS range
+  slider now filters each **compound experiment** by its OWN per-(gene,compound,plate) MS score. That score is sourced
+  from the SAME metric as the position (`FBX_MSSCORE` per uniquecontrast ∪ `df_raw`, FBX wins on shared ucs), attached
+  to `compounds_df.ms_score`, and carried into each panel plate-row at **index 8** (`pl[8]`; null on completion rows).
+  Client: `msLo/msHi` are set from the z-slider window in `applyRanges` (the gene-max z coordinate test is *removed*
+  from the in-range predicate), and `msOk(pl)` gates every real plate-row inside `visPlates` + `geneHasVisibleCompound`.
+  So out-of-range experiments prune from the compound panel/hover/export exactly like the Plate/Activity ticks, and a
+  gene's dot drops when it has no in-range experiment left — while its plotted position never moves. Invariant (tested):
+  a gene's max per-entry MS never exceeds its plotted z. Verified in-browser: MS≥6 → 291→49 dots, 0 positions moved,
+  reset → 291.
 - **Thick rings via an underlay dot (2026-07-21):** gl3d **hard-caps `marker.line.width`** — bumping it does nothing
   (proven in-browser: width 3.5 vs 8 render identically). So the visible ring is drawn as a **larger dot underneath
   each fill**: a dedicated ring-underlay trace holds one dot per visible gene at `sizeOf(gene) + 2*RING_PX`, in the

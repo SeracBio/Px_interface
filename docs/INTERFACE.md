@@ -163,10 +163,21 @@ overlay, and the count.
 
 ```
 mask(gene) = soloPins ? isPinned(gene)
-           : inSliderRange(x,y,z) AND geneHasVisibleCompound
+           : inSliderRange(x,y)  # SAR + association only; z (MS) is NOT tested on the gene's max
+             AND geneHasVisibleCompound   # honours plate + activity + MS-slider ticks per experiment
              AND depAllowed AND confAllowed AND lofAllowed AND valAllowed
              AND (COLOR_MODE≠'V' OR valCatShown[category])   AND not hidden
 ```
+
+**MS (z) slider filters per compound experiment, not the gene max.** The dot's z stays at the gene's
+max MS so genes keep their position under any filter. The z-slider window (`msLo/msHi`, set in
+`applyRanges`) instead filters each compound experiment by its OWN per-(gene,compound,plate) MS score,
+carried in each panel plate-row at **index 8** (`pl[8]`; `null` on completion rows, which bypass it).
+`msOk(pl)` gates every real plate-row inside `visPlates` + `geneHasVisibleCompound`, so out-of-range
+experiments prune from the compound panel / hover / export like the Plate/Activity ticks, and a gene's
+dot drops when no in-range experiment remains — while its plotted position never moves. The per-entry
+score comes from the same metric as the position (`FBX_MSSCORE` per uniquecontrast ∪ `df_raw`), so a
+gene's largest per-entry MS never exceeds its plotted z.
 
 ### Feature blocks (all piggyback on `applyRanges`)
 
@@ -232,8 +243,12 @@ reads them. Every active global is both set and read (no orphans). Heavy per-gen
   and re-applied by `fitBox` — to make room). It is a fixed gene property — the filters change which
   dots *show*, never their size. (The old bottom-left `#axis-legend` + its `__AXIS_LABELS__`/`__AXIS_HELP__`
   globals were removed 2026-07-21; axis meanings live on the range-panel slider labels.) The **SAR (x) axis
-  title is shown in 3D only** as a paper annotation added by `setMode` (`layout.annotations`, cleared in 2D) —
-  gl3d can't render the native x-axis title readably here, and the 2D view looks straight down that axis.
+  title is shown in 3D only** as a *scene* annotation appended by `refreshLabels` at the bottom x-edge
+  (data coords → rides the cube). gl3d always draws that axis on the MS floor and the viewer-facing
+  association edge, so the label sits at `z=z_min`, `y=(eye.y·eye.z>0)?y_max:y_min` (calibrated against
+  the rendered x-ticks at default/side/below cameras — a single per-axis sign rule fails because gl3d's
+  edge choice is coupled across the whole camera). A camera-guarded `plotly_relayout` listener re-runs
+  `refreshLabels` on rotate, and `setMode` re-runs it on the 2D/3D toggle. Guarded to 3D (2D looks down that axis).
 - **Ring underlay** → `__AREA_RING_TRACE__` / `__PIN_RING_TRACE__` / `__RING_PX__`. gl3d caps outline
   width, so each dot's ring is a larger dot (size `= fill + 2*RING_PX`, ring colour) drawn in a
   dedicated trace *under* the fills. `applyRanges` repaints the area underlay from the masks

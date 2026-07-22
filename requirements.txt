@@ -13,5 +13,6 @@ tqdm==4.67.3
 PyYAML==6.0.3
 ipykernel==7.2.0
 requests==2.33.1
+python-pptx==1.0.2   # deliverable-table slide (MS_Prioritization.ipynb); pulls lxml + XlsxWriter
 # get_df (serac_df in the build cell) comes from the sibling CDD_Vault_API repo
 # (~/CDD_Vault_API/python on sys.path) — not a pip package.

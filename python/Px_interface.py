@@ -339,12 +339,23 @@ class OUTPUT():
             _hit = meas.loc[(meas['significant'] == 1) & (meas['logfc'] < 0), ['genes', 'uniquecontrast', 'logfc', 'pvalue']]
             hits = _hit.merge(rep, on='uniquecontrast', how='left').rename(columns={'genes': 'gene'})
             hits = hits[hits['compound'].notna() & hits['compound'].str.startswith('SRB-')]
+            # Per-(gene,compound,plate) MS score for the slider, taken from the SAME source as the
+            # plotted z (mscore): FBX_MSSCORE per experiment, falling back to df_raw (FBX wins on
+            # shared uniquecontrasts). Same scale as the gene-max z, so a dot stays put while the
+            # slider filters each of its compound experiments by that experiment's own MS score.
+            _shared_uc = set(data.FBX_MSSCORE['uniquecontrast'].astype(str))
+            ms_per_uc = (pd.concat([data.FBX_MSSCORE[['genes', 'uniquecontrast', 'ms_score']],
+                                    data.df_raw.loc[~data.df_raw['uniquecontrast'].astype(str).isin(_shared_uc),
+                                                    ['genes', 'uniquecontrast', 'ms_score']]])
+                         .dropna(subset=['ms_score'])
+                         .groupby(['genes', 'uniquecontrast'])['ms_score'].max())
+            hits['ms_score'] = [ms_per_uc.get((g, u)) for g, u in zip(hits['gene'], hits['uniquecontrast'])]
             hits = hits.sort_values(['gene', 'compound', 'plate', 'logfc'])
             compounds_df = (hits.groupby(['gene', 'compound', 'plate'], as_index=False).first()
                             .merge(chemlib, on='compound', how='left')
                             .merge(n_genes, on='uniquecontrast', how='left'))
             compounds_df = compounds_df[['gene', 'compound', 'plate', 'activity', 'n_genes',
-                                        'uniquecontrast', 'logfc', 'smiles']]
+                                        'uniquecontrast', 'logfc', 'ms_score', 'smiles']]
             # keep only compounds present in serac_df (CDD AJ/AK library); exclude the rest from the viz
             _n0c = compounds_df['compound'].nunique()
             compounds_df = compounds_df[compounds_df['compound'].isin(chemlib['compound'])]
@@ -412,6 +423,7 @@ class OUTPUT():
                 _cv = [p.startswith(c) for p, c in zip(_cp, add_df.loc[_cm, 'compound'].astype(str))]
                 add_df.loc[_cm, 'molecule_batch_id'] = _cp.where(pd.Series(_cv, index=_cp.index))
                 add_df['is_completion'] = True
+                add_df['ms_score'] = float('nan')   # completion rows (gene not significant here) bypass MS filtering
                 compounds_df = pd.concat([compounds_df, add_df[compounds_df.columns]], ignore_index=True)
             print(f'> validation-stem completion: added {len(_add):,} ride-along condition rows '
                   f'across {len({(a["gene"], a["compound"]) for a in _add}):,} (gene,compound) pairs')
