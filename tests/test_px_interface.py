@@ -120,9 +120,13 @@ class TestDataPipeline(unittest.TestCase):
         self.assertIn('date', m.columns)
 
     def test_combine_mscore(self):
-        """MS-SCORE is one row per (genes, plate)."""
-        # no duplicate (genes, plate) keys survive the source-of-truth dedup
-        self.assertFalse(self.output.mscore.duplicated(['genes', 'plate']).any())
+        """MS-SCORE is one row per (genes, uniquecontrast) — per compound EXPERIMENT, not collapsed
+        to the best compound per (genes, plate). A gene-plate may carry several compounds now."""
+        ms = self.output.mscore
+        # no duplicate (genes, uniquecontrast) keys survive the dedup
+        self.assertFalse(ms.duplicated(['genes', 'uniquecontrast']).any())
+        # per-compound granularity: at least one (genes, plate) carries more than one compound row
+        self.assertGreater(int(ms.groupby(['genes', 'plate']).size().max()), 1)
 
     def test_combine_report(self):
         """REPORT is one row per uniquecontrast, with a plate date."""

@@ -49,7 +49,7 @@ Three classes: **`PARAMS`** (reads `config.yaml`), **`DATA`** (loads raw inputs)
 | Step | Method | What it produces |
 |---|---|---|
 | Load | `DATA.load_new_df` / `load_old_df` / `load_chemical_lib_df` | `df_raw`, `MS`, `FBX_MEASURE/MSSCORE/REPORT`, `serac_df`, `target2R2_df`, `uc2compound` |
-| Combine | `OUTPUT.combine_datasets` | `measure`, `mscore`, `report`, `plate2date` (FBX wins on shared experiments / (gene,plate) / contrasts) |
+| Combine | `OUTPUT.combine_datasets` | `measure`, `mscore` (both per-compound, one row per (gene,uniquecontrast)), `report`, `plate2date` — FBX wins on shared uniquecontrasts |
 | Validation lists | `OUTPUT.get_de_validated` | `validated_targets`/`devalidated_targets`, `validated_compounds`/`devalidated_compounds` (FBXO31 ligase-dependent vs not) |
 | Render inputs | `OUTPUT.get_iface` | **the four render inputs** — `iface_df`, `compounds_df`, `meas`, `plate2date` |
 | Render | `OUTPUT.build_interface` | delegates to `plot_3d_interface`; owns colour dicts + the panels.json cache |
@@ -173,11 +173,18 @@ mask(gene) = soloPins ? isPinned(gene)
 max MS so genes keep their position under any filter. The z-slider window (`msLo/msHi`, set in
 `applyRanges`) instead filters each compound experiment by its OWN per-(gene,compound,plate) MS score,
 carried in each panel plate-row at **index 8** (`pl[8]`; `null` on completion rows, which bypass it).
-`msOk(pl)` gates every real plate-row inside `visPlates` + `geneHasVisibleCompound`, so out-of-range
+`msOk(pl)` gates every real plate-row inside `visPlates` + `geneHasVisibleCompound` (a hit with **no**
+score — one absent from the `mscore` table — passes ONLY when the MS filter is fully open, so it never
+leaks past a real cutoff and the count reconciles with an `mscore`-based reconcile), so out-of-range
 experiments prune from the compound panel / hover / export like the Plate/Activity ticks, and a gene's
 dot drops when no in-range experiment remains — while its plotted position never moves. The per-entry
-score comes from the same metric as the position (`FBX_MSSCORE` per uniquecontrast ∪ `df_raw`), so a
-gene's largest per-entry MS never exceeds its plotted z.
+score comes from the **per-compound `mscore` table** (one row per `(genes, uniquecontrast)`, sourced in
+`combine_datasets`); `compounds_df.ms_score` is taken straight from it, and the dot's z is that same
+table's per-gene max — so a gene's largest per-entry MS is *exactly* its plotted z (fully consistent).
+
+Range sliders snap to a **"nice" step** (`_nice_step`: 1/2/5·10ⁿ, ~100–250 divisions) with the grid ends
+rounded to step multiples, so round handle values land **exactly** — MS step = 1 (so "10" filters at
+10.0, not ~9.4), association/SAR step = 0.005 (so 0.6 is exact). Set in `_axis_cfg` (`__RANGES__`).
 
 ### Feature blocks (all piggyback on `applyRanges`)
 

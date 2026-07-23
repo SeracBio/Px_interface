@@ -4,6 +4,7 @@ _Durable, aggregate memory of this repo — read at session start. Aggregate onl
 ## Where we are now
 - **Focus:** building the per-gene 3D Px interface (`Serac_Px_interface.html`) via `fn.plot_3d_interface`.
 - **Architecture doc:** [`docs/INTERFACE.md`](../docs/INTERFACE.md) — full map of how the build fits together
+- **Data-transform doc:** [`docs/data_transform.md`](../docs/data_transform.md) — how `measure`/`mscore`/`report` (+ `df_raw`/`MS`/FBX) are derived from the raw files
   (pipeline → `plot_3d_interface` → volcano cache → `_INTERFACE_INJECT` JS → the JS↔Python `__X__` contract +
   invariants). Created 2026-07-21 from a multi-agent audit; read it before non-trivial interface edits.
 - **Audit + simplification pass (2026-07-21, multi-agent):** `functions.py` **7023→6048 lines (−14%)**.
@@ -34,9 +35,16 @@ Notebook to reproduce the interface's compound selection outside the browser and
   (`OT_CACHE`, max per gene), NOT `mscore['association_score']`** (which varies per plate, so it's wrong to
   filter on). This was the whole reconciliation blocker. At `ms_score>10 & assoc>0.6`: 5,127 genes clear ms>10;
   adding assoc>0.6 gives **839 genes via `mscore.association_score`** vs **1,723 via OT** (the interface uses OT).
-- **The interface's gene z = `mscore.groupby('genes')['ms_score'].max()`** (best plate per gene) — the dot's fixed
-  *position* only; the MS slider filters per compound experiment on its own `ms_score` (see the per-compound MS bullet
-  in the interface section). Compounds =
+- **`mscore` is now PER-COMPOUND (2026-07-23):** `combine_datasets` no longer collapses to the best compound per
+  (gene,plate) — it keeps **one row per (genes, uniquecontrast)** (FBX wins on shared uc, noisy plates dropped, df_raw
+  significant rows for non-FBX uc). The old `.sort_values('ms_score').groupby(['genes','plate']).first()` was dropped.
+  **The 3D dot z = `mscore.groupby('genes')['ms_score'].max()`** (per-gene max) — unchanged positions, since max-of-
+  per-compound = max-of-best-per-plate. `compounds_df.ms_score` is now sourced straight from `mscore` (single source of
+  truth), so the slider filters each experiment by the SAME official score the position is derived from — no more
+  per-uc-vs-per-plate inconsistency. Real-data caveat: ~7/8332 genes shift z *up* slightly (where df_raw beat FBX on a
+  shared gene-plate — previously suppressed by the collapse); everything else identical. **To use per-compound `mscore`
+  in the reconcile notebook, regenerate `Px_MSCORE.parquet`** via the `output.mscore.to_parquet(...)` cell in
+  MS_Interface.ipynb (else the notebook keeps loading the old collapsed file). Compounds =
   significant-down hits from `measure` (`significant==1 & logfc<0`), non-noisy plates (`Plate12/15/23` dropped),
   compound in `serac_df`, `activity != 'Silent'`, one per (gene,compound,plate). Reproduces ≈2,252 compounds for
   the MS>10 & assoc>0.6 & Single+Low view (2,297 before the drop-plates + serac-library filters close the gap).

@@ -1777,7 +1777,13 @@ _INTERFACE_INJECT = '''
     function isPaged(t) { return Array.isArray(t[3]); }
     // A plate-row passes the MS slider if its per-compound MS score (pl[8]) is in the window.
     // Rows without a score (null — e.g. completion rows) are never dropped by the MS filter.
-    function msOk(pl) { var v = pl[8]; return v == null || (v >= msLo && v <= msHi); }
+    function msOk(pl) {
+      var v = pl[8];
+      // No score (a hit absent from the mscore table) can't clear an MS threshold — it passes ONLY when
+      // the MS filter is fully open (both handles at the extremes), so it never leaks past a real cutoff.
+      if (v == null) return msLo === -Infinity && msHi === Infinity;
+      return v >= msLo && v <= msHi;
+    }
     // pl[6] flags a validation-stem "completion" row — a condition (e.g. KO) where the gene
     // is NOT significant, shown only so the WT/MLN/KO volcanoes stay side-by-side complete.
     // Real (hit) rows obey the plate + activity ticks; completion rows ride along whenever
@@ -4168,10 +4174,22 @@ def plot_3d_interface(
                 _phi = _pm
         _p = _plo
 
+        def _nice_step(span):
+            # a 1/2/5·10ⁿ step giving ~100-250 divisions, so round handle values (MS 10,
+            # association 0.6) land EXACTLY on the grid instead of on min+k·(span/200).
+            if not (span > 0):
+                return 1.0
+            raw = span / 250.0
+            mag = 10.0 ** np.floor(np.log10(raw))
+            return float(next((m * mag for m in (1, 2, 5, 10) if raw <= m * mag), 10 * mag))
+
         def _axis_cfg(v, label):
             lo, hi = float(v.min()), float(v.max())
-            return {'min': lo, 'max': hi, 'step': (hi - lo) / 200 if hi > lo else 1.0,
-                    'lo': float(np.quantile(v, _p)), 'hi': hi, 'label': label}
+            step = _nice_step(hi - lo)
+            smin = float(np.floor(lo / step) * step)   # snap grid ends to step multiples so the
+            smax = float(np.ceil(hi / step) * step)    # handle can reach round numbers precisely
+            _lo = float(np.clip(round(float(np.quantile(v, _p)) / step) * step, smin, smax))
+            return {'min': smin, 'max': smax, 'step': step, 'lo': _lo, 'hi': smax, 'label': label}
         ranges_cfg = {
             'x': _axis_cfg(xv, x_label),
             'y': _axis_cfg(yv, y_label),

@@ -190,22 +190,28 @@ class OUTPUT():
               f'{self.measure["uniquecontrast"].nunique():,} experiments | '
               f'{self.measure["compound"].nunique():,} compounds | {self.measure["genes"].nunique():,} genes')
 
-        ## 2. MS-SCORE = df_ms UNION FBX_MSSCORE per (gene,plate) (FBX wins on shared keys).
-        # FBX_MSSCORE was loaded fresh in load_new_df; drop the noisy plates here.
+        ## 2. MS-SCORE = FBX_MSSCORE UNION df_raw(significant), ONE ROW PER (gene, compound experiment).
+        #  Ungrouped (per genes×uniquecontrast) so every compound keeps its OWN ms_score — NOT collapsed
+        #  to the best compound per (gene,plate). The 3D dot position is the per-gene MAX of these (same
+        #  number either way), so positions are unchanged; the extra rows are the runner-up compounds the
+        #  MS slider / reconcile need. FBX wins on shared uniquecontrasts (as in MEASURE). Noisy plates dropped.
         _FBX_MS = data.FBX_MSSCORE[~data.FBX_MSSCORE['plate'].isin(['Plate12', 'Plate15', 'Plate23'])]
         _cols = ['genes', 'plate', 'uniquecontrast', 'compound', 'pg', 'ms_score',
                  'association_score', 'genetic_score', 'literature_score', 'activity',
                  'logfc', 'pvalue', 'significant']
-        fbx_gp = (_FBX_MS.sort_values('ms_score', ascending=False)
-                  .groupby(['genes', 'plate'], as_index=False).first()
-                  .assign(compound=lambda d: d['uniquecontrast'].map(data.uc2compound))
+        fbx_ms = (_FBX_MS.assign(compound=lambda d: d['uniquecontrast'].map(data.uc2compound))
                   .reindex(columns=_cols).assign(source='FBX'))
-        df_ms_std = data.df_ms.rename(columns={'MSPlate': 'plate'}).reindex(columns=_cols).assign(source='df_raw')
-        _fbx_keys = set(fbx_gp[['genes', 'plate']].itertuples(index=False, name=None))
-        _keep = ~df_ms_std.set_index(['genes', 'plate']).index.isin(_fbx_keys)
-        self.mscore = pd.concat([fbx_gp, df_ms_std[_keep]], ignore_index=True)
-        print(f'> combined MS-SCORE: {len(self.mscore):,} (gene,plate) rows '
-              f'(FBX {len(fbx_gp):,}, df_raw {int(_keep.sum()):,})')
+        dr_ms = (data.df_raw[data.df_raw['significant'] == 1].rename(columns={'MSPlate': 'plate'})
+                 .reindex(columns=_cols).assign(source='df_raw'))
+        _shared_uc = set(_FBX_MS['uniquecontrast'].astype(str))
+        self.mscore = pd.concat([fbx_ms, dr_ms[~dr_ms['uniquecontrast'].astype(str).isin(_shared_uc)]],
+                                ignore_index=True)
+        # one row per (gene, uniquecontrast); keep the highest score on any accidental duplicate
+        self.mscore = (self.mscore.sort_values('ms_score', ascending=False)
+                       .drop_duplicates(['genes', 'uniquecontrast']).reset_index(drop=True))
+        print(f'> combined MS-SCORE: {len(self.mscore):,} (gene,compound) rows '
+              f'| {self.mscore.drop_duplicates(["genes", "plate"]).shape[0]:,} (gene,plate) '
+              f'| FBX {int((self.mscore["source"] == "FBX").sum()):,}, df_raw {int((self.mscore["source"] == "df_raw").sum()):,}')
 
         ## 3. REPORT = source-derived per-experiment metadata UNION FBX_REPORT (FBX wins).
         # df_raw side derives real concentration/activity from the raw source exports.
@@ -339,16 +345,10 @@ class OUTPUT():
             _hit = meas.loc[(meas['significant'] == 1) & (meas['logfc'] < 0), ['genes', 'uniquecontrast', 'logfc', 'pvalue']]
             hits = _hit.merge(rep, on='uniquecontrast', how='left').rename(columns={'genes': 'gene'})
             hits = hits[hits['compound'].notna() & hits['compound'].str.startswith('SRB-')]
-            # Per-(gene,compound,plate) MS score for the slider, taken from the SAME source as the
-            # plotted z (mscore): FBX_MSSCORE per experiment, falling back to df_raw (FBX wins on
-            # shared uniquecontrasts). Same scale as the gene-max z, so a dot stays put while the
-            # slider filters each of its compound experiments by that experiment's own MS score.
-            _shared_uc = set(data.FBX_MSSCORE['uniquecontrast'].astype(str))
-            ms_per_uc = (pd.concat([data.FBX_MSSCORE[['genes', 'uniquecontrast', 'ms_score']],
-                                    data.df_raw.loc[~data.df_raw['uniquecontrast'].astype(str).isin(_shared_uc),
-                                                    ['genes', 'uniquecontrast', 'ms_score']]])
-                         .dropna(subset=['ms_score'])
-                         .groupby(['genes', 'uniquecontrast'])['ms_score'].max())
+            # Per-(gene,compound,plate) MS score for the slider — taken straight from the per-compound
+            # mscore table (single source of truth), so the slider filters each experiment by the SAME
+            # official ms_score the dot's z-max is derived from. Keyed by (genes, uniquecontrast).
+            ms_per_uc = self.mscore.dropna(subset=['ms_score']).groupby(['genes', 'uniquecontrast'])['ms_score'].max()
             hits['ms_score'] = [ms_per_uc.get((g, u)) for g, u in zip(hits['gene'], hits['uniquecontrast'])]
             hits = hits.sort_values(['gene', 'compound', 'plate', 'logfc'])
             compounds_df = (hits.groupby(['gene', 'compound', 'plate'], as_index=False).first()
