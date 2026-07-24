@@ -271,6 +271,59 @@ class TestRender(unittest.TestCase):
         # the cache path emits the SAME positions (not an empty map)
         self.assertEqual(cached, fresh)
 
+    def test_volcano_base_dedup(self):
+        """Base-dedup: many (gene,plate) cells share ONE per-experiment base SVG (keyed by
+        experiment, not focal gene), and each cell carries its focal-gene ring position pl[9]
+        for the client to draw the ring. Guards against regressing to one baked file per cell."""
+        import re, os
+        js = open(os.path.join(self.out_dir, 'interfaces', 'Serac_Px_interface_data.js')).read()
+        m = re.search(r'__GENE_COMPOUNDS__ = JSON\.parse\("(.*?)"\);', js, re.S)
+        gc = json.loads(json.loads('"' + m.group(1) + '"'))
+        cells, bases, with_pos = 0, set(), 0
+        for entries in gc.values():
+            for t in entries:
+                if isinstance(t, list) and len(t) > 3 and isinstance(t[3], list):
+                    for pl in t[3]:
+                        cells += 1
+                        if pl[2]:
+                            bases.add(pl[2])
+                        # pl[9] = [fx, fy] focal-gene ring position (fraction of the base image)
+                        if len(pl) > 9 and pl[9]:
+                            with_pos += 1
+                            self.assertEqual(len(pl[9]), 2)
+                            self.assertTrue(all(0.0 <= c <= 1.0 for c in pl[9]))
+        # cells exist and share far fewer base images than there are cells (the dedup)
+        self.assertGreater(cells, 0)
+        self.assertLess(len(bases), cells)
+        # every real cell carries a ring position
+        self.assertGreater(with_pos, 0)
+        # positions.json persisted for cached-base re-runs
+        self.assertTrue(os.path.exists(os.path.join(
+            self.out_dir, 'interfaces', 'volcanoes_px', 'positions.json')))
+
+    def test_stem_trace_links_genes_across_conditions(self):
+        """The WT/MLN/KO cross-plate gene-linking must survive the render-dedup: every
+        __STEM_TRACE__ position must come from the NEW fixed-geometry base+overlay render
+        (square image -> aspect 1.0, fractions in [0,1]), and at least one gene must appear
+        in >=2 validation contrasts so a hover can draw a line between its conditions.
+        Regression guard: analytic ring positions (not the old matplotlib ring-path bbox)
+        feed the trace, and no stale non-square ring_pos entries leak in."""
+        import re
+        js = open(os.path.join(self.out_dir, 'interfaces', 'Serac_Px_interface_data.js')).read()
+        m = re.search(r'__STEM_TRACE__ = JSON\.parse\("(.*?)"\);', js, re.S)
+        st = json.loads(json.loads('"' + m.group(1) + '"'))
+        positions = [p for genes in st.values() for p in genes.values()]
+        # the trace is populated (validation stems exist in the fixture)
+        self.assertGreater(len(positions), 0)
+        # every position is [fx, fy, aspect, isHit] from the fixed-geometry square image
+        for fx, fy, aspect, _hit in positions:
+            self.assertTrue(0.0 <= fx <= 1.0 and 0.0 <= fy <= 1.0)   # in-image fraction
+            self.assertAlmostEqual(aspect, 1.0, places=3)            # square (new geometry, not stale tight-crop)
+        # at least one gene is present in >=2 contrasts -> its conditions can be linked
+        from collections import Counter
+        gene_contrasts = Counter(g for genes in st.values() for g in genes)
+        self.assertTrue(any(c >= 2 for c in gene_contrasts.values()))
+
     def test_gene_size_buckets(self):
         """Dots are sized by #compounds each gene is significant in. The config's
         GENE_SIZE_BUCKETS must reach the client as __SIZE_BUCKETS__, and every plotted
@@ -334,6 +387,101 @@ class TestRender(unittest.TestCase):
         html = open(os.path.join(self.out_dir, 'interfaces', 'Serac_Px_interface.html')).read()
         self.assertIn('function msOk(pl)', html)
         self.assertIn('msLo = b.z[0]', html)
+
+
+class TestResolveNJobs(unittest.TestCase):
+    """The NJOBS config knob resolves to a concrete worker count for the volcano render:
+    <=0/None -> auto (all CPUs but 2); a positive int -> exactly that many."""
+
+    def test_resolve_n_jobs(self):
+        import os
+        auto = max(1, (os.cpu_count() or 8) - 2)
+        # 0 / None / negative -> auto (leave 2 cores free)
+        for v in (0, None, -1):
+            self.assertEqual(px.resolve_n_jobs(v), auto)
+        # a positive int (incl. numeric string from YAML) -> that exact count
+        self.assertEqual(px.resolve_n_jobs(4), 4)
+        self.assertEqual(px.resolve_n_jobs('8'), 8)
+        # never returns < 1
+        self.assertGreaterEqual(px.resolve_n_jobs(0), 1)
+
+
+class TestVolcanoDedup(unittest.TestCase):
+    """Volcano render dedup: the base (grey cloud + significant points + axes) is rendered
+    ONCE per experiment and the focal-gene ring/label is overlaid cheaply per gene, so many
+    (gene, experiment) cells share one matplotlib render. Uses synthetic data (no fixture)."""
+
+    @classmethod
+    def setUpClass(cls):
+        import numpy as np
+        import xml.etree.ElementTree as ET
+        cls.ET = ET
+        from python import functions as F
+        cls.F = F
+        rng = np.random.RandomState(0)
+        n = 300
+        lf = rng.normal(0, 2.5, n)
+        pv = 10.0 ** (-np.abs(rng.normal(0, 2.2, n)))
+        sig = ((np.abs(lf) >= 1.0) & (pv <= 0.05)).astype(int)
+        df = pd.DataFrame({'compound': 'UC1', 'genes': [f'G_{i:03d}' for i in range(n)],
+                           'logfc': lf, 'pvalue': pv, 'significant': sig})
+        df.loc[0, ['logfc', 'pvalue', 'significant']] = [4.0, 1e-6, 1]   # known focal position
+        cls.df, cls.n_sig, cls.genes = df, int(sig.sum()), set(df['genes'])
+        cls.base, cls.geom = F._volcano_base_svg(df, 'UC1', key='compound',
+                                                 sig_col='significant', xmin=-8, xmax=8, size_px=350)
+
+    def test_base_valid_and_titled(self):
+        """The base SVG is valid XML, is a fixed 252pt square (no tight-bbox crop), and carries
+        exactly one <title> gene-name tooltip per significant point (no ring baked in)."""
+        root = self.ET.fromstring(self.base)   # parses as XML
+        # fixed geometry -> exactly size_px*0.72 square, aspect 1
+        self.assertAlmostEqual(self.geom['W'], 252.0, places=1)
+        self.assertAlmostEqual(self.geom['H'], 252.0, places=1)
+        # one gene-name <title> per significant point
+        titles = [t.text for t in root.iter() if t.tag.endswith('title') and t.text in self.genes]
+        self.assertEqual(len(titles), self.n_sig)
+        # the base has no focal ring (that is overlaid per gene)
+        self.assertNotIn('<g id="tgt-ring">', self.base)
+
+    def test_ring_position_analytic(self):
+        """_apply_ring places the focal ring at the analytically-expected image fraction and
+        returns matching (fx, fy, aspect) for the cross-plate trace line."""
+        g = self.geom
+        self.assertEqual(g['xy']['G_000'], (4.0, 6.0))   # -log10(1e-6) = 6
+        svg, fx, fy, asp = self.F._apply_ring(self.base, g, 'G_000', return_pos=True)
+        exp_fx = g['L'] + (4.0 - g['xmin']) / (g['xmax'] - g['xmin']) * (g['R'] - g['L'])
+        exp_fy = 1 - (g['B'] + (6.0 - g['ymin']) / (g['ymax'] - g['ymin']) * (g['T'] - g['B']))
+        # returned fraction matches the closed-form axis->image mapping
+        self.assertAlmostEqual(fx, exp_fx, places=3)
+        self.assertAlmostEqual(fy, exp_fy, places=3)
+        # square image -> aspect 1
+        self.assertEqual(asp, 1.0)
+        # the drawn ring circle sits at (fx*W, fy*H)
+        circ = [e for e in self.ET.fromstring(svg).iter() if e.tag.endswith('circle')]
+        self.assertTrue(circ)
+        self.assertAlmostEqual(float(circ[0].get('cx')), fx * g['W'], places=1)
+        self.assertAlmostEqual(float(circ[0].get('cy')), fy * g['H'], places=1)
+
+    def test_base_shared_across_focal_genes(self):
+        """Two focal genes reuse the identical base body — only the tgt-ring overlay differs.
+        This is the dedup invariant: the expensive render is not repeated per gene."""
+        a = self.F._apply_ring(self.base, self.geom, 'G_000')
+        b = self.F._apply_ring(self.base, self.geom, 'G_001')
+
+        def strip(s):
+            i = s.rfind('<g id="tgt-ring">')
+            return s if i == -1 else s[:i] + s[s.rfind('</svg>'):]
+        # everything except the ring overlay is byte-identical
+        self.assertEqual(strip(a), strip(b))
+        # each carries its own focal label
+        self.assertIn('>G_000<', a)
+        self.assertIn('>G_001<', b)
+
+    def test_absent_focal_gene_no_ring(self):
+        """A focal gene with no data in the experiment yields the base unchanged (no ring)."""
+        svg = self.F._apply_ring(self.base, self.geom, 'NOT_A_GENE')
+        # no ring overlay is injected when the gene is absent
+        self.assertNotIn('<g id="tgt-ring">', svg)
 
 
 if __name__ == '__main__':

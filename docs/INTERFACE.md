@@ -111,40 +111,58 @@ Keyword-only render function (~60 kwargs). Pipeline inside:
 
 ## 4. Volcano rendering + cache + stem trace (functions.py:6030+)
 
-Each `(focal gene, experiment/contrast)` gets a small **interactive SVG** volcano: a rasterised
-grey non-significant cloud + vector significant points carrying `<title>` tooltips, with the focal
-gene ringed (`gid="tgt-ring"`).
+Each **experiment/contrast (`uniquecontrast`)** gets ONE small **interactive SVG** base volcano: a
+rasterised grey non-significant cloud + vector significant points carrying `<title>` tooltips. The
+focal-gene ring + label is **not baked in** — it's drawn client-side, so all the `(gene, experiment)`
+cells that share an experiment reuse the same base image.
 
-- **`_volcano_svg_string`** — the renderer; returns `(svg, fx, fy, aspect)` (ring centre as image
-  fractions) when `return_pos`.
-- **`_volcano_render_worker`** — module-level (so joblib/loky can pickle it by reference); the
-  parallel render path.
-- **`_volcano_cache_fname`** — **single source of truth** for the on-disk filename.
+### One base per experiment + client-drawn ring
+
+The base body depends only on the experiment, not the focal gene, yet each experiment is a focal cell
+for many genes. Baking the ring per gene meant ~19 copies of the same (raster-heavy) base on disk —
+6.5 GB / 75,780 files on real data, a killer for Dropbox sync. So we store **one base per experiment**
+and overlay the ring in the browser:
+
+- **`_volcano_base_svg`** — renders one experiment's base (no ring); returns `(svg, geom)`. Uses a
+  **fixed axes rectangle** (`_VOLCANO_AXRECT`) instead of `bbox_inches='tight'`, so the image is
+  exactly `size_px` square and a point's image fraction is a closed-form function of its
+  `(logfc, nlog10p)`. `geom['xy']` keeps only the **focal genes** (via `focal_genes=`) to bound memory.
+- **`_ring_frac(geom, gene)`** — the closed-form `(fx, fy)` (fraction of the square image) for a gene.
+- **`_volcano_base_worker`** — module-level base renderer for the loky parallel path (one per
+  experiment). The driver writes each base file **keyed by experiment** (`_volcano_base_cache_fname`,
+  salt `b1`) and records `positions[vk][gene] = [fx, fy]`, injected into each plate-row as **`pl[9]`**.
+- **Client** (`placeRings` / `volEl`): loads the shared base `<object>` and draws a `<circle>` + gene
+  label at `pl[9]` on an overlay SVG (`.vringsvg`) — visually identical to the old baked ring, tooltips
+  preserved, lazy-loaded. `_apply_ring` / `_volcano_svg_string` (baked overlay) remain for single-shot
+  callers (`recompute_volcanoes`, embedded/non-SVG mode).
+
+Result on real data: 75,780 files / 6.5 GB → **~4,056 files / ~350 MB** (~19× fewer). Synthetic
+fixture: 2,338 cells → **320 base files**.
 
 ### ⚠️ The cache is identity-keyed, NOT data-keyed
 
-`_volcano_cache_fname` hashes `'{version}|{gene}|{key}|{xlim0}|{xlim1}|{size_px}|{ext}'` — **not**
-the underlying p-values/logfc. So **changing the data does not invalidate cached images.** After a
-data change you must explicitly re-render via `recompute_volcanoes` /
-`floor_zero_pvalues_and_refresh_volcanoes`, or the interface serves stale volcanoes as cache hits.
-`xlim`/`size_px` **must** match between `plot_3d_interface` and any recompute call or filenames
-won't align.
+`_volcano_base_cache_fname` hashes `'{version}|{vk}|{xlim0}|{xlim1}|{size_px}|{ext}'` — **not** the
+underlying p-values/logfc. So **changing the data does not invalidate cached bases.** After a data
+change, delete `volcanoes_px/` (bases + `positions.json`) to force a rebuild, or the interface serves
+stale images. `xlim`/`size_px` must match across runs or filenames won't align.
 
-### The `'v2'` salt (validation plates only)
+### `positions.json` and the base salt `b1`
 
-Only volcanoes whose plate name ends in a validation suffix (WT/MLN/KO) are salted with
-`version='v2'`. These are the only ones that carry the `tgt-ring` marker and a `ring_pos` entry.
-Every other volcano keeps its unversioned filename → stays a cache hit. **`stem_trace` looks up
-`ring_pos` with the `'v2'`-salted name**, so the render-pass salt and the stem-trace lookup literal
-are coupled — bumping one requires bumping the other.
+- Base files are salted **`b1`** (the per-experiment base layout). Old per-`(gene,experiment)` baked
+  files (`g2`/`g2v` salts) are a different naming scheme and are simply ignored — delete them.
+- **`positions.json`** = `{vk: {gene: [fx, fy]}}`, persisted next to the bases. On a rebuild whose base
+  images are already cached (`IFACE_OVERWRITE=true` rebuilds panels but the bases are on disk), it
+  supplies each cell's `pl[9]` without re-rendering. A vk re-renders only if its base image **or** its
+  positions are missing.
 
 ### Cross-plate hover trace
 
-`ring_pos` lives only on disk (`volcanoes_px/ring_pos.json`) and in memory — it is **never** injected
-to the browser. The server derives `stem_trace` from `ring_pos + custom` and injects
-**`__STEM_TRACE__`**. The client draws the trace polyline from those fractions (+ `<object>` rect +
-letterbox math), so it works over `file://` and http **without** reading into the SVG's
-`contentDocument` (which `file://` blocks). See [`wiki/wiki.md`](../wiki/wiki.md) for the full trace UX.
+`stem_trace` (`{vk: {gene: [fx, fy, 1.0, isHit]}}`) is built straight from `custom`'s `pl[9]` (the
+same ring positions), so it works on both the fresh-render and the panels-cache path (`pl[9]` is
+persisted in `panels.json`) with no dependency on any on-disk position file. Injected as
+**`__STEM_TRACE__`**; the client draws the trace polyline from those fractions + the `<object>` rect,
+so it works over `file://` and http **without** reading the SVG's `contentDocument` (which `file://`
+blocks). See [`wiki/wiki.md`](../wiki/wiki.md) for the full trace UX.
 
 ---
 
@@ -302,6 +320,19 @@ Hash keys: `p=` (exact plate list), `pg`/`pc` (pinned), `hg`/`hc` (hidden), `sp=
 - `config.yaml`: `ACTIVE_C` (pharma dot), `BMS_C` (BMS dot), `VALIDATION_PLATE_SUFFIXES`
   (`[WT, MLN, KO]`), `GENE_SIZE_BUCKETS` (6 dot px for #significant-compounds = 1,2,3,4,5,>5),
   `GENE_RING_PX` (ring rim thickness in px; underlay dot = fill + 2×this).
+- **`NJOBS`** — parallel workers for the volcano render (the only multiprocessing in the build:
+  joblib base render + threaded SVG writes). `0`/blank/`<0` → auto `max(1, CPU-2)`; a positive int →
+  exactly that many. `build_interface` passes `resolve_n_jobs(params.NJOBS)` to
+  `plot_3d_interface(volcano_n_jobs=)`; the threaded overlay-write pool derives from it (`n_jobs*2`,
+  capped 64). The `recompute_volcanoes` / `floor_zero_pvalues_and_refresh_volcanoes` utilities and the
+  legacy RF / `function_enrichment_all` helpers keep their own `n_jobs` args (not on the build path).
+- **Build memory** — `MEASURE` is ~47.7M rows, so the build is RAM-bound. `combine_datasets` downcasts
+  the repeated string columns (`genes`, `uniquecontrast`, `plate`, `compound`, `pg`, `source`) of
+  `measure`/`mscore`/`report` to `category` (round-trips through parquet, transparent to
+  groupby/isin/`.str`/merge); `get_iface`'s validation-stem `_measured` set is scoped to validation-plate
+  contrasts (never the full 47.7M rows); and **`FREE_UPSTREAM`** (config; default off so tests keep the
+  frames) frees the `FBX_*`/`MS`/`df_raw` sources as soon as they're absorbed. `self.measure/mscore/report`
+  are kept (the notebook exports them to `Px_MEASURE/MSCORE/REPORT.parquet`).
 - `PRIORITY_DISEASE_AREAS` (module constant in `Px_interface.py`) is the **single source of truth**
   for disease-area ranking; `build_interface` asserts `DISEASE_AREA_COLORS` covers it.
 - `VALIDATION_COLORS` (fill + ring per category) is defined in `build_interface` and defaulted once

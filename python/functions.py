@@ -969,6 +969,10 @@ _INTERFACE_INJECT = '''
   #hover-img .volcano .vobj { width: 360px; height: 360px; max-width: 100%;
                               border: 1px solid #eee; border-radius: 4px; display: block;
                               margin: 0 auto; }
+  /* focal-gene ring drawn client-side over the shared per-experiment base volcano */
+  #hover-img .volcano .vwrap { position: relative; display: inline-block; }
+  #hover-img .volcano .vringsvg { position: absolute; left: 0; top: 0; pointer-events: none;
+                                  overflow: visible; z-index: 3; }
   /* Grouped validation volcanoes: one stem per row, its conditions (WT/MLN/KO) side by side. */
   #hover-img .volcano .vstem-lab { font-weight: 600; color: #1D3557; margin: 8px 0 2px;
                                    text-align: left; }
@@ -1977,6 +1981,14 @@ _INTERFACE_INJECT = '''
       }
       return '<img loading="lazy" src="' + ("data:image/png;base64," + v) + '"/>';
     }
+    // Volcano element = the shared per-experiment base <object> wrapped so the focal-gene ring
+    // (pl[9] = [fx,fy], drawn client-side by placeRings) can be overlaid on top. '' -> no volcano.
+    function volEl(pl) {
+      if (!pl[2]) return '<div class="vmiss">(no volcano)</div>';
+      var pos = pl[9];
+      var attr = (pos && pos.length === 2) ? ' data-fx="' + pos[0] + '" data-fy="' + pos[1] + '"' : '';
+      return '<div class="vwrap"' + attr + '>' + vimg(pl[2]) + '</div>';
+    }
     function buildVolcanoHtml(cell) {
       var idx = parseInt(cell.getAttribute("data-eidx"), 10);
       var t = fullArr[idx];
@@ -2006,7 +2018,7 @@ _INTERFACE_INJECT = '''
             var ns = pl[6] ? ' <span class="vns">not significant</span>' : '';
             html += '<div class="vcell' + (pl[6] ? ' vcomp' : '') + '" data-vk="' + (pl[7] || '') + '"><div class="vlabel">'
                   + (valSufOf(pl[0]) || pl[0]) + ' (logfc ' + pl[1] + ')' + act + ns + '</div>'
-                  + (pl[2] ? vimg(pl[2]) : '<div class="vmiss">(no volcano)</div>') + '</div>';
+                  + volEl(pl) + '</div>';
           });
           html += '</div>';
         });
@@ -2017,7 +2029,7 @@ _INTERFACE_INJECT = '''
           var cid = pl[5] || cmp;   // MoleculeBatchID (per plate) when available, else compound
           html += '<div class="vlabel">' + currentGene + ' · ' + cid + ' · '
                 + pl[0] + act + ' (logfc ' + pl[1] + ')' + ng + '</div>';
-          html += pl[2] ? vimg(pl[2]) : '<div class="vmiss">(no volcano)</div>';
+          html += volEl(pl);
         });
       } else {
         if (!t[3]) return "";
@@ -2031,6 +2043,9 @@ _INTERFACE_INJECT = '''
       volBox.innerHTML = html;
       volBox.style.display = "block";
       traceStems();
+      placeRings();
+      volBox.querySelectorAll("object.vobj").forEach(function(o) { o.addEventListener("load", placeRings); });
+      setTimeout(placeRings, 200);
     }
     // Hover-any-gene trace across a WT/MLN/KO stem. Every significant-down gene point in a
     // stem's volcanoes is a hover-target; hovering one draws a polyline connecting that gene's
@@ -2130,8 +2145,45 @@ _INTERFACE_INJECT = '''
       setTimeout(refreshStems, 150);
       setTimeout(refreshStems, 450);
     }
+    // Focal-gene ring, drawn client-side on the shared per-experiment base. The base image
+    // holds only the grey cloud + significant points (deduped across genes); the ring + gene
+    // label are overlaid here at pl[9] = [fx, fy] (fraction of the square base image).
+    function ringFor(obj, fx, fy) {
+      var w = obj.clientWidth, h = obj.clientHeight;
+      if (!w || !h) return null;
+      var s = Math.min(w, h), ox = (w - s) / 2, oy = (h - s) / 2;   // square base letterboxed into the box
+      return {x: ox + fx * s, y: oy + fy * s, w: w, h: h};
+    }
+    function placeRings() {
+      volBox.querySelectorAll(".vwrap").forEach(function(wrap) {
+        var obj = wrap.querySelector("object.vobj"); if (!obj) return;
+        var fx = parseFloat(wrap.getAttribute("data-fx")), fy = parseFloat(wrap.getAttribute("data-fy"));
+        var svg = wrap.querySelector(":scope > .vringsvg");
+        if (isNaN(fx) || isNaN(fy)) { if (svg) svg.remove(); return; }   // gene absent here -> no ring
+        var p = ringFor(obj, fx, fy); if (!p) return;
+        if (!svg) { svg = document.createElementNS(SVGNS, "svg"); svg.setAttribute("class", "vringsvg"); wrap.appendChild(svg); }
+        svg.setAttribute("width", p.w); svg.setAttribute("height", p.h);
+        while (svg.firstChild) svg.removeChild(svg.firstChild);
+        var c = document.createElementNS(SVGNS, "circle");
+        c.setAttribute("cx", p.x.toFixed(1)); c.setAttribute("cy", p.y.toFixed(1)); c.setAttribute("r", "6");
+        c.setAttribute("fill", "none"); c.setAttribute("stroke", "#000"); c.setAttribute("stroke-width", "1.5");
+        svg.appendChild(c);
+        var left = fx > 0.7, tx = left ? p.x - 9 : p.x + 9;
+        var ln = document.createElementNS(SVGNS, "line");
+        ln.setAttribute("x1", p.x.toFixed(1)); ln.setAttribute("y1", p.y.toFixed(1));
+        ln.setAttribute("x2", tx.toFixed(1)); ln.setAttribute("y2", (p.y - 6).toFixed(1));
+        ln.setAttribute("stroke", "#000"); ln.setAttribute("stroke-width", "0.7"); svg.appendChild(ln);
+        var t = document.createElementNS(SVGNS, "text");
+        t.setAttribute("x", tx.toFixed(1)); t.setAttribute("y", (p.y - 8).toFixed(1));
+        t.setAttribute("text-anchor", left ? "end" : "start");
+        t.setAttribute("font-size", "11"); t.setAttribute("font-weight", "700"); t.setAttribute("fill", "#000");
+        t.textContent = currentGene;
+        svg.appendChild(t);
+      });
+    }
     window.addEventListener("resize", function() {
       _stems.forEach(function(vstem) { clearTrace(vstem); placeHotspots(vstem); });
+      placeRings();
     });
     function markVolPin(cell) {
       var prev = row.querySelector(".cell.vpin");
@@ -3688,6 +3740,7 @@ def plot_3d_interface(
                                 (1 if has_comp and bool(_comp[pi]) else 0),
                                 (str(_vk[pi]) if (_is_valp(_plate[pi]) and pd.notna(_vk[pi])) else ''),  # contrast id (validation rows only) for the trace
                                 (round(float(_ms[pi]), 3) if (has_ms and pd.notna(_ms[pi])) else None),  # per-compound MS score (pl[8]); null on completion rows
+                                None,   # pl[9] = [fx, fy] focal-gene ring position on the shared base (filled in the render pass)
                             ])
                             vk = _vk[pi]
                             if pd.notna(vk):
@@ -3770,146 +3823,235 @@ def plot_3d_interface(
             else:
                 custom[g][ei][3][plate_idx][2] = b64
 
+        # Set the focal-gene ring position (pl[9] = [fx, fy]) for a plate-aware entry so
+        # the client can draw the ring on the shared per-experiment base. No-op for
+        # single-volcano entries (they carry a baked overlay).
+        def _set_ringpos(g, ei, plate_idx, pos):
+            if plate_idx is not None:
+                custom[g][ei][3][plate_idx][9] = pos
+
         # 3b) per-(gene, compound[, plate]) volcanoes from `_vsrc`, keyed by the
         #     volcano-key value carried in `tasks`. If `volcano_dir` is set (and
         #     we're writing HTML), PNGs are cached to that folder and referenced by
         #     relative path (lazy-loaded, tiny HTML, cached re-runs skip rendering);
         #     otherwise they're embedded as base64 in the customdata.
         if _vsrc is not None and tasks:
-            # Significant-only volcanoes render as INTERACTIVE SVG (rasterised grey
-            # cloud + vector significant points carrying <title> hover tooltips);
-            # otherwise plain PNG. SVGs are shown via <object>, PNGs via <img>.
+            # Volcanoes: interactive SVG (rasterised grey cloud + vector significant points with
+            # <title> tooltips) shown via <object>; PNG via <img> for the non-significant fallback.
             _sig = bool(volcano_significant) and ('significant' in _vsrc.columns)
-            _ext = '.svg' if _sig else '.png'
             _external = bool(volcano_dir) and bool(html_path)
-            # ring_pos[filename] = [fx, fy, aspect]: the target gene's ring centre as a
-            # fraction of each volcano image; feeds stem_trace (injected as __STEM_TRACE__) so the
-            # interface draws the cross-plate trace line without reading the SVG DOM (blocked under file://).
-            import json as _json
-            ring_pos = {}
-            _ring_pos_path = os.path.join(volcano_dir, 'ring_pos.json') if _external else None
-            if _ring_pos_path and os.path.exists(_ring_pos_path):
-                try:
-                    with open(_ring_pos_path) as _rf:
-                        ring_pos = _json.load(_rf)
-                except Exception:
-                    ring_pos = {}
-            if _external:
+            if _sig and _external:
+                import json as _json
                 os.makedirs(volcano_dir, exist_ok=True)
                 _rel = os.path.relpath(
                     volcano_dir, os.path.dirname(os.path.abspath(html_path))).replace(os.sep, '/')
-                _volcano_base = _rel   # emitted once; rows store only the filename
+                _volcano_base = _rel   # emitted once; rows store only the base filename
+                _ext = '.svg'
 
-                def _vfname(g, vk, version=''):
-                    return _volcano_cache_fname(g, vk, volcano_xlim, volcano_size_px, _ext, version=version)
+                def _bfname(vk):
+                    return _volcano_base_cache_fname(vk, volcano_xlim, volcano_size_px, _ext)
 
-                # Only VALIDATION-plate volcanoes need the trace-line output (the #tgt-ring marker
-                # + ring_pos); they're salted with 'v2' so ONLY they re-render on the bump, while
-                # every other volcano keeps its original (unversioned) cache filename -> cache hit.
-                import re as _re
-                _vsuf = [str(s).upper() for s in (plate_validation_suffixes or [])]
-                _vplate_re = _re.compile('(' + '|'.join(_vsuf) + ')$', _re.I) if _vsuf else None
-
-                def _task_plate(g, ei, pi):
-                    if pi is None:
-                        return None
+                # persisted focal-gene ring positions {vk: {gene: [fx, fy]}} so a rebuild whose base
+                # images are already cached can fill pl[9] without re-rendering the base.
+                _pos_path = os.path.join(volcano_dir, 'positions.json')
+                positions = {}
+                if os.path.exists(_pos_path):
                     try:
-                        _slot = custom[g][ei][3]
-                        return _slot[pi][0] if isinstance(_slot, list) else None
+                        with open(_pos_path) as _pf:
+                            positions = _json.load(_pf)
                     except Exception:
-                        return None
+                        positions = {}
 
-                def _task_ver(g, ei, pi):
-                    _p = _task_plate(g, ei, pi)
-                    return 'v2' if (_vplate_re and _p and _vplate_re.search(str(_p))) else ''
-
-                # cache hits: file already on disk -> reference it, skip render. List the
-                # dir ONCE and test membership in memory — an os.path.exists per task is
-                # ~26k stat calls, painfully slow on a Dropbox/networked mount (/mnt/c).
+                # one base per experiment (vk); many (gene, plate) cells share it
+                task_vks = {}
+                for (g, vk, ei, pi) in tasks:
+                    task_vks.setdefault(str(vk), []).append((str(g), ei, pi))
                 _existing = set(os.listdir(volcano_dir))
-                _val_fns = set()   # validation-plate volcano filenames (only these carry ring_pos)
-                render = []
-                for (g, vk, ei, pi) in tqdm(tasks, desc='volcano cache scan',
-                                            unit='task', mininterval=0.5, ncols=80):
-                    _ver = _task_ver(g, ei, pi)
-                    fn_ = _vfname(g, vk, _ver)
-                    if _ver:
-                        _val_fns.add(fn_)
-                    if fn_ in _existing:
-                        _set_volcano(g, ei, pi, fn_)   # base prepended client-side
+                # a vk needs rendering if its base image is missing OR we lack its ring positions
+                render_vks = [vk for vk in task_vks
+                              if _bfname(vk) not in _existing or vk not in positions]
+                n_bases, n_render = len(task_vks), len(render_vks)
+                n_cached = n_bases - n_render
+                written_ok = set()
+                if n_render:
+                    import contextlib
+                    import joblib as _joblib
+                    from joblib import Parallel, delayed
+                    from concurrent.futures import ThreadPoolExecutor
+
+                    @contextlib.contextmanager
+                    def _tqdm_joblib(pbar):
+                        class _Cb(_joblib.parallel.BatchCompletionCallBack):
+                            def __call__(self, *a, **kw):
+                                pbar.update(n=self.batch_size)
+                                return super().__call__(*a, **kw)
+                        prev = _joblib.parallel.BatchCompletionCallBack
+                        _joblib.parallel.BatchCompletionCallBack = _Cb
+                        try:
+                            yield pbar
+                        finally:
+                            _joblib.parallel.BatchCompletionCallBack = prev
+                            pbar.close()
+
+                    _cols = ['compound', 'genes', 'logfc', 'pvalue', 'significant']
+                    sub_cache = {c: g for c, g in
+                                 _vsrc.loc[_vsrc['compound'].isin(render_vks), _cols].dropna()
+                                 .groupby('compound', sort=False)}
+                    _empty = _vsrc.iloc[0:0][_cols]
+                    _focal = {vk: {g for (g, _e, _p) in task_vks[vk]} for vk in render_vks}
+                    print(f'> rendering {n_render:,} base volcanoes (one per experiment) for '
+                          f'{len(tasks):,} (gene,plate) cells on {volcano_n_jobs} workers '
+                          f'({n_cached:,} cached) [significant SVG]...', flush=True)
+
+                    if volcano_n_jobs == 1:
+                        base_res = [_volcano_base_worker(
+                            (vk, sub_cache.get(vk, _empty), volcano_size_px,
+                             volcano_xlim[0], volcano_xlim[1], _focal.get(vk)))
+                            for vk in tqdm(render_vks, desc='volcano bases', unit='vol',
+                                           mininterval=0.5, ncols=80)]
                     else:
-                        render.append((g, vk, ei, pi, fn_))
-                n_cached = len(tasks) - len(render)
-            else:
-                render = [(g, vk, ei, pi, None) for (g, vk, ei, pi) in tasks]
-                n_cached = 0
+                        pbar = tqdm(total=n_render, desc='volcano bases', unit='vol',
+                                    mininterval=0.5, ncols=80)
+                        with _tqdm_joblib(pbar):
+                            # dispatch the module-level worker with each per-experiment subframe as an
+                            # EXPLICIT arg (evaluated here in the parent). Do NOT wrap in a closure over
+                            # `sub_cache` — loky would pickle the whole ~meas-sized dict to every worker,
+                            # exploding RAM/swap and stalling the render at seconds-per-volcano.
+                            base_res = Parallel(n_jobs=volcano_n_jobs, backend='loky')(
+                                delayed(_volcano_base_worker)(
+                                    (vk, sub_cache.get(vk, _empty), volcano_size_px,
+                                     volcano_xlim[0], volcano_xlim[1], _focal.get(vk)))
+                                for vk in render_vks)
+                    import gc as _gc
+                    del sub_cache; _gc.collect()   # ~meas-sized; not needed once the bases are rendered
 
-            def _store(g, ei, pi, fn_, content, fx=None, fy=None, aspect=None):
-                # content = SVG text (_sig) or base64 PNG. External: write the file
-                # and store its relative path; embedded: store an inline value
-                # (data-URI SVG, or raw base64 PNG). '' on failure.
-                if not content:
-                    _set_volcano(g, ei, pi, '')
-                    return
-                if _external and fx is not None and fy is not None and fn_ in _val_fns:
-                    ring_pos[fn_] = [round(fx, 4), round(fy, 4), round(aspect or 1.0, 4)]
-                if _external:
-                    mode_ = 'w' if _sig else 'wb'
-                    data_ = content if _sig else base64.b64decode(content)
-                    with open(os.path.join(volcano_dir, fn_), mode_,
-                              **({'encoding': 'utf-8'} if _sig else {})) as _fh:
-                        _fh.write(data_)
-                    _set_volcano(g, ei, pi, fn_)   # base prepended client-side
-                elif _sig:
-                    _set_volcano(g, ei, pi, 'data:image/svg+xml;base64,'
-                                 + base64.b64encode(content.encode()).decode())
-                else:
-                    _set_volcano(g, ei, pi, content)
-
-            n_render = len(render)
-            if n_render == 0:
-                pass
-            elif volcano_n_jobs == 1:
-                import matplotlib.pyplot as plt
-                pbar = tqdm(total=n_render, desc='volcanoes', unit='cmp', mininterval=0.5, ncols=80)
-                for g, vk, ei, pi, fn_ in render:
-                    _fx = _fy = _asp = None
+                    # write base files (I/O-bound on /mnt/c -> thread pool) + record ring positions
+                    def _write_base(item):
+                        vk, svg, geom = item
+                        if not svg:
+                            return (vk, False, {})
+                        try:
+                            with open(os.path.join(volcano_dir, _bfname(vk)), 'w', encoding='utf-8') as _fh:
+                                _fh.write(svg)
+                        except Exception:
+                            return (vk, False, {})
+                        pos = {}
+                        for _g in _focal.get(vk, ()):
+                            _fr = _ring_frac(geom, _g)
+                            if _fr:
+                                pos[_g] = [round(_fr[0], 4), round(_fr[1], 4)]
+                        return (vk, True, pos)
+                    _ow = min(64, max(1, volcano_n_jobs) * 2)
+                    with ThreadPoolExecutor(max_workers=_ow) as _ex:
+                        for vk, ok, pos in _ex.map(_write_base, base_res):
+                            if ok:
+                                positions[vk] = pos
+                                written_ok.add(vk)
                     try:
-                        if _sig:
-                            content, _fx, _fy, _asp = _volcano_svg_string(
-                                _vsrc, vk, g, key='compound', sig_col='significant',
-                                xmin=volcano_xlim[0], xmax=volcano_xlim[1],
-                                size_px=volcano_size_px, return_pos=True)
-                        else:
-                            fig_v, ax_v = plt.subplots(
-                                figsize=(volcano_size_px / 100, volcano_size_px / 100), dpi=100)
-                            try:
-                                plot_volcano(_vsrc, vk, g,
-                                             xmin=volcano_xlim[0], xmax=volcano_xlim[1],
-                                             ax=ax_v, title='')
-                                buf = io.BytesIO()
-                                fig_v.savefig(buf, format='PNG', bbox_inches='tight')
-                                content = base64.b64encode(buf.getvalue()).decode()
-                            finally:
-                                plt.close(fig_v)
-                    except Exception as e:
-                        tqdm.write(f'  [warn] volcano failed {g}/{vk}: {e}')
-                        content = ''
-                    _store(g, ei, pi, fn_, content, _fx, _fy, _asp)
-                    pbar.update(1)
-                pbar.close()
+                        with open(_pos_path, 'w') as _pf:
+                            _json.dump(positions, _pf)
+                    except Exception as _e:
+                        print(f'  [warn] could not write positions.json: {_e}')
+
+                # fill each plate-row: shared base filename (pl[2]) + focal-gene ring position (pl[9])
+                _have_base = written_ok | {vk for vk in task_vks if _bfname(vk) in _existing}
+                for vk, lst in task_vks.items():
+                    _bfn = _bfname(vk)
+                    _pmap = positions.get(vk, {})
+                    for (g, ei, pi) in lst:
+                        _set_volcano(g, ei, pi, _bfn if vk in _have_base else '')
+                        _set_ringpos(g, ei, pi, _pmap.get(g))
+                print(f'> volcanoes: {n_cached:,} cached, {n_render:,} base(s) rendered '
+                      f'-> {volcano_dir}  ({len(tasks):,} cells share {n_bases:,} bases)')
             else:
+                _ext = '.svg' if _sig else '.png'
+                # ring_pos[filename] = [fx, fy, aspect]: the target gene's ring centre as a
+                # fraction of each volcano image; feeds stem_trace (injected as __STEM_TRACE__) so the
+                # interface draws the cross-plate trace line without reading the SVG DOM (blocked under file://).
+                import json as _json
+                ring_pos = {}
+                _ring_pos_path = os.path.join(volcano_dir, 'ring_pos.json') if _external else None
+                if _ring_pos_path and os.path.exists(_ring_pos_path):
+                    try:
+                        with open(_ring_pos_path) as _rf:
+                            ring_pos = _json.load(_rf)
+                    except Exception:
+                        ring_pos = {}
+                if _external:
+                    os.makedirs(volcano_dir, exist_ok=True)
+                    _rel = os.path.relpath(
+                        volcano_dir, os.path.dirname(os.path.abspath(html_path))).replace(os.sep, '/')
+                    _volcano_base = _rel   # emitted once; rows store only the filename
+
+                    def _vfname(g, vk, version=''):
+                        return _volcano_cache_fname(g, vk, volcano_xlim, volcano_size_px, _ext, version=version)
+
+                    # Cache salt: 'g2' marks the fixed-geometry base+overlay render (bumped from
+                    # the old tight-bbox baked-ring images so they regenerate uniformly). Validation
+                    # plates get 'g2v' — a distinct name — since only they carry the trace-line ring_pos.
+                    import re as _re
+                    _vsuf = [str(s).upper() for s in (plate_validation_suffixes or [])]
+                    _vplate_re = _re.compile('(' + '|'.join(_vsuf) + ')$', _re.I) if _vsuf else None
+
+                    def _task_plate(g, ei, pi):
+                        if pi is None:
+                            return None
+                        try:
+                            _slot = custom[g][ei][3]
+                            return _slot[pi][0] if isinstance(_slot, list) else None
+                        except Exception:
+                            return None
+
+                    def _is_val_task(g, ei, pi):
+                        _p = _task_plate(g, ei, pi)
+                        return bool(_vplate_re and _p and _vplate_re.search(str(_p)))
+
+                    # cache hits: file already on disk -> reference it, skip render. List the
+                    # dir ONCE and test membership in memory — an os.path.exists per task is
+                    # ~26k stat calls, painfully slow on a Dropbox/networked mount (/mnt/c).
+                    _existing = set(os.listdir(volcano_dir))
+                    _val_fns = set()   # validation-plate volcano filenames (only these carry ring_pos)
+                    render = []
+                    for (g, vk, ei, pi) in tqdm(tasks, desc='volcano cache scan',
+                                                unit='task', mininterval=0.5, ncols=80):
+                        _isval = _is_val_task(g, ei, pi)
+                        fn_ = _vfname(g, vk, 'g2v' if _isval else 'g2')
+                        if _isval:
+                            _val_fns.add(fn_)
+                        if fn_ in _existing:
+                            _set_volcano(g, ei, pi, fn_)   # base prepended client-side
+                        else:
+                            render.append((g, vk, ei, pi, fn_))
+                    n_cached = len(tasks) - len(render)
+                else:
+                    render = [(g, vk, ei, pi, None) for (g, vk, ei, pi) in tasks]
+                    n_cached = 0
+
+                def _store(g, ei, pi, fn_, content, fx=None, fy=None, aspect=None):
+                    # content = SVG text (_sig) or base64 PNG. External: write the file
+                    # and store its relative path; embedded: store an inline value
+                    # (data-URI SVG, or raw base64 PNG). '' on failure.
+                    if not content:
+                        _set_volcano(g, ei, pi, '')
+                        return
+                    if _external and fx is not None and fy is not None and fn_ in _val_fns:
+                        ring_pos[fn_] = [round(fx, 4), round(fy, 4), round(aspect or 1.0, 4)]
+                    if _external:
+                        mode_ = 'w' if _sig else 'wb'
+                        data_ = content if _sig else base64.b64decode(content)
+                        with open(os.path.join(volcano_dir, fn_), mode_,
+                                  **({'encoding': 'utf-8'} if _sig else {})) as _fh:
+                            _fh.write(data_)
+                        _set_volcano(g, ei, pi, fn_)   # base prepended client-side
+                    elif _sig:
+                        _set_volcano(g, ei, pi, 'data:image/svg+xml;base64,'
+                                     + base64.b64encode(content.encode()).decode())
+                    else:
+                        _set_volcano(g, ei, pi, content)
+
                 import contextlib
                 import joblib as _joblib
                 from joblib import Parallel, delayed
-                unique_keys = sorted({vk for _, vk, _, _, _ in render})
-                _cols = ['compound', 'genes', 'logfc', 'pvalue'] + (['significant'] if _sig else [])
-                _filt = _vsrc.loc[_vsrc['compound'].isin(unique_keys), _cols].dropna()
-                sub_cache = {c: g for c, g in _filt.groupby('compound', sort=False)}
-                _empty = _filt.iloc[0:0]
-                print(f'> rendering {n_render:,} volcanoes on {volcano_n_jobs} workers'
-                      + (f' ({n_cached:,} cached)' if _external else '')
-                      + (' [significant SVG]' if _sig else '') + '...', flush=True)
 
                 @contextlib.contextmanager
                 def _tqdm_joblib(pbar):
@@ -3925,61 +4067,160 @@ def plot_3d_interface(
                         _joblib.parallel.BatchCompletionCallBack = prev
                         pbar.close()
 
-                pbar = tqdm(total=n_render, desc='volcanoes', unit='cmp', mininterval=0.5, ncols=80)
-                with _tqdm_joblib(pbar):
-                    results = Parallel(n_jobs=volcano_n_jobs, backend='loky')(
-                        delayed(_volcano_render_worker)(
-                            (g, vk, sub_cache.get(vk, _empty), volcano_size_px,
-                             volcano_xlim[0], volcano_xlim[1], _sig, True))
-                        for g, vk, _, _, _ in render)
-                for (g, vk, ei, pi, fn_), res in zip(render, results):
-                    if isinstance(res, tuple):
-                        content, _fx, _fy, _asp = res
+                n_render = len(render)
+                if n_render == 0:
+                    pass
+                elif _sig:
+                    # Dedup: the base volcano (grey cloud + sig points + axes) depends only on
+                    # the experiment (vk), not the focal gene — render it ONCE per unique vk, then
+                    # overlay each focal gene's ring+label cheaply via string injection.
+                    unique_keys = sorted({vk for _, vk, _, _, _ in render})
+                    # focal genes per experiment — the only genes _apply_ring looks up, so the base's
+                    # geom['xy'] keeps just these (not all ~10k measured genes) -> far smaller base_by_vk.
+                    from collections import defaultdict as _dd
+                    focal_by_vk = _dd(set)
+                    for _g, _vk, _, _, _ in render:
+                        focal_by_vk[_vk].add(_g)
+                    # per-experiment slices to ship to workers; don't bind the full slice (avoid a
+                    # second ~meas-sized frame resident alongside sub_cache during the render).
+                    sub_cache = {c: g for c, g in
+                                 _vsrc.loc[_vsrc['compound'].isin(unique_keys),
+                                           ['compound', 'genes', 'logfc', 'pvalue', 'significant']]
+                                 .dropna().groupby('compound', sort=False)}
+                    _empty = _vsrc.iloc[0:0][['compound', 'genes', 'logfc', 'pvalue', 'significant']]
+                    print(f'> rendering {len(unique_keys):,} unique volcanoes for {n_render:,} '
+                          f'(gene,plate) cells on {volcano_n_jobs} workers'
+                          + (f' ({n_cached:,} cached)' if _external else '')
+                          + ' [significant SVG]...', flush=True)
+                    base_by_vk = {}
+                    if volcano_n_jobs == 1:
+                        for vk in tqdm(unique_keys, desc='volcano bases', unit='vol',
+                                       mininterval=0.5, ncols=80):
+                            _, svg, geom = _volcano_base_worker(
+                                (vk, sub_cache.get(vk, _empty), volcano_size_px,
+                                 volcano_xlim[0], volcano_xlim[1], focal_by_vk.get(vk)))
+                            base_by_vk[vk] = (svg, geom)
                     else:
-                        content, _fx, _fy, _asp = res, None, None, None
-                    _store(g, ei, pi, fn_, content, _fx, _fy, _asp)
-            print(f'> volcanoes: {n_cached:,} cached, {n_render:,} rendered'
-                  + (' [interactive SVG]' if _sig else '')
-                  + (f' -> {volcano_dir}' if _external else ' (embedded)'))
-            if _ring_pos_path:   # persist ring centres so cached re-runs keep the trace-line positions
-                try:
-                    with open(_ring_pos_path, 'w') as _rf:
-                        _json.dump(ring_pos, _rf)
-                except Exception as _e:
-                    print(f'  [warn] could not write ring_pos.json: {_e}')
+                        pbar = tqdm(total=len(unique_keys), desc='volcano bases', unit='vol',
+                                    mininterval=0.5, ncols=80)
+                        with _tqdm_joblib(pbar):
+                            base_res = Parallel(n_jobs=volcano_n_jobs, backend='loky')(
+                                delayed(_volcano_base_worker)(
+                                    (vk, sub_cache.get(vk, _empty), volcano_size_px,
+                                     volcano_xlim[0], volcano_xlim[1], focal_by_vk.get(vk)))
+                                for vk in unique_keys)
+                        base_by_vk = {vk: (svg, geom) for vk, svg, geom in base_res}
+                    import gc as _gc
+                    del sub_cache; _gc.collect()   # ~meas-sized; not needed once the bases are rendered
+                    # Fan out: overlay each focal gene's ring on the shared base, then write. The
+                    # overlay is microseconds; the real cost is writing ~N small SVGs (each open+write
+                    # is a ~25ms round-trip on a /mnt/c 9p mount). File writes release the GIL, so a
+                    # THREAD pool overlaps that I/O across many in-flight writes (no IPC — threads share
+                    # the in-memory bases). The custom/ring_pos mutation stays on the main thread.
+                    from concurrent.futures import ThreadPoolExecutor
+
+                    def _overlay_one(task):
+                        g, vk, ei, pi, fn_ = task
+                        svg, geom = base_by_vk.get(vk, ('', None))
+                        if not svg:
+                            return (g, ei, pi, fn_, '', None, None, None, False)
+                        content, fx, fy, asp = _apply_ring(svg, geom, g, return_pos=True)
+                        wrote = False
+                        if content and _external:
+                            try:
+                                with open(os.path.join(volcano_dir, fn_), 'w', encoding='utf-8') as _fh:
+                                    _fh.write(content)
+                                wrote = True
+                            except Exception:
+                                wrote = False
+                        return (g, ei, pi, fn_, content, fx, fy, asp, wrote)
+
+                    _ow = min(64, max(1, volcano_n_jobs) * 2) if _external else 1
+                    with ThreadPoolExecutor(max_workers=_ow) as _ex:
+                        for g, ei, pi, fn_, content, _fx, _fy, _asp, wrote in tqdm(
+                                _ex.map(_overlay_one, render), total=n_render,
+                                desc='volcano overlay', unit='cmp', mininterval=0.5, ncols=80):
+                            if not content:
+                                _set_volcano(g, ei, pi, '')
+                            elif _external:
+                                _set_volcano(g, ei, pi, fn_ if wrote else '')
+                                if wrote and fn_ in _val_fns and _fx is not None and _fy is not None:
+                                    ring_pos[fn_] = [round(_fx, 4), round(_fy, 4), round(_asp or 1.0, 4)]
+                            else:
+                                _store(g, ei, pi, fn_, content, _fx, _fy, _asp)   # embedded (no file)
+                elif volcano_n_jobs == 1:
+                    import matplotlib.pyplot as plt
+                    pbar = tqdm(total=n_render, desc='volcanoes', unit='cmp', mininterval=0.5, ncols=80)
+                    for g, vk, ei, pi, fn_ in render:
+                        try:
+                            fig_v, ax_v = plt.subplots(
+                                figsize=(volcano_size_px / 100, volcano_size_px / 100), dpi=100)
+                            try:
+                                plot_volcano(_vsrc, vk, g,
+                                             xmin=volcano_xlim[0], xmax=volcano_xlim[1],
+                                             ax=ax_v, title='')
+                                buf = io.BytesIO()
+                                fig_v.savefig(buf, format='PNG', bbox_inches='tight')
+                                content = base64.b64encode(buf.getvalue()).decode()
+                            finally:
+                                plt.close(fig_v)
+                        except Exception as e:
+                            tqdm.write(f'  [warn] volcano failed {g}/{vk}: {e}')
+                            content = ''
+                        _store(g, ei, pi, fn_, content)
+                        pbar.update(1)
+                    pbar.close()
+                else:
+                    unique_keys = sorted({vk for _, vk, _, _, _ in render})
+                    _filt = _vsrc.loc[_vsrc['compound'].isin(unique_keys),
+                                      ['compound', 'genes', 'logfc', 'pvalue']].dropna()
+                    sub_cache = {c: g for c, g in _filt.groupby('compound', sort=False)}
+                    _empty = _filt.iloc[0:0]
+                    print(f'> rendering {n_render:,} volcanoes on {volcano_n_jobs} workers'
+                          + (f' ({n_cached:,} cached)' if _external else '') + '...', flush=True)
+                    pbar = tqdm(total=n_render, desc='volcanoes', unit='cmp', mininterval=0.5, ncols=80)
+                    with _tqdm_joblib(pbar):
+                        results = Parallel(n_jobs=volcano_n_jobs, backend='loky')(
+                            delayed(_volcano_render_worker)(
+                                (g, vk, sub_cache.get(vk, _empty), volcano_size_px,
+                                 volcano_xlim[0], volcano_xlim[1], False, True))
+                            for g, vk, _, _, _ in render)
+                    for (g, vk, ei, pi, fn_), res in zip(render, results):
+                        content = res[0] if isinstance(res, tuple) else res
+                        _store(g, ei, pi, fn_, content)
+                print(f'> volcanoes: {n_cached:,} cached, {n_render:,} rendered'
+                      + (' [interactive SVG]' if _sig else '')
+                      + (f' -> {volcano_dir}' if _external else ' (embedded)'))
+                if _ring_pos_path:   # persist ring centres so cached re-runs keep the trace-line positions
+                    try:
+                        with open(_ring_pos_path, 'w') as _rf:
+                            _json.dump(ring_pos, _rf)
+                    except Exception as _e:
+                        print(f'  [warn] could not write ring_pos.json: {_e}')
         elif _vsrc is None:
             print('> no volcano source (pass df_raw or volcano_source) — volcanoes disabled')
     else:
         print('> no compound panel (provide compounds_df or top1..topN columns) — '
               'scatter + hover text only')
 
-    # stem_trace[vk][gene] = [fx, fy, aspect, isHitHere]: every significant-down gene's position in
-    # each validation contrast, for the cross-plate hover trace. Built from custom + ring_pos so it
-    # works whether volcanoes were rendered fresh OR the panels/volcanoes were loaded from cache
-    # (IFACE_OVERWRITE=false) — the render pass already persisted ring_pos.json, loaded above.
-    # isHitHere=1 => a significant point in THIS volcano (hoverable); 0 => shown so the line passes through.
-    if have_compounds and bool(volcano_dir) and bool(html_path) and ring_pos:
-        # extension MUST match the render pass / ring_pos filenames (else stem_trace looks up nothing):
-        # SVG only when significant-mode volcanoes were rendered, same test as __VOLCANO_MODE__.
-        _ext = '.svg' if (volcano_significant and volcano_source is not None
-                          and 'significant' in volcano_source.columns) else '.png'
+    # stem_trace[vk][gene] = [fx, fy, aspect, isHit]: each validation plate-row's focal-gene ring
+    # position (pl[9]) on the shared base, for the cross-plate hover trace. Read straight from
+    # `custom` so it works on both the fresh render AND the panels-cache path (pl[9] is persisted
+    # in panels.json). isHit=1 => a significant point here (hoverable); 0 => a ride-along row.
+    if have_compounds:
         for g, entries in custom.items():
             for entry in entries:
                 if not (isinstance(entry, list) and entry and entry[0] != '__META__'
                         and len(entry) > 3 and isinstance(entry[3], list)):
                     continue
                 for _row in entry[3]:
-                    if not (isinstance(_row, list) and len(_row) > 7 and _row[7]):
-                        continue   # validation rows only (carry a contrast id at idx 7)
-                    _vk = _row[7]
-                    _rp = ring_pos.get(_volcano_cache_fname(g, _vk, volcano_xlim, volcano_size_px, _ext, version='v2'))
-                    if not _rp:
-                        continue
+                    if not (isinstance(_row, list) and len(_row) > 9 and _row[7] and _row[9]):
+                        continue   # validation rows (contrast id at 7) with a ring position at 9
                     _hit = 0 if (len(_row) > 6 and _row[6]) else 1
-                    stem_trace.setdefault(str(_vk), {})[str(g)] = [_rp[0], _rp[1], _rp[2] if len(_rp) > 2 else 1.0, _hit]
-        print(f'> stem trace: {sum(len(v) for v in stem_trace.values()):,} gene positions '
-              f'across {len(stem_trace):,} validation contrasts')
-
+                    stem_trace.setdefault(str(_row[7]), {})[str(g)] = [_row[9][0], _row[9][1], 1.0, _hit]
+        if stem_trace:
+            print(f'> stem trace: {sum(len(v) for v in stem_trace.values()):,} gene positions '
+                  f'across {len(stem_trace):,} validation contrasts')
     # gene → marker size (px) by how many DISTINCT compounds the gene is a significant hit
     # in — a grand total across all plates/activities, so it's a fixed per-gene property, NOT
     # filter-reactive. Counts 1..N-1 and >N-1 map to size_buckets; a gene with 0 hits (rare,
@@ -5364,24 +5605,37 @@ def per_class_report(y_true, y_pred, proba, classes, names=None, sep_width=82):
     return out
 
 
-def _volcano_svg_string(df, uniquecontrast, gene,
-                        *,
-                        key='uniquecontrast', sig_col='significant',
-                        fc_thresh=1.0, p_thresh=0.05,
-                        xmin=-8.0, xmax=8.0, size_px=350,
-                        up_color='#008bfb', down_color='#ff0051', ns_color='lightgrey',
-                        return_pos=False):
-    """
-    Render the significant-only volcano (one ``uniquecontrast``) to an *interactive*
-    SVG string. The dense non-significant cloud is rasterised (keeps the file small),
-    while each significant point is a vector marker carrying a ``<title>`` (gene
-    name) so a browser shows a native hover tooltip — like the 3D dots. The target
-    ``gene`` is ringed + annotated. Returns ``''`` on empty/failure.
+# Fixed axes rectangle (figure fraction: left, bottom, right, top) for the base
+# volcano — replaces bbox_inches='tight' so a data point's image fraction is a
+# deterministic linear function of its (logfc, nlog10p), letting the focal-gene
+# ring be injected as a cheap SVG overlay instead of re-rendering per gene.
+_VOLCANO_AXRECT = (0.185, 0.15, 0.965, 0.945)
 
-    When ``return_pos`` is set, returns ``(svg, fx, fy, aspect)`` where (fx, fy) is the
-    target gene's ring centre as a fraction of the saved image (0..1, y down) and
-    ``aspect`` = width/height of the image — so a client can place the ring without
-    reading the SVG's DOM (needed for the cross-plate trace line under ``file://``).
+
+def _volcano_base_svg(df, uniquecontrast,
+                      *,
+                      key='uniquecontrast', sig_col='significant',
+                      fc_thresh=1.0, p_thresh=0.05,
+                      xmin=-8.0, xmax=8.0, size_px=350,
+                      up_color='#008bfb', down_color='#ff0051', ns_color='lightgrey',
+                      focal_genes=None):
+    """
+    Render ONE experiment's interactive volcano *without* a focal-gene ring — the
+    expensive, focal-gene-independent part (rasterised grey cloud + vector
+    significant points with ``<title>`` tooltips + threshold lines + axes). This is
+    rendered once per ``uniquecontrast`` and shared across every focal gene via
+    :func:`_apply_ring`, which is far cheaper than the old per-(gene, experiment) render.
+
+    Uses a FIXED axes rectangle (``_VOLCANO_AXRECT``) instead of ``bbox_inches='tight'``
+    so the image is exactly ``size_px`` square and the axis→image mapping is known.
+
+    :param set focal_genes: if given, ``geom['xy']`` keeps ONLY these genes' positions
+        (the genes that will actually be ringed for this experiment) — a large memory
+        saving vs storing every measured gene (~500× fewer when few genes are focal).
+        ``None`` keeps all genes (single-shot callers).
+    :return: ``(svg_str, geom)`` where ``geom`` holds the mapping constants
+        (``W``/``H`` in pt, axis rect, x/y limits) and ``xy`` = ``{gene: (logfc, nlog10p)}``
+        for placing the ring. ``('', None)`` on empty/failure.
     """
     import io
     import xml.etree.ElementTree as ET
@@ -5389,14 +5643,11 @@ def _volcano_svg_string(df, uniquecontrast, gene,
     matplotlib.use('Agg')
     import matplotlib.pyplot as plt
 
-    def _ret(svg, fx=None, fy=None, aspect=None):
-        return (svg, fx, fy, aspect) if return_pos else svg
-
     has_sig = sig_col in df.columns
     cols = ['genes', 'logfc', 'pvalue'] + ([sig_col] if has_sig else [])
     sub = df[df[key] == uniquecontrast][cols].dropna(subset=['genes', 'logfc', 'pvalue'])
     if sub.empty:
-        return _ret('')
+        return '', None
     aggspec = {'logfc': ('logfc', 'mean'), 'pvalue': ('pvalue', 'min')}
     if has_sig:
         aggspec['significant'] = (sig_col, 'max')
@@ -5409,53 +5660,48 @@ def _volcano_svg_string(df, uniquecontrast, gene,
     up = sig & (agg['logfc'] > 0)
     down = sig & (agg['logfc'] < 0)
     ns = ~sig
+    ymin, ymax = 0.0, float(max(agg['nlog10p'].max() * 1.05, 1.0))
 
-    fig, ax = plt.subplots(figsize=(size_px / 100, size_px / 100), dpi=100)
+    L, B, R, T = _VOLCANO_AXRECT
+    fig = plt.figure(figsize=(size_px / 100, size_px / 100), dpi=100)
+    ax = fig.add_axes([L, B, R - L, T - B])
     gid2gene = {}
-    fx = fy = aspect = None
     try:
         # rasterised grey background (one image inside the SVG, not thousands of nodes)
         ax.scatter(agg.loc[ns, 'logfc'], agg.loc[ns, 'nlog10p'], s=6, c=ns_color,
                    edgecolor='none', alpha=0.5, rasterized=True, zorder=1)
-        i = 0
-        for mask, color in [(down, down_color), (up, up_color)]:
-            for _, r in agg.loc[mask].iterrows():
-                gid = f'sig{i}'
-                sc = ax.scatter([r['logfc']], [r['nlog10p']], s=14, c=color,
-                                edgecolor='none', zorder=3)
-                sc.set_gid(gid)
-                gid2gene[gid] = str(r['genes'])
-                i += 1
+        # one vector collection per direction (vectorised, not a scatter-per-point loop);
+        # gids are assigned to the collection's children afterward for <title> tooltips.
+        for mask, color, pfx in [(down, down_color, 'down'), (up, up_color, 'up')]:
+            m = agg.loc[mask]
+            if m.empty:
+                continue
+            sc = ax.scatter(m['logfc'], m['nlog10p'], s=14, c=color,
+                            edgecolor='none', zorder=3)
+            sc.set_gid('sig-' + pfx)
+            for j, gname in enumerate(m['genes']):
+                gid2gene[f'{pfx}{j}'] = str(gname)
         ax.axhline(-np.log10(p_thresh), ls='--', lw=0.7, c='#888')
         ax.axvline(+fc_thresh, ls='--', lw=0.7, c='#888')
         ax.axvline(-fc_thresh, ls='--', lw=0.7, c='#888')
-        tg = agg[agg['genes'] == gene]
-        if not tg.empty:
-            _ring = ax.scatter(tg['logfc'], tg['nlog10p'], s=70, facecolor='none',
-                               edgecolor='black', lw=1.5, zorder=5)
-            _ring.set_gid('tgt-ring')   # id read by the interface to trace the gene across grouped volcanoes
-            ax.annotate(gene, xy=(tg['logfc'].iat[0], tg['nlog10p'].iat[0]),
-                        xytext=(8, 6), textcoords='offset points',
-                        fontsize=11, fontweight='bold',
-                        arrowprops=dict(arrowstyle='-', lw=0.7))
         ax.set_xlim(xmin, xmax)
+        ax.set_ylim(ymin, ymax)
         ax.set_xlabel('logfc')
         ax.set_ylabel('-log10(p-value)')
         ax.set_title('')   # the panel labels the volcano in HTML
         buf = io.StringIO()
-        fig.savefig(buf, format='svg', bbox_inches='tight', pad_inches=0.1)
+        fig.savefig(buf, format='svg')
     except Exception:
         plt.close(fig)
-        return _ret('')
+        return '', None
     plt.close(fig)
 
-    # inject <title>gene</title> into each significant point's <g id="sig*">
+    # inject <title>gene</title> into each significant point. matplotlib emits one <g
+    # id="sig-down/up"> whose <use> children are the points in order; tag each child.
     try:
         ET.register_namespace('', 'http://www.w3.org/2000/svg')
         root = ET.fromstring(buf.getvalue())
         ns_uri = '{http://www.w3.org/2000/svg}'
-        # image size (pt) from the viewBox; the ring's fraction is read straight from the
-        # saved SVG (no extra draw) so the client can place the trace line under file://.
         _W = _H = None
         _vb = root.get('viewBox')
         if _vb:
@@ -5466,28 +5712,109 @@ def _volcano_svg_string(df, uniquecontrast, gene,
                 _W = _H = None
         for el in root.iter():
             gid = el.get('id')
-            if gid in gid2gene:
-                t = ET.SubElement(el, ns_uri + 'title')
-                t.text = gid2gene[gid]
-                el.insert(0, t)
-            elif gid == 'tgt-ring' and return_pos and _W and _H:
-                # ring marker = a <path> (bezier circle) in SVG (pt) coords; its centre is the
-                # midpoint of the path's bounding box. y is already top-down in SVG.
-                _pth = el.find(ns_uri + 'path')
-                if _pth is not None and _pth.get('d'):
-                    try:
-                        import re as _re2
-                        _nums = [float(n) for n in _re2.findall(r'-?\d+\.?\d*(?:[eE]-?\d+)?', _pth.get('d'))]
-                        _xs, _ys = _nums[0::2], _nums[1::2]
-                        if _xs and _ys:
-                            fx = ((min(_xs) + max(_xs)) / 2) / _W
-                            fy = ((min(_ys) + max(_ys)) / 2) / _H
-                            aspect = _W / _H
-                    except Exception:
-                        pass
-        return _ret(ET.tostring(root, encoding='unicode'), fx, fy, aspect)
+            if gid in ('sig-down', 'sig-up'):
+                pfx = 'down' if gid == 'sig-down' else 'up'
+                # matplotlib emits <defs> then one <g> per point, in order; tag each <g>.
+                pts = [c for c in el if c.tag.split('}')[-1] == 'g']
+                for j, c in enumerate(pts):
+                    gname = gid2gene.get(f'{pfx}{j}')
+                    if gname is None:
+                        continue
+                    t = ET.Element(ns_uri + 'title')   # first child = native SVG tooltip
+                    t.text = gname
+                    c.insert(0, t)
+        svg_str = ET.tostring(root, encoding='unicode')
     except Exception:
-        return _ret(buf.getvalue(), fx, fy, aspect)
+        svg_str = buf.getvalue()
+        _W = _H = size_px * 0.72
+
+    geom = {'L': L, 'B': B, 'R': R, 'T': T,
+            'xmin': float(xmin), 'xmax': float(xmax), 'ymin': ymin, 'ymax': ymax,
+            'W': float(_W or size_px * 0.72), 'H': float(_H or size_px * 0.72),
+            'xy': {str(g): (float(x), float(y))
+                   for g, x, y in zip(agg['genes'], agg['logfc'], agg['nlog10p'])
+                   if focal_genes is None or str(g) in focal_genes}}
+    return svg_str, geom
+
+
+def _xml_escape(s):
+    return (str(s).replace('&', '&amp;').replace('<', '&lt;').replace('>', '&gt;'))
+
+
+def _ring_frac(geom, gene):
+    """Focal gene's ring centre as (fx, fy) fractions of the square base image (0..1, y
+    down), from ``geom``'s fixed axes rect. ``None`` if the gene isn't in this experiment."""
+    if not geom:
+        return None
+    xy = geom['xy'].get(str(gene))
+    if xy is None:
+        return None
+    x, y = xy
+    fx = geom['L'] + (x - geom['xmin']) / (geom['xmax'] - geom['xmin']) * (geom['R'] - geom['L'])
+    fyb = geom['B'] + (y - geom['ymin']) / (geom['ymax'] - geom['ymin']) * (geom['T'] - geom['B'])
+    return (min(max(fx, 0.0), 1.0), min(max(1.0 - fyb, 0.0), 1.0))
+
+
+def _apply_ring(base_svg, geom, gene, *, return_pos=False):
+    """
+    Overlay the focal-gene ring + label onto a base volcano SVG (from
+    :func:`_volcano_base_svg`) as a cheap string injection — no matplotlib re-render.
+    The gene's image position is computed analytically from ``geom``'s fixed axes rect.
+
+    Returns the SVG string, or ``(svg, fx, fy, aspect)`` when ``return_pos`` — where
+    (fx, fy) is the ring centre as a fraction of the image (0..1, y down) and
+    ``aspect`` = W/H, feeding the cross-plate trace line (`ring_pos.json`).
+    """
+    def _ret(svg, fx=None, fy=None, aspect=None):
+        return (svg, fx, fy, aspect) if return_pos else svg
+
+    if not base_svg or not geom:
+        return _ret(base_svg or '')
+    _fr = _ring_frac(geom, gene)
+    if _fr is None:
+        return _ret(base_svg)   # focal gene absent from this experiment — no ring
+    fx, fy = _fr
+    W, H = geom['W'], geom['H']
+    cx, cy = fx * W, fy * H
+    left = fx > 0.7   # keep the label inside the image
+    tx = cx - 9 if left else cx + 9
+    anchor = 'end' if left else 'start'
+    label = _xml_escape(gene)
+    overlay = (
+        '<g id="tgt-ring">'
+        f'<circle cx="{cx:.2f}" cy="{cy:.2f}" r="6" fill="none" stroke="#000000" stroke-width="1.5"/>'
+        f'<line x1="{cx:.2f}" y1="{cy:.2f}" x2="{tx:.2f}" y2="{cy - 6:.2f}" stroke="#000000" stroke-width="0.7"/>'
+        f'<text x="{tx:.2f}" y="{cy - 8:.2f}" text-anchor="{anchor}" '
+        f'font-family="sans-serif" font-size="11" font-weight="bold" fill="#000000">{label}</text>'
+        '</g>')
+    idx = base_svg.rfind('</svg>')
+    svg = base_svg[:idx] + overlay + base_svg[idx:] if idx != -1 else base_svg
+    return _ret(svg, round(fx, 4), round(fy, 4), round(W / H, 4))
+
+
+def _volcano_svg_string(df, uniquecontrast, gene,
+                        *,
+                        key='uniquecontrast', sig_col='significant',
+                        fc_thresh=1.0, p_thresh=0.05,
+                        xmin=-8.0, xmax=8.0, size_px=350,
+                        up_color='#008bfb', down_color='#ff0051', ns_color='lightgrey',
+                        return_pos=False):
+    """
+    Render one experiment's interactive significant-only volcano with the focal
+    ``gene`` ringed + labelled. Thin composition of :func:`_volcano_base_svg` (the
+    shared, focal-gene-independent render) and :func:`_apply_ring` (the per-gene
+    overlay). Kept for callers that render a single (gene, experiment) at a time;
+    the interface's bulk pass renders the base once per experiment and reuses it.
+
+    Returns the SVG string, or ``(svg, fx, fy, aspect)`` when ``return_pos``.
+    """
+    base, geom = _volcano_base_svg(
+        df, uniquecontrast, key=key, sig_col=sig_col, fc_thresh=fc_thresh,
+        p_thresh=p_thresh, xmin=xmin, xmax=xmax, size_px=size_px,
+        up_color=up_color, down_color=down_color, ns_color=ns_color)
+    if not base:
+        return (('', None, None, None) if return_pos else '')
+    return _apply_ring(base, geom, gene, return_pos=return_pos)
 
 
 def _volcano_render_worker(args):
@@ -5522,6 +5849,24 @@ def _volcano_render_worker(args):
         plt.close(fig)
 
 
+def _volcano_base_worker(args):
+    """Module-level worker: render ONE experiment's base volcano (no focal ring).
+
+    Returns ``(vk, svg_str, geom)`` for the driver to fan out across every focal
+    gene via :func:`_apply_ring`. At module level so loky can serialise it by ref.
+    """
+    import matplotlib
+    matplotlib.use('Agg')  # headless backend in workers
+    vk, sub, size_px, xmin, xmax = args[:5]
+    focal = args[5] if len(args) > 5 else None   # keep only these genes' positions in geom['xy']
+    try:
+        svg, geom = _volcano_base_svg(sub, vk, key='compound', sig_col='significant',
+                                      xmin=xmin, xmax=xmax, size_px=size_px, focal_genes=focal)
+        return (vk, svg, geom)
+    except Exception:
+        return (vk, '', None)
+
+
 def _volcano_cache_fname(gene, key, xlim, size_px, ext='.svg', version=''):
     """Canonical on-disk volcano cache filename for a (focal gene, volcano key) pair.
 
@@ -5538,6 +5883,16 @@ def _volcano_cache_fname(gene, key, xlim, size_px, ext='.svg', version=''):
     import hashlib
     _pre = f'{version}|' if version else ''
     s = f'{_pre}{gene}|{key}|{xlim[0]}|{xlim[1]}|{size_px}|{ext}'
+    return hashlib.md5(s.encode()).hexdigest()[:16] + ext
+
+
+def _volcano_base_cache_fname(vk, xlim, size_px, ext='.svg', version='b1'):
+    """On-disk filename for ONE experiment's shared base volcano — keyed by the experiment
+    (``vk``) only, NOT the focal gene. One base per experiment (vs one file per
+    (gene, experiment)) collapses the ~19× duplication of the embedded raster; the focal-gene
+    ring is drawn client-side from injected positions. Salt ``b1`` marks this base layout."""
+    import hashlib
+    s = f'{version}|{vk}|{xlim[0]}|{xlim[1]}|{size_px}|{ext}'
     return hashlib.md5(s.encode()).hexdigest()[:16] + ext
 
 
@@ -5562,9 +5917,9 @@ def recompute_volcanoes(volcano_source, pairs, volcano_dir, *,
     :param xlim/size_px: MUST match the values passed to ``plot_3d_interface`` or the
         filenames won't line up with what the interface expects.
     :param plate_validation_suffixes: plate-name suffixes (e.g. ``('WT','MLN','KO')``) that
-        the interface salts with ``version='v2'``. MUST match ``plot_3d_interface`` — else a
-        validation-plate refresh writes an unsalted filename the interface never looks up
-        (silent no-op). Requires a ``'plate'`` column on ``volcano_source``.
+        the interface salts with ``version='g2v'`` (vs ``'g2'`` elsewhere). MUST match
+        ``plot_3d_interface`` — else a validation-plate refresh writes a filename the interface
+        never looks up (silent no-op). Requires a ``'plate'`` column on ``volcano_source``.
     :return dict: ``{'requested', 'written', 'skipped', 'dir'}``.
     """
     import os
@@ -5576,8 +5931,8 @@ def recompute_volcanoes(volcano_source, pairs, volcano_dir, *,
     sig = bool(significant) and ('significant' in volcano_source.columns)
     ext = '.svg' if sig else '.png'
 
-    # Validation-plate volcanoes are salted 'v2' by the interface — match that here (via a
-    # key->plate map) so refreshing a WT/MLN/KO volcano overwrites the file the interface reads.
+    # Cache salt matches the interface: 'g2v' for validation (WT/MLN/KO) plates, 'g2'
+    # otherwise (via a key->plate map) so a refresh overwrites the file the interface reads.
     _vre = None
     _key2plate = {}
     if plate_validation_suffixes and 'plate' in volcano_source.columns:
@@ -5587,7 +5942,7 @@ def recompute_volcanoes(volcano_source, pairs, volcano_dir, *,
                       .set_index(volcano_key)['plate'].astype(str).to_dict())
     def _ver_for(k):
         _p = _key2plate.get(k)
-        return 'v2' if (_vre is not None and _p and _vre.search(_p)) else ''
+        return 'g2v' if (_vre is not None and _p and _vre.search(_p)) else 'g2'
 
     # Pre-slice the source per key once; rename the key column to 'compound' so the
     # module-level worker (which filters on 'compound') can be reused as-is. Drop any

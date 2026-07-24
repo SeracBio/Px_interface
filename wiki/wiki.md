@@ -23,6 +23,70 @@ _Durable, aggregate memory of this repo — read at session start. Aggregate onl
   - **Not done (opt-in, need browser QA):** `renderChipBox`/stem-grouping dedup + single-pass `applyRanges`.
   - All 18 tests green throughout. NOTE: JS changes are static-checked only (no headless browser in this env) —
     hard-refresh + eyeball after rebuild.
+- **Volcano render dedup (2026-07-24).** The volcano body (grey cloud + significant points + axes) depends
+  only on the experiment (`uniquecontrast`), not the focal gene, but was re-rendered once per
+  `(gene, experiment)` cell — the dominant build cost (~10 CPU-s/image; the run was ETA ~80 min for 14.8k
+  cells at ~2.9/s on 30 workers, fully CPU-bound). Now the **base is rendered once per unique experiment**
+  (`_volcano_base_svg` → `(svg, geom)`) and each focal gene's **ring+label is overlaid by string injection**
+  (`_apply_ring`, position computed analytically) — no matplotlib per gene. Synthetic fixture: 2,338 cells →
+  **320 base renders**; overlay ~6.8k/s. Base switched to a **fixed axes rectangle** (`_VOLCANO_AXRECT`)
+  instead of `bbox_inches='tight'` so images are `size_px`-square and the axis→image mapping is closed-form
+  (also ~2× faster savefig). Cache salt bumped `''`/`'v2'` → **`'g2'`/`'g2v'`** (validation), so old
+  tight-bbox images regenerate uniformly on next build (cheap now). `_volcano_svg_string` kept as a
+  base+ring composition for single-shot callers. Also fixed a latent double-`<title>` bug (SubElement +
+  insert added the same node twice). 26 tests green (4 new `TestVolcanoDedup`). Remaining ideas from the
+  perf triage (not done): vectorised sig scatter is now in the base; browser-side ring overlay not needed.
+- **Overlay writes parallelised + `NJOBS` config knob (2026-07-24).** After the base dedup, the tail cost
+  was writing ~75k tiny SVGs to `/mnt/c` (WSL2 9p, ~25ms/file, serial → ~37/s, ETA ~33 min). File writes
+  release the GIL, so the overlay+write now runs on a **ThreadPool** (`min(64, n_jobs*2)`) — threads share
+  the in-memory bases (no IPC); `custom`/`ring_pos` mutation stays on the main thread. Added **`NJOBS`** to
+  `config.yaml` (`0`→auto `CPU-2`, positive→exact; this box has 32 CPUs→30); `build_interface` resolves it
+  via `resolve_n_jobs()` and passes `volcano_n_jobs`, which also drives the write pool. The only
+  multiprocessing on the build path is the volcano render — RF/`function_enrichment_all` are legacy (uncalled),
+  `recompute_volcanoes`/`floor_*` are manual utils keeping their own `n_jobs`. For a *much* bigger win the
+  volcano dir could live on local ext4 instead of `/mnt/c` (offered, not done).
+- **Build memory reduction (2026-07-24).** MEASURE is ~47.7M rows; the build was peaking ~30 GB (into swap).
+  Fixes: **(1)** `combine_datasets` frees `FBX_MEASURE` before the section-1 concat and `del`s the `fbx_std`/`dr_std`
+  intermediates right after, then frees `FBX_MSSCORE/REPORT`+`MS` at the end; `get_iface` frees `df_raw` at its end —
+  all gated by **`FREE_UPSTREAM`** (config; default off so tests/inspection keep the frames). `self.measure/mscore/report`
+  are KEPT (the notebook still exports them to `Px_MEASURE/MSCORE/REPORT.parquet`). **(2)** `meas` (the render source /
+  `meas.parquet`) slimmed to 6 cols `[uniquecontrast, genes, plate, logfc, pvalue, significant]` — halves the second
+  47M-row frame; `pvalue` stays float64 (float32 underflows `-log10(p)`). **(3)** The volcano-render dedup was itself a
+  hog: `base_by_vk`'s `geom['xy']` stored EVERY measured gene's position per experiment (~10k) though `_apply_ring` only
+  needs the **focal** genes (~16/exp). Now the driver passes `focal_by_vk` to `_volcano_base_svg(focal_genes=)` so `geom['xy']`
+  keeps only focal genes (~500× smaller `base_by_vk`); the per-experiment `sub_cache` is `del`'d before the write fan-out.
+  `Px_MEASURE.parquet` is unaffected (that's `self.measure`, full 11 cols — only `meas` was slimmed).
+- **Build memory reduction, round 2 (2026-07-24).** After round 1 the *`get_iface`* build still peaked ~28 GB
+  (the two `molecule_batch_id`/`Silent-activity` prints mark the spot). Two more fixes, both always-on:
+  **(4)** `combine_datasets` now downcasts the repeated string columns `[genes, uniquecontrast, plate, compound,
+  pg, source]` of `measure/mscore/report` to **`category`** (int codes + one copy of each value vs a Python `str`
+  per cell over 47.7M rows) — ~10× smaller `self.measure`, a smaller `meas` copy, and smaller parquet exports.
+  Round-trips through parquet (verified) and is transparent to groupby/isin/`.str`/merge. **(5)** the validation-
+  stem `_measured` set in `get_iface` was `set(zip(meas['genes'], meas['uniquecontrast']))` over all ~47.7M rows
+  (~3–4 GB of tuples) though the completion loop only queries **validation-plate** contrasts — now scoped to
+  `rep`'s val-plate `uniquecontrast`s first (tiny). Stem-trace count unchanged (1,904/199 on the fixture), all
+  24 pipeline+render tests green.
+- **Base-render loky closure bug (2026-07-24).** The base-dedup path (`if _sig and _external`) dispatched
+  `delayed(_render_base)(vk)` where `_render_base` was a **closure over `sub_cache`** (the ~meas-sized dict of
+  ALL experiments). loky pickles the dispatched callable to every worker, so it shipped the whole dict ~per
+  worker → swap explosion + ~26 s/vol (memory-thrash, not render). Fixed to dispatch the module-level
+  `_volcano_base_worker` with each per-experiment subframe as an **explicit arg** (evaluated in the parent),
+  mirroring the correct fallback path; `del sub_cache` right after. **Rule: never `delayed()` a closure that
+  captures a large frame — pass the slice as an arg.**
+- **Volcano base-dedup + client-drawn ring (2026-07-24).** The baked-ring model wrote one SVG per
+  `(gene, experiment)` — 75,780 files / **6.5 GB** on real data, each embedding its own copy of the
+  (raster-heavy) grey cloud, ~19× duplicated across a shared experiment. Killer for Dropbox sync. Now:
+  **one base SVG per experiment** (`_volcano_base_cache_fname`, salt `b1`; the base has no ring), and
+  the focal-gene **ring + label are drawn client-side** (`placeRings`/`volEl`/`ringFor` + `.vringsvg`
+  overlay) at `pl[9] = [fx, fy]` — the closed-form ring fraction (`_ring_frac`) injected per plate-row.
+  `positions.json` = `{vk: {gene:[fx,fy]}}` persists positions so a rebuild with cached bases fills
+  `pl[9]` without re-rendering. `stem_trace` now reads `pl[9]` from `custom` (cache-independent; no more
+  `ring_pos.json` dependency). Result: **75,780 → ~4,056 files, 6.5 GB → ~350 MB (~19×)**; synthetic
+  2,338 cells → 320 bases. Visuals unchanged (ring + tooltips preserved), lazy-loaded, `file://`-safe.
+  29 tests green (+`test_volcano_base_dedup`); headless-Chromium load shows no JS errors. `Px_MEASURE`
+  etc. unaffected. NOTE: old `g2`/`g2v` per-gene files are ignored — delete `volcanoes_px/` before the
+  next build so only the ~4k `b1` bases remain. Client ring is static-checked + math-verified; hard-refresh
+  + eyeball the actual overlay after rebuild.
 - Extracted from `MS_ML` (2026-06-23) so the interface lives on its own. The engine
   `python/functions.py` is the **whole** MS_ML module (carries some unused ML/signature/cytotox
   helpers); the driver is `vignettes/MS_Interface.ipynb`. `Rdkit_tools`/`Statistics_tools` imports

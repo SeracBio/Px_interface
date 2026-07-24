@@ -44,6 +44,12 @@ PRIORITY_DISEASE_AREAS = [
 # CLASSES
 # ~~~~~~~~~~~~~~~~~~~~~~
 
+def resolve_n_jobs(njobs):
+    """Config NJOBS -> concrete worker count. <=0/None -> auto (all CPUs but 2); positive -> as-is."""
+    n = int(njobs or 0)
+    return max(1, (os.cpu_count() or 8) - 2) if n <= 0 else n
+
+
 class PARAMS():
     def __init__(self, config_path):
         self.config_path = config_path
@@ -182,10 +188,13 @@ class OUTPUT():
                  'logfc', 'pvalue', 'adjpval', 'significant']
         fbx_std = (data.FBX_MEASURE.assign(compound=data.FBX_MEASURE['uniquecontrast'].map(data.uc2compound))
                    .reindex(columns=_cols).assign(source='FBX'))
-        dr_std = data.df_raw.rename(columns={'MSPlate': 'plate'}).reindex(columns=_cols).assign(source='df_raw')
         _shared_uc = set(data.FBX_MEASURE['uniquecontrast']) & _dr_uc_set
+        if getattr(params, 'FREE_UPSTREAM', False):
+            data.FBX_MEASURE = None; gc.collect()   # absorbed into fbx_std — free before the big concat
+        dr_std = data.df_raw.rename(columns={'MSPlate': 'plate'}).reindex(columns=_cols).assign(source='df_raw')
         self.measure = pd.concat([fbx_std, dr_std[~dr_std['uniquecontrast'].astype(str).isin(_shared_uc)]],
                                  ignore_index=True)
+        del fbx_std, dr_std; gc.collect()   # drop the wide intermediates right after the union
         print(f'> combined MEASURE: {len(self.measure):,} rows | '
               f'{self.measure["uniquecontrast"].nunique():,} experiments | '
               f'{self.measure["compound"].nunique():,} compounds | {self.measure["genes"].nunique():,} genes')
@@ -265,7 +274,32 @@ class OUTPUT():
             _df['date'] = pd.to_datetime(_df['plate'].astype(str).map(self.plate2date))
         print(f"> plate dates: {len(self.plate2date)} plates mapped | report spans "
               f"{self.report['date'].min():%Y-%m-%d} .. {self.report['date'].max():%Y-%m-%d}")
-        
+
+        # downcast the repeated string columns to `category`: MEASURE is ~47.7M rows and its
+        # object-dtype strings (each cell an 8-byte pointer + a Python str) dominate RAM. Category
+        # stores int codes + one copy of each unique value — ~10x smaller on MEASURE, and it also
+        # shrinks the get_iface `meas` copy and the parquet exports. Round-trips through parquet and
+        # is transparent to groupby / isin / .str / merge downstream.
+        _cat_cols = ['genes', 'uniquecontrast', 'plate', 'compound', 'pg', 'source']
+        for _df in (self.measure, self.mscore, self.report):
+            for _c in _cat_cols:
+                if _c in _df.columns and _df[_c].dtype == object:
+                    _df[_c] = _df[_c].astype('category')
+        gc.collect()
+        print(f'> categorized string columns | MEASURE now '
+              f'{self.measure.memory_usage(deep=True).sum() / 1e9:.1f} GB')
+
+        # free the FBX_* sources + MS now — fully absorbed into measure/mscore/report and unused
+        # past here (get_iface needs only df_raw/serac_df/target2R2_df + the combined tables). Frees
+        # the big FBX_MEASURE BEFORE get_iface allocates its own copy, so the peak doesn't hit swap.
+        if getattr(params, 'FREE_UPSTREAM', False):
+            for _a in ('FBX_MEASURE', 'FBX_MSSCORE', 'FBX_REPORT', 'MS'):
+                setattr(data, _a, None)
+            gc.collect()
+            try: ctypes.CDLL('libc.so.6').malloc_trim(0)
+            except Exception: pass
+            print('> freed FBX_* + MS sources (FREE_UPSTREAM)')
+
     def get_de_validated(self, data, params):
         """
         gets the list of validated and devalidated targets/compounds
@@ -306,7 +340,10 @@ class OUTPUT():
             # --- volcano source = unified measure (drop noisy plates) + p-value floor ---
             # a 0.0 p plots at y=300 under -log10; floor zeros to the smallest non-zero p so the
             # renderers' 1e-300 clip is inert (same as the Re-Compute Volcanoes cell). No-op if floored.
-            meas = self.measure[~self.measure['plate'].isin(DROP_PLATES)].copy()
+            # only the columns get_iface + the volcano render use (drop compound/pg/adjpval/source/date)
+            # so this second ~47M-row frame is ~half the width of self.measure it is copied from.
+            _MEAS_COLS = ['uniquecontrast', 'genes', 'plate', 'logfc', 'pvalue', 'significant']
+            meas = self.measure.loc[~self.measure['plate'].isin(DROP_PLATES), _MEAS_COLS].copy()
             _pmin = self.measure.loc[self.measure['pvalue'] > 0, 'pvalue'].min()
             meas.loc[meas['pvalue'].eq(0.0), 'pvalue'] = _pmin
 
@@ -395,7 +432,12 @@ class OUTPUT():
             for _p in _val_plates:
                 _stem_map.setdefault(_stem(_p), []).append(_p)
             _uc_of = rep.drop_duplicates(['compound', 'plate']).set_index(['compound', 'plate'])['uniquecontrast']
-            _measured = set(zip(meas['genes'], meas['uniquecontrast']))          # (gene, contrast) present
+            # (gene, contrast) present — restricted to validation-plate contrasts, the only ones the
+            # completion loop below queries. Building it over all ~47.7M measure rows would materialise
+            # ~47.7M Python tuples (~3-4 GB); scoping it to val plates keeps it tiny.
+            _val_ucs = set(rep.loc[rep['plate'].isin(_val_plates), 'uniquecontrast'].dropna())
+            _mm = meas.loc[meas['uniquecontrast'].isin(_val_ucs), ['genes', 'uniquecontrast']]
+            _measured = set(zip(_mm['genes'], _mm['uniquecontrast']))
             _seen = set(zip(compounds_df['gene'], compounds_df['compound'], compounds_df['plate']))
             _add = []
             for _, _r in compounds_df[compounds_df['plate'].isin(_val_plates)].iterrows():
@@ -440,6 +482,17 @@ class OUTPUT():
                 json.dump(self.plate2date, _fh)
             self.iface_df, self.compounds_df, self.meas = iface_df, compounds_df, meas
             print(f'> saved interface inputs -> {params.IFACE_DIR}/ ({", ".join(_IFACE_KEYS)})')
+            # free df_raw now (FBX_* + MS were freed at the end of combine) — absorbed into the render
+            # inputs and unused past here. self.measure/mscore/report are KEPT (the notebook still
+            # exports them to parquet after the render). Opt-in via FREE_UPSTREAM so callers that still
+            # inspect data.df_raw / FBX_* (e.g. tests) can keep them.
+            if getattr(params, 'FREE_UPSTREAM', False):
+                for _a in ('df_raw', 'MS', 'FBX_MEASURE', 'FBX_MSSCORE', 'FBX_REPORT'):
+                    setattr(data, _a, None)
+                gc.collect()
+                try: ctypes.CDLL('libc.so.6').malloc_trim(0)   # return freed arenas to the OS (Linux)
+                except Exception: pass
+                print('> freed upstream df_raw frame (FREE_UPSTREAM)')
         else:
             self.iface_df     = pd.read_parquet(os.path.join(params.IFACE_DIR, 'iface_df.parquet'))
             self.compounds_df = pd.read_parquet(os.path.join(params.IFACE_DIR, 'compounds_df.parquet'))
@@ -533,7 +586,7 @@ class OUTPUT():
             depmap_defaults=['Selective', 'Non-essential'], conf_defaults=['High', 'Med'],
             lof_defaults=['Yes'], validation_defaults=None,  # default ticked boxes on load (validation: all)
             volcano_significant=True, volcano_dir=os.path.join(output_dir, 'interfaces', 'volcanoes_px'),
-            volcano_n_jobs=max(1, (os.cpu_count() or 8) - 2),  # use most cores for the volcano render
+            volcano_n_jobs=resolve_n_jobs(getattr(params, 'NJOBS', 0)),  # config NJOBS (0 -> CPUs-2) for the volcano render
             volcano_xlim=(-8, 8), volcano_size_px=350,
             disease_area_colors=DISEASE_AREA_COLORS, nb_display=False,
             validation_colors=VALIDATION_COLORS, color_mode_default='V',  # V/D colour toggle; open in validation colouring

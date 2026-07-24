@@ -20,8 +20,9 @@ SERAC_C:                    # named palette: name -> hex (quote hex; '#' is a YA
 PATENTS_RAW: /mnt/c/Users/gtamo/Serac Biosciences Dropbox/Serac_team/5_Literature and Patents/0_Companies/Pharma_SmallMolecule_Patents_MASTER.xlsx
 DROPBOX_PROT: /mnt/c/Users/gtamo/Serac Biosciences Dropbox/Serac_team/12_Proteomics/5_Inventory/CDDVault/Proteomics/GiorgioTamo/
 DROPBOX_ML: /mnt/c/Users/gtamo/Serac Biosciences Dropbox/Serac_team/4_Data_Sciences/15_ML/
+DROPBOX_DANIELA: /mnt/c/Users/gtamo/Serac Biosciences Dropbox/Serac_team/4_Data_Sciences/15_ML/Daniela/
 DROPBOX_VALIDATION: /mnt/c/Users/gtamo/Serac Biosciences Dropbox/Serac_team/4_Data_Sciences/15_ML/Daniela/20260518_ML_selected_genes_DF.csv
-SRB_PNG_DIR: /home/gtamo/MS_ML/data/srb_png
+SRB_PNG_DIR: /home/gtamo/Px_interface/data/srb_png
 DOWNLOADS: /mnt/c/Users/gtamo/Downloads
 GTLOCAL: /mnt/c/Users/gtamo/Desktop/GT/
 
@@ -73,4 +74,15 @@ GENE_RESEARCH: /mnt/c/Users/gtamo/Desktop/GT/disease_association/20260623_10Kgen
 
 CHEMLIB_OVERWRITE: false
 DFRAW_OVERWRITE: false
-IFACE_OVERWRITE: false           # true -> rebuild + save the interface inputs; false -> load them from IFACE_DIR + free RAM
+IFACE_OVERWRITE: true           # true -> rebuild + save the interface inputs; false -> load them from IFACE_DIR + free RAM
+
+# Parallelism: workers for the volcano render (joblib base render + threaded SVG writes).
+# 0 (or blank/<0) -> auto = max(1, CPU count - 2); a positive int -> exactly that many workers.
+# This machine has 32 CPUs, so auto = 30. Lower it to leave headroom for other work.
+NJOBS: 16 # 0 -> auto 
+
+# Memory: after get_iface builds the render inputs (IFACE_OVERWRITE=true), free the heavy upstream
+# frames (df_raw + FBX_MEASURE/MSSCORE/REPORT, tens of M rows) that are unused past that point.
+# self.measure/mscore/report are kept (exported to parquet after the render). Set false to keep
+# df_raw/FBX_* resident (e.g. for interactive inspection in the same kernel).
+FREE_UPSTREAM: true
