@@ -49,6 +49,7 @@ Three classes: **`PARAMS`** (reads `config.yaml`), **`DATA`** (loads raw inputs)
 | Step | Method | What it produces |
 |---|---|---|
 | Load | `DATA.load_new_df` / `load_old_df` / `load_chemical_lib_df` | `df_raw`, `MS`, `FBX_MEASURE/MSSCORE/REPORT`, `serac_df`, `target2R2_df`, `uc2compound` |
+| PNGs (opt-in) | `DATA.download_cdd_pngs` | refreshes `SRB_PNG_DIR` from CDD Vault when `UPDATE_PNGS` is true (resume-safe; no-op otherwise) |
 | Combine | `OUTPUT.combine_datasets` | `measure`, `mscore` (both per-compound, one row per (gene,uniquecontrast)), `report`, `plate2date` — FBX wins on shared uniquecontrasts |
 | Validation lists | `OUTPUT.get_de_validated` | `validated_targets`/`devalidated_targets`, `validated_compounds`/`devalidated_compounds` (FBXO31 ligase-dependent vs not) |
 | Render inputs | `OUTPUT.get_iface` | **the four render inputs** — `iface_df`, `compounds_df`, `meas`, `plate2date` |
@@ -326,6 +327,12 @@ Hash keys: `p=` (exact plate list), `pg`/`pc` (pinned), `hg`/`hc` (hidden), `sp=
   `plot_3d_interface(volcano_n_jobs=)`; the threaded overlay-write pool derives from it (`n_jobs*2`,
   capped 64). The `recompute_volcanoes` / `floor_zero_pvalues_and_refresh_volcanoes` utilities and the
   legacy RF / `function_enrichment_all` helpers keep their own `n_jobs` args (not on the build path).
+- **Compound PNGs** — thumbnails come from `SRB_PNG_DIR` (real CDD structures; RDKit renders only
+  when a PNG is absent). To refresh them, set **`UPDATE_PNGS: true`** and call `data.download_cdd_pngs(params)`
+  before the build: it reuses the CDD Vault API downloader (`~/CDD_Vault_API`, already on `sys.path`) to
+  fetch the saved search `CDD_SEARCH` from vault `CDD_VAULT` using the token in `CDD_TOKEN_FILE`, writing
+  `SRB-XXXXXXX.png` into `SRB_PNG_DIR`. It's **resume-safe** (skips files already on disk), so a normal
+  run only pulls newly-added compounds; leave `UPDATE_PNGS: false` for the common case. PNGs stay local.
 - **Build memory** — `MEASURE` is ~47.7M rows, so the build is RAM-bound. `combine_datasets` downcasts
   the repeated string columns (`genes`, `uniquecontrast`, `plate`, `compound`, `pg`, `source`) of
   `measure`/`mscore`/`report` to `category` (round-trips through parquet, transparent to

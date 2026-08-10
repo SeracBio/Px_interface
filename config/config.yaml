@@ -26,6 +26,11 @@ SRB_PNG_DIR: /home/gtamo/Px_interface/data/srb_png
 DOWNLOADS: /mnt/c/Users/gtamo/Downloads
 GTLOCAL: /mnt/c/Users/gtamo/Desktop/GT/
 
+# Compound structure PNGs (data.download_cdd_pngs) — refresh SRB_PNG_DIR from CDD Vault.
+CDD_VAULT: 7108                  # CDD Vault numeric id
+CDD_SEARCH: 23196193            # saved-search id for the SRB library (the numeric prefix of the search URL)
+CDD_TOKEN_FILE: ~/.cdd_token     # local file holding the CDD API token on one line
+
 RAW_PROTEOMICS_PATH: /home/gtamo/MS_ML/data/MS/20260424_Proteomics_Database_CSV_Export.csv
 CLEAN_PROTEOMICS_PATH: /home/gtamo/MS_ML/data/MS/20260429_CDD_MS_SilentActive.csv
 
@@ -75,6 +80,8 @@ GENE_RESEARCH: /mnt/c/Users/gtamo/Desktop/GT/disease_association/20260623_10Kgen
 CHEMLIB_OVERWRITE: false
 DFRAW_OVERWRITE: false
 IFACE_OVERWRITE: true           # true -> rebuild + save the interface inputs; false -> load them from IFACE_DIR + free RAM
+UPDATE_PNGS: true               # true -> fetch new/missing PNGs before building (resume-safe: skips existing)
+
 
 # Parallelism: workers for the volcano render (joblib base render + threaded SVG writes).
 # 0 (or blank/<0) -> auto = max(1, CPU count - 2); a positive int -> exactly that many workers.

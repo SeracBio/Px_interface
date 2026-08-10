@@ -66,6 +66,15 @@ _Durable, aggregate memory of this repo — read at session start. Aggregate onl
   (~3–4 GB of tuples) though the completion loop only queries **validation-plate** contrasts — now scoped to
   `rep`'s val-plate `uniquecontrast`s first (tiny). Stem-trace count unchanged (1,904/199 on the fixture), all
   24 pipeline+render tests green.
+- **Opt-in compound-PNG refresh (2026-07-24).** Thumbnails are served from `SRB_PNG_DIR` (real CDD
+  structures; RDKit only fills gaps — last real build: 11,015/11,015 from the library, 0 rdkit). New
+  `DATA.download_cdd_pngs(params)` refreshes that dir from CDD Vault, reusing the `~/CDD_Vault_API`
+  downloader (already on `sys.path` alongside `get_df`) — `make_session` + `list_molecules_in_search`
+  + `download_all`, no subprocess. Gated by **`UPDATE_PNGS`** (default false = no-op); config keys
+  `CDD_VAULT` (7108), `CDD_SEARCH` (23196193 = SRB library), `CDD_TOKEN_FILE` (`~/.cdd_token`); output
+  = `SRB_PNG_DIR`. Resume-safe (skips existing → normal runs fetch only new compounds); filenames
+  `SRB-XXXXXXX.png` (prefix kept, `strip_prefix=False`) = exactly what `_build_thumb` looks up. Tested
+  (no-op + mocked-call, no network). PNGs stay local; only the token leaves.
 - **Base-render loky closure bug (2026-07-24).** The base-dedup path (`if _sig and _external`) dispatched
   `delayed(_render_base)(vk)` where `_render_base` was a **closure over `sub_cache`** (the ~meas-sized dict of
   ALL experiments). loky pickles the dispatched callable to every worker, so it shipped the whole dict ~per

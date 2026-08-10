@@ -92,6 +92,30 @@ class DATA():
             self.serac_df[_c] = self.serac_df[_c].astype('string').str.strip().str.lower().map({'yes': 1, 'no': 0})
         print(f'> Chemical lib dim: {self.serac_df.shape}')
 
+    def download_cdd_pngs(self, params):
+        """
+        Refresh the compound structure PNGs in SRB_PNG_DIR from CDD Vault, reusing the
+        CDD Vault API downloader. No-op unless UPDATE_PNGS is true. Resume-safe: it skips
+        files already on disk, so a normal run only fetches newly-added compounds; a full
+        re-fetch happens only against an empty dir. Filenames are the full compound name
+        (SRB-XXXXXXX.png) — the exact key build_interface looks up in SRB_PNG_DIR.
+        PNGs stay local; only the API token leaves, to app.collaborativedrug.com.
+        param class params: PARAMS instance (UPDATE_PNGS, CDD_VAULT, CDD_SEARCH, CDD_TOKEN_FILE, SRB_PNG_DIR)
+        return None:
+        """
+        if not getattr(params, 'UPDATE_PNGS', False):
+            return
+        from pathlib import Path
+        import download_cdd_structures as cdd   # already on sys.path (see top-of-file insert)
+        with open(os.path.expanduser(params.CDD_TOKEN_FILE)) as _tf:
+            s = cdd.make_session(_tf.read().strip())
+        mols = cdd.list_molecules_in_search(s, params.CDD_VAULT, str(params.CDD_SEARCH))
+        print(f'> CDD: {len(mols):,} molecules in search {params.CDD_SEARCH} -> {params.SRB_PNG_DIR}', flush=True)
+        n_ok, n_skip, n_err = cdd.download_all(
+            s, params.CDD_VAULT, mols, Path(os.path.expanduser(params.SRB_PNG_DIR)),
+            size=600, workers=12, delay=0.0, prefix='SRB-', strip_prefix=False)
+        print(f'> CDD PNGs: {n_ok:,} new, {n_skip:,} already present, {n_err:,} errors')
+
     def load_old_df(self, params):
         """
         -Extract df_raw which contains the logfc and p-value associated with each gene and compound

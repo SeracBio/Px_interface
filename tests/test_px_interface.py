@@ -406,6 +406,63 @@ class TestResolveNJobs(unittest.TestCase):
         self.assertGreaterEqual(px.resolve_n_jobs(0), 1)
 
 
+class TestDownloadCddPngs(unittest.TestCase):
+    """data.download_cdd_pngs: opt-in compound-PNG refresh from CDD Vault.
+    - UPDATE_PNGS false -> no-op (no import, no network).
+    - UPDATE_PNGS true  -> reads the token file and drives the CDD downloader with the
+      library's naming convention (prefix 'SRB-', strip_prefix False) into SRB_PNG_DIR.
+    The real CDD module is stubbed via sys.modules so no network call is made."""
+
+    def test_noop_when_disabled(self):
+        """UPDATE_PNGS false returns immediately and never touches the downloader."""
+        import types
+        from types import SimpleNamespace
+        boom = types.ModuleType('download_cdd_structures')
+        def _explode(*a, **k):
+            raise AssertionError('CDD downloader called though UPDATE_PNGS is false')
+        boom.make_session = boom.list_molecules_in_search = boom.download_all = _explode
+        sys.modules['download_cdd_structures'] = boom
+        try:
+            # disabled -> returns None without importing/calling the downloader
+            self.assertIsNone(px.DATA().download_cdd_pngs(SimpleNamespace(UPDATE_PNGS=False)))
+        finally:
+            del sys.modules['download_cdd_structures']
+
+    def test_calls_downloader_with_library_naming(self):
+        """UPDATE_PNGS true: token read+stripped, search id coerced to str, and download_all
+        invoked with prefix 'SRB-' / strip_prefix False into the configured SRB_PNG_DIR."""
+        import types, tempfile
+        from types import SimpleNamespace
+        calls = {}
+        m = types.ModuleType('download_cdd_structures')
+        def _mk(tok): calls['token'] = tok; return 'SESSION'
+        def _list(s, v, sr): calls['list'] = (s, v, sr); return [{'id': 7}, {'id': 8}]
+        def _dl(s, v, mols, out, **kw): calls['dl'] = {'vault': v, 'mols': mols, 'out': str(out), **kw}; return (2, 0, 0)
+        m.make_session, m.list_molecules_in_search, m.download_all = _mk, _list, _dl
+        sys.modules['download_cdd_structures'] = m
+        with tempfile.TemporaryDirectory() as d:
+            tok = os.path.join(d, 'tok')
+            with open(tok, 'w') as _f: _f.write('SECRET\n')
+            png_dir = os.path.join(d, 'srb_png')
+            params = SimpleNamespace(UPDATE_PNGS=True, CDD_VAULT=7108, CDD_SEARCH=23196193,
+                                     CDD_TOKEN_FILE=tok, SRB_PNG_DIR=png_dir)
+            try:
+                px.DATA().download_cdd_pngs(params)
+            finally:
+                del sys.modules['download_cdd_structures']
+        # token read from the file and stripped before make_session
+        self.assertEqual(calls['token'], 'SECRET')
+        # vault passed through; search id coerced to string
+        self.assertEqual(calls['list'][1], 7108)
+        self.assertEqual(calls['list'][2], '23196193')
+        # library filename convention + configured output dir + the listed molecules
+        self.assertEqual(calls['dl']['prefix'], 'SRB-')
+        self.assertFalse(calls['dl']['strip_prefix'])
+        self.assertEqual(calls['dl']['out'], png_dir)
+        self.assertEqual(calls['dl']['vault'], 7108)
+        self.assertEqual(len(calls['dl']['mols']), 2)
+
+
 class TestVolcanoDedup(unittest.TestCase):
     """Volcano render dedup: the base (grey cloud + significant points + axes) is rendered
     ONCE per experiment and the focal-gene ring/label is overlaid cheaply per gene, so many
