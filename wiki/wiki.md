@@ -66,6 +66,61 @@ _Durable, aggregate memory of this repo — read at session start. Aggregate onl
   (~3–4 GB of tuples) though the completion loop only queries **validation-plate** contrasts — now scoped to
   `rep`'s val-plate `uniquecontrast`s first (tiny). Stem-trace count unchanged (1,904/199 on the fixture), all
   24 pipeline+render tests green.
+- **Build memory reduction, round 3 (2026-08-13).** The EM_S tranche grew combined MEASURE to ~65M rows
+  and the build went into swap again. Root realisation: `self.measure`/`mscore`/`report` were held resident
+  through all of `get_iface` **and** the render solely to feed the cell-6 parquet export — which was
+  **commented out** — while the render only ever uses `meas`. Fix (Phase 1): under `FREE_UPSTREAM`,
+  `get_iface` now frees `self.measure` right after `meas` is built (its last use is the p-value floor) and
+  frees `mscore`/`report` after their derivations (`ms_gene`/`ms_per_uc`/`rep`), so the ~65M-row frame no
+  longer coexists with `meas`. The optional export moved to `combine_datasets` behind **`EXPORT_COMBINED`**
+  (default off, `PX_PARQUET_DIR`) — writes the three parquet dumps while the frames are complete, then they
+  can be freed. Guarded by `TestMemoryFreeing` (frames None after get_iface, render still builds, export
+  written). **Also (same round):** two full-`meas` groupbys in the completion/primary passes were building
+  frame-sized objects to serve a handful of rows — `_mean_logfc` (completion) grouped all ~65M (gene,uc)
+  pairs though only the ~2.7k `_add` rows use it → scoped to the `_add` experiments; and the primary attach's
+  `_pm`/`_prim_logfc`/`_prim_measured` covered *all non-validation* contrasts (≈60M-entry Series + 60M-tuple
+  set) though the loop only queries the **validation genes** → scoped `_pm` to `_val_genes`. Same trap as the
+  earlier `_measured` scoping; counts unchanged (1,158 completion / 726 pairs; 24+709 primary on the fixture).
+  Phase 2 (batch the render's `volcano_source` from `meas.parquet` per-experiment) and Phase 3 (stream the
+  combine union) remain **not yet done** — pending a re-measure of the new peak.
+- **FBX export column drift — silent tranche drop (2026-08-13).** A tranche's `FBX_MEASURE` had its key
+  column exported as **`contrastunique`** instead of **`uniquecontrast`** (the `20260813` tranche, 75 `EM_S…`
+  plates). On `pd.concat` across tranches the mismatched name became all-NaN `uniquecontrast`, so every one
+  of those rows failed the `uc2compound` map → dropped from `compounds_df` with **no error**: the plates got
+  a correct date via the (properly-named) `FBX_REPORT` and showed in `plate2date`/`meas`, but appeared
+  **nowhere** in the interface (max date stuck at the previous tranche). Symptom to watch for: a new tranche's
+  plates missing from the interface though its date shows. Diagnosis: compare `FBX_MEASURE` headers across
+  tranches (`pd.read_csv(f, nrows=0).columns`) or check `meas`'s `uniquecontrast` null-rate per plate. **Fix
+  applied: renamed the column in the CSV header in place** (14-byte swap, `contrastunique`↔`uniquecontrast`
+  are same length, data untouched). Considered a code-side alias-normalise on load but chose the data fix.
+- **Primary-screen volcano attached to validation stems (2026-07-24).** For a validation-plate hit
+  (e.g. ARG1 / SRB-0005514 on WT+KO), the interface now also shows that compound's **broad
+  primary-screen volcano** and links the gene across `primary → WT → MLN → KO` on hover. `get_iface`
+  adds a pass after stem-completion: for each validation `(gene, compound)`, pick the compound's
+  non-validation contrast where the gene has the **highest MS score** (tie-break strongest/most-negative
+  logfc); flag an existing hit row `is_primary=True` in place, else add a ride-along row. Note MS score
+  is absent on the `df_raw` broad side, so in practice the logfc tie-break decides. Plate-row schema
+  gained **`pl[10]` = is_primary** and `pl[7]` (contrast id, previously validation-only) is now set for
+  primary rows too, so `stem_trace` picks them up automatically. Client: `buildVolcanoHtml` prepends the
+  primary as the stem's **left-most `.vcell`** (labelled "primary screen", `.vprimary`); `visPlates`
+  shows it whenever its stem is visible (bypassing its own dated-plate tick), else falls back to a
+  stacked volcano. Tested (data-level `is_primary` flag + render-level `pl[10]`/`STEM_TRACE`); fixture
+  gained a deterministic Pw00 primary hit for SRB-0000006/G_00000. 26 tests green. **Visually verified in
+  headless chromium** (CDP recipe below): the stem renders `[primary screen | WT | MLN | KO]` with the
+  primary leftmost + blue "primary screen" label, and the hover-trace polyline links G_00000 across all
+  four (horizontal across primary/WT/MLN, dropping to KO where it's not significant). The primary also
+  attaches to *each* of a compound's stems (Pw10 + Pw11 both showed it). A gene **not significant** in the
+  primary still shows its **location** (ring) there — same `pl[9]`/placeRings path as the KO completion cells.
+- **Base-dedup cache invalidation for grown focal sets (2026-07-24).** Bug found while adding the above:
+  the volcano base-dedup skipped re-rendering a cached `vk` (`vk not in positions`), so **primary-screen
+  genes newly attached to an already-cached base never got a ring position** — on a *rebuild over an
+  existing `volcanoes_px`*, the non-significant primary genes' locations silently went missing (493/709 on
+  the stale synthetic cache; **709/709 on a clean build**). Fix: `render_vks` now also re-renders a `vk`
+  when its focal set isn't a subset of the cached `positions[vk]` keys, and `_write_base` records **every**
+  focal gene (measured → `[fx,fy]`, absent-here → `null`) so the subset check terminates (no perpetual
+  re-render — verified: rebuild re-renders only the grown vks, a 2nd rebuild renders 0). **Consequence:
+  rebuilding on real data will re-render the experiments whose focal set grew (the newly-attached primary
+  genes) — you do NOT need to clear `volcanoes_px`.** Guarded by `test_nonsignificant_primary_shows_location`.
 - **Opt-in compound-PNG refresh (2026-07-24).** Thumbnails are served from `SRB_PNG_DIR` (real CDD
   structures; RDKit only fills gaps — last real build: 11,015/11,015 from the library, 0 rdkit). New
   `DATA.download_cdd_pngs(params)` refreshes that dir from CDD Vault, reusing the `~/CDD_Vault_API`
@@ -188,8 +243,15 @@ data shares the namespace); no real PNGs so thumbnails are RDKit-rendered from `
   one `IFACE_OVERWRITE=True` rebuild — no config/code edits. (Replaced the old `FBX_BATCHES` list +
   `_FBX_DATE` dict.)
 - **`plate_dates=` →** Plates filter renders **nested-by-date** (collapsible per-date sub-blocks,
-  tri-state parents). **`plate_defaults=`** (list of plates) starts only those ticked; the notebook
-  passes the **latest tranche's plates** so the default view shows just the newest date.
+  tri-state parents). **`plate_defaults=`** (list of plates) starts only those ticked; the driver
+  passes whatever `resolve_plate_defaults(plate2date, SHOW_PLATE)` selects so the default view opens
+  on the chosen date(s).
+- **`SHOW_PLATE` config / `--show_plate` CLI (2026-08-13):** pick which plate **date(s)** open
+  default-ticked in the Plates filter. Config `SHOW_PLATE: [20260812, 20260813]` (list of YYYYMMDD),
+  or CLI `--show_plate "20260812, 20260813"` which **overrides** the config. Empty/absent → the
+  single **latest** date only (previous behaviour). `resolve_plate_defaults()` (in `Px_interface.py`,
+  beside `resolve_n_jobs`) normalises YYYYMMDD → the `YYYY-MM-DD` form `plate2date` stores and returns
+  `(plates_to_tick, dates_selected)`. Unit-tested by `TestResolvePlateDefaults`.
 - **Validation plates (2026-07-17):** plates whose name ends in a configured suffix — param
   `plate_validation_suffixes=('WT','MLN','KO')` on `plot_3d_interface`, injected as
   `__VALIDATION_SUFFIXES__` — are pulled out of their date groups into a **dedicated "validation"

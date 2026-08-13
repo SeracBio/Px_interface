@@ -209,6 +209,28 @@ class TestDataPipeline(unittest.TestCase):
         # Pw11KO is omitted entirely (compound never run on that condition)
         self.assertNotIn('Pw11KO', by_plate, 'Pw11KO should be omitted (compound not run there)')
 
+    def test_primary_screen_attach(self):
+        """For a validation hit, the compound's broad primary-screen volcano is attached to the
+        stem (flagged is_primary) so the hover-trace can link primary -> WT -> KO.
+
+        Fixture: SRB-0000006 / G_00000 is a strong significant-down hit on the broad plate Pw00
+        (non-validation) as well as on the Pw10/Pw11 validation stems. So compounds_df must carry
+        exactly one is_primary row for that pair, on Pw00, and it must NOT be a WT/MLN/KO plate."""
+        cdf = self.output.compounds_df
+        # the primary flag column exists
+        self.assertIn('is_primary', cdf.columns)
+        sel = cdf[(cdf['gene'] == 'G_00000') & (cdf['compound'] == 'SRB-0000006')]
+        prim = sel[sel['is_primary']]
+        # exactly one primary volcano is attached, on the broad (non-validation) plate Pw00
+        self.assertEqual(len(prim), 1)
+        self.assertEqual(prim['plate'].iloc[0], 'Pw00')
+        # it is a primary-screen plate, not a WT/MLN/KO validation condition
+        self.assertFalse(prim['plate'].iloc[0].endswith(('WT', 'MLN', 'KO')))
+        # the primary hit is a real significant row flagged in place (not a "not significant" ride-along)
+        self.assertFalse(bool(prim['is_completion'].iloc[0]))
+        # the validation-condition rows for the same pair are NOT flagged primary
+        self.assertFalse(sel[sel['plate'].isin(['Pw10WT', 'Pw10KO', 'Pw11WT'])]['is_primary'].any())
+
     def test_iface_files_saved(self):
         """get_iface saves the four render inputs to IFACE_DIR."""
         d = self.params.IFACE_DIR
@@ -324,6 +346,56 @@ class TestRender(unittest.TestCase):
         gene_contrasts = Counter(g for genes in st.values() for g in genes)
         self.assertTrue(any(c >= 2 for c in gene_contrasts.values()))
 
+    def test_primary_screen_linked_in_render(self):
+        """The attached primary-screen volcano reaches the client as a stem cell: its plate row
+        carries pl[10]==1 (primary flag) + pl[7] (contrast id), that contrast is in __STEM_TRACE__
+        (so the hover-trace links primary->WT->KO), and the client grouping code is present.
+        Fixture: SRB-0000006 / G_00000 is a primary-screen hit on Pw00 alongside the Pw10/Pw11 stems."""
+        import re
+        base = os.path.join(self.out_dir, 'interfaces')
+        js = open(os.path.join(base, 'Serac_Px_interface_data.js')).read()
+        code = open(os.path.join(base, 'Serac_Px_interface.html')).read() + js
+
+        def grab(name):
+            m = re.search(r'__' + name + r'__ = JSON\.parse\("(.*?)"\);', js, re.S)
+            return json.loads(json.loads('"' + m.group(1) + '"'))
+        comp = next(e for e in grab('GENE_COMPOUNDS')['G_00000'] if e[0] == 'SRB-0000006')
+        prim = [pl for pl in comp[3] if len(pl) > 10 and pl[10] == 1]
+        # exactly one plate row is flagged primary, on Pw00, carrying a contrast id for the trace
+        self.assertEqual(len(prim), 1)
+        self.assertEqual(prim[0][0], 'Pw00')
+        self.assertTrue(prim[0][7])
+        # that contrast (with G_00000) is in the stem trace -> links to the WT/KO conditions on hover
+        st = grab('STEM_TRACE')
+        self.assertIn(prim[0][7], st)
+        self.assertIn('G_00000', st[prim[0][7]])
+        # the client grouping/visibility code for primary cells is present
+        for tok in ('isPrimaryPlate', 'vprimary', 'primary screen'):
+            self.assertIn(tok, code)
+
+    def test_nonsignificant_primary_shows_location(self):
+        """A gene not significant in the primary screen still shows its location: every ride-along
+        primary cell (is_primary + is_completion, pl[10]==1 & pl[6]) must carry a ring position pl[9].
+        Regression guard for the base-dedup cache — primary genes newly attached to an already-cached
+        base must trigger a re-render (focal-set grew) so their positions get recorded, else their
+        location would silently go missing on rebuilds over an existing volcanoes_px."""
+        import re
+        js = open(os.path.join(self.out_dir, 'interfaces', 'Serac_Px_interface_data.js')).read()
+        gc = json.loads(json.loads('"' + re.search(r'__GENE_COMPOUNDS__ = JSON\.parse\("(.*?)"\);', js, re.S).group(1) + '"'))
+        ride = with_ring = 0
+        for entries in gc.values():
+            for e in entries:
+                if not (isinstance(e, list) and e and e[0] != '__META__' and len(e) > 3 and isinstance(e[3], list)):
+                    continue
+                for pl in e[3]:
+                    if len(pl) > 10 and pl[10] == 1 and pl[6]:   # primary ride-along (gene not significant here)
+                        ride += 1
+                        with_ring += 1 if pl[9] else 0
+        # the fixture produces many non-significant primary ride-alongs...
+        self.assertGreater(ride, 0)
+        # ...and every one shows its location (ring position recorded)
+        self.assertEqual(with_ring, ride)
+
     def test_gene_size_buckets(self):
         """Dots are sized by #compounds each gene is significant in. The config's
         GENE_SIZE_BUCKETS must reach the client as __SIZE_BUCKETS__, and every plotted
@@ -389,6 +461,51 @@ class TestRender(unittest.TestCase):
         self.assertIn('msLo = b.z[0]', html)
 
 
+class TestMemoryFreeing(unittest.TestCase):
+    """FREE_UPSTREAM frees the combined measure/mscore/report inside get_iface (measure right after
+    `meas` is built, mscore/report after their derivations) so the ~65M-row frame doesn't linger
+    through the render — which still works because it only needs `meas`. EXPORT_COMBINED dumps the
+    three tables to parquet first, so the export survives even though the frames are freed."""
+
+    @classmethod
+    def setUpClass(cls):
+        make_synthetic.main('tmp')
+        params = px.PARAMS(_CFG).load_params()
+        params.FREE_UPSTREAM = True
+        params.EXPORT_COMBINED = True
+        params.PX_PARQUET_DIR = 'tmp/px_parquet'
+        data = px.DATA()
+        for m in ('load_chemical_lib_df', 'load_old_df', 'load_new_df',
+                  'get_contaminants_and_controls', 'get_gene_research'):
+            getattr(data, m)(params)
+        out = px.OUTPUT()
+        out.combine_datasets(data, params)
+        out.get_de_validated(data, params)
+        out.get_iface(data, params)
+        out.build_interface(data, params, 'tmp/out_free')
+        cls.out = out
+
+    def test_combined_frames_freed(self):
+        # measure/mscore/report are released inside get_iface once their derivations finished
+        self.assertIsNone(self.out.measure)
+        self.assertIsNone(self.out.mscore)
+        self.assertIsNone(self.out.report)
+
+    def test_render_inputs_survive(self):
+        # the frames the interface actually needs are intact despite the freeing
+        self.assertIsNotNone(self.out.meas)
+        self.assertGreater(len(self.out.compounds_df), 0)
+
+    def test_export_combined_written(self):
+        # EXPORT_COMBINED wrote the three parquet dumps before the frames were freed
+        for f in ['Px_MEASURE.parquet', 'Px_MSCORE.parquet', 'Px_REPORT.parquet']:
+            self.assertTrue(os.path.exists(os.path.join('tmp/px_parquet', f)), f'{f} not exported')
+
+    def test_html_written_after_free(self):
+        # the full render still completes end-to-end with the frames freed
+        self.assertTrue(os.path.exists('tmp/out_free/interfaces/Serac_Px_interface.html'))
+
+
 class TestResolveNJobs(unittest.TestCase):
     """The NJOBS config knob resolves to a concrete worker count for the volcano render:
     <=0/None -> auto (all CPUs but 2); a positive int -> exactly that many."""
@@ -404,6 +521,32 @@ class TestResolveNJobs(unittest.TestCase):
         self.assertEqual(px.resolve_n_jobs('8'), 8)
         # never returns < 1
         self.assertGreaterEqual(px.resolve_n_jobs(0), 1)
+
+
+class TestResolvePlateDefaults(unittest.TestCase):
+    """SHOW_PLATE (config/--show_plate) picks which plate dates open default-ticked:
+    empty/None -> the single latest date; a list of YYYYMMDD dates -> exactly those dates'
+    plates, with YYYYMMDD normalised to the YYYY-MM-DD form plate2date stores."""
+
+    def setUp(self):
+        self.p2d = {'Pa': '2026-08-11', 'Pb': '2026-08-12', 'Pc': '2026-08-12', 'Pd': '2026-08-13'}
+
+    def test_default_latest_only(self):
+        # no SHOW_PLATE -> only the latest date's plates ticked
+        plates, dates = px.resolve_plate_defaults(self.p2d, None)
+        self.assertEqual(plates, ['Pd'])
+        self.assertEqual(dates, ['2026-08-13'])
+
+    def test_multiple_yyyymmdd_dates(self):
+        # a list of YYYYMMDD dates -> every plate on any of them, dates normalised to YYYY-MM-DD
+        plates, dates = px.resolve_plate_defaults(self.p2d, ['20260812', '20260813'])
+        self.assertEqual(plates, ['Pb', 'Pc', 'Pd'])
+        self.assertEqual(dates, ['2026-08-12', '2026-08-13'])
+
+    def test_ints_and_blanks_tolerated(self):
+        # YAML ints and stray blank/empty entries are coerced/dropped, not errors
+        plates, _ = px.resolve_plate_defaults(self.p2d, [20260811, '', ' '])
+        self.assertEqual(plates, ['Pa'])
 
 
 class TestDownloadCddPngs(unittest.TestCase):

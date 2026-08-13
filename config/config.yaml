@@ -45,6 +45,9 @@ FBX_DIR: /mnt/c/Users/gtamo/Serac Biosciences Dropbox/Serac_team/4_Data_Sciences
 # is loaded + concatenated, and its plate date comes from the folder name — drop in a new folder, nothing to edit.
 PLATE_DATE_OVERRIDES: {}              # plate -> 'YYYY-MM-DD' for plates absent from source exports
                                       # (Pw58/60/61/62 now resolve via the 0520 DB export -> 2026-05-20)
+SHOW_PLATE: [20260812,20260813,20260814]                        # dates (YYYYMMDD) whose plates open default-ticked in the Plates
+                                      # filter, e.g. [20260812, 20260813]. Empty -> latest date only.
+                                      # Override at the CLI: --show_plate "20260812, 20260813"
 
 
 OT_ROOT: data/external/opentarget
@@ -78,9 +81,9 @@ CONTROLS:
 GENE_RESEARCH: /mnt/c/Users/gtamo/Desktop/GT/disease_association/20260623_10Kgenes_research.json
 
 CHEMLIB_OVERWRITE: false
-DFRAW_OVERWRITE: false
+UPDATE_PNGS: false               # true -> fetch new/missing PNGs before building (resume-safe: skips existing)
+DFRAW_OVERWRITE: true
 IFACE_OVERWRITE: true           # true -> rebuild + save the interface inputs; false -> load them from IFACE_DIR + free RAM
-UPDATE_PNGS: true               # true -> fetch new/missing PNGs before building (resume-safe: skips existing)
 
 
 # Parallelism: workers for the volcano render (joblib base render + threaded SVG writes).
@@ -90,6 +93,14 @@ NJOBS: 16 # 0 -> auto
 
 # Memory: after get_iface builds the render inputs (IFACE_OVERWRITE=true), free the heavy upstream
 # frames (df_raw + FBX_MEASURE/MSSCORE/REPORT, tens of M rows) that are unused past that point.
-# self.measure/mscore/report are kept (exported to parquet after the render). Set false to keep
-# df_raw/FBX_* resident (e.g. for interactive inspection in the same kernel).
+# With FREE_UPSTREAM the combined measure/mscore/report are ALSO freed inside get_iface once their
+# derivations are done (measure right after `meas` is built) — the render only needs `meas`, so the
+# full ~65M-row frame no longer lingers through the render. Set false to keep everything resident
+# (e.g. for interactive inspection in the same kernel).
 FREE_UPSTREAM: true
+
+# Optionally export the combined tables to parquet before they are freed. When true, combine_datasets
+# writes Px_MEASURE/MSCORE/REPORT.parquet to PX_PARQUET_DIR (so you keep the export without holding the
+# frames in RAM through the render). Default off — leave off unless you need the parquet dumps.
+EXPORT_COMBINED: false
+PX_PARQUET_DIR: /mnt/c/Users/gtamo/Serac Biosciences Dropbox/Serac_team/4_Data_Sciences/15_ML/Daniela/Px_parquet_from_GT

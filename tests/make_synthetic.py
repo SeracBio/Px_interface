@@ -56,6 +56,10 @@ def make_df_raw_ms(out, rng):
     df.loc[_sig, ['logfc', 'pvalue', 'adjpval', 'significant']] = [-2.5, 1e-5, 1e-4, 1.0]
     _nsk = (df['compound'] == _c6) & (df['genes'] == _g0) & (df['MSPlate'] == 'Pw10KO')
     df.loc[_nsk, ['logfc', 'pvalue', 'adjpval', 'significant']] = [0.2, 0.6, 0.8, 0.0]
+    #   * Primary screen: a strong significant-down hit on the broad (non-validation) plate Pw00
+    #     -> primary-screen attach must flag that row is_primary and link it into the Pw10/Pw11 stems.
+    _prm = (df['compound'] == _c6) & (df['genes'] == _g0) & (df['MSPlate'] == 'Pw00')
+    df.loc[_prm, ['logfc', 'pvalue', 'adjpval', 'significant']] = [-6.0, 1e-6, 1e-5, 1.0]
     df = df[~((df['compound'] == _c6) & (df['MSPlate'] == 'Pw11KO'))].reset_index(drop=True)
     df = df[['MoleculeBatchID', 'MSPlate', 'genes', 'pg', 'logfc', 'pvalue',
              'adjpval', 'significant', 'uniquecontrast', 'compound', 'batch']]
@@ -126,10 +130,13 @@ def make_sources_config(out, out_rel, rng):
         bcol = 'Batch Molecule-Batch ID' if prefixed else 'Molecule-Batch ID'
         ccol = (P + 'Concentration (uM)') if prefixed else 'Concentration'
         # validation-plate experiments are never 'Silent' (Silent rows get dropped downstream),
-        # so the grouped WT/MLN/KO volcanoes always survive for the demo/QA.
+        # so the grouped WT/MLN/KO volcanoes always survive for the demo/QA. The QA compound's
+        # primary-screen hit (SRB-0000006 on Pw00) is likewise forced non-Silent so it stays in
+        # compounds_df and the primary-screen attach takes the "mark existing hit" path.
         return pd.DataFrame([{
             bcol: cmp2mbid[c], pre + 'MSPlate': pl, ccol: float(rng.choice([0.1, 1.0, 10.0])),
-            pre + 'Cmpd Activity': ('Low (2-10)' if pl in VAL_PLATES else rng.choice(ACTS)),
+            pre + 'Cmpd Activity': ('Low (2-10)' if (pl in VAL_PLATES or (c == COMPOUNDS[6] and pl == 'Pw00'))
+                                    else rng.choice(ACTS)),
             pre + 'Nr. Down': int(rng.randint(0, 40)),
             pre + 'Cell line': 'HEK293', pre + 'Sample Condition': 'WT',
         } for c in comps for pl in PLATES])

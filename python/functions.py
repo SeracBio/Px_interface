@@ -982,6 +982,9 @@ _INTERFACE_INJECT = '''
   #hover-img .volcano .vstem .vcell { flex: 0 0 auto; text-align: center; }
   #hover-img .volcano .vstem .vcell .vlabel { text-align: center; }
   #hover-img .volcano .vstem .vcell.vcomp { opacity: 0.85; }
+  /* broad primary-screen volcano prepended to a stem: set off by a left rule + a tinted label */
+  #hover-img .volcano .vstem .vcell.vprimary { border-left: 2px solid #1D6FB8; padding-left: 6px; margin-left: 2px; }
+  #hover-img .volcano .vstem .vcell.vprimary .vlabel { color: #1D6FB8; font-weight: 700; }
   /* overlay tracing the hovered gene's marker across a stem's WT/MLN/KO volcanoes */
   #hover-img .volcano .vstem .vstem-trace { position: absolute; left: 0; top: 0;
                                             pointer-events: none; overflow: visible; z-index: 4; }
@@ -1359,6 +1362,9 @@ _INTERFACE_INJECT = '''
     var _valSuffixes = window.__VALIDATION_SUFFIXES__ || [];
     var _valRe = _valSuffixes.length ? new RegExp('(' + _valSuffixes.join('|') + ')$', 'i') : null;
     function isValidationPlate(p) { return !!_valRe && _valRe.test(p); }
+    // pl[10] flags a broad primary-screen volcano attached to a validation stem (rendered as the
+    // stem's leading cell); it rides along whenever the stem is shown, ignoring its own plate tick.
+    function isPrimaryPlate(pl) { return pl[10] === 1; }
     var _valSufRank = {};
     _valSuffixes.forEach(function(s, i) { _valSufRank[s.toUpperCase()] = i; });
     function valSufOf(p)  { var m = _valRe && p.match(_valRe); return m ? m[1].toUpperCase() : ""; }
@@ -1797,12 +1803,23 @@ _INTERFACE_INJECT = '''
       var real = t[3].filter(function(pl) {
         return !pl[6] && ticked[pl[0]] && (!activities.length || !pl[3] || tickedAct[pl[3]]) && msOk(pl);
       });
-      if (real.length === t[3].length) return real;   // no completion rows -> fast path
+      if (real.length === t[3].length) return real;   // all rows plainly visible -> fast path
       var okStems = {};
       real.forEach(function(pl) { if (isValidationPlate(pl[0])) okStems[valStemOf(pl[0])] = 1; });
-      return real.concat(t[3].filter(function(pl) {
-        return pl[6] && ticked[pl[0]] && okStems[valStemOf(pl[0])];
-      }));
+      var hasStem = Object.keys(okStems).length > 0;
+      var out = real.slice(), inOut = new Set(real);
+      // completion rows ride along a visible stem (bypass activity filter); primary handled below
+      t[3].forEach(function(pl) {
+        if (pl[6] && !isPrimaryPlate(pl) && ticked[pl[0]] && okStems[valStemOf(pl[0])] && !inOut.has(pl)) {
+          out.push(pl); inOut.add(pl);
+        }
+      });
+      // primary-screen rows: visible whenever the compound has a visible validation stem,
+      // regardless of their own dated-plate tick (they're tied to the stem, not the Plates filter)
+      if (hasStem) t[3].forEach(function(pl) {
+        if (isPrimaryPlate(pl) && !inOut.has(pl)) { out.push(pl); inOut.add(pl); }
+      });
+      return out;
     }
     function entryVisible(t) {
       if (!cmpAllowed(t)) return false;
@@ -1999,9 +2016,21 @@ _INTERFACE_INJECT = '''
         var vps = visPlates(t);
         if (!vps.length) return "";
         // Validation plates: group by stem, conditions side by side (WT/MLN/KO) so the gene's
-        // location can be compared across the same plate's conditions at a glance.
+        // location can be compared across the same plate's conditions at a glance. The compound's
+        // broad primary-screen volcano (pl[10]) is prepended as the stem's LEFT-most cell so the
+        // hover-trace links primary -> WT -> KO.
         var valRows = vps.filter(function(pl) { return isValidationPlate(pl[0]); });
-        var normRows = vps.filter(function(pl) { return !isValidationPlate(pl[0]); });
+        var primaryRows = vps.filter(isPrimaryPlate);
+        var normRows = vps.filter(function(pl) { return !isValidationPlate(pl[0]) && !isPrimaryPlate(pl); });
+        // one .vcell (data-vk drives the trace); `lead` labels/styles the primary-screen cell
+        function vcell(pl, lead) {
+          var act = pl[3] ? ' · ' + pl[3] : '';
+          var ns = pl[6] ? ' <span class="vns">not significant</span>' : '';
+          var lbl = lead ? 'primary screen' : (valSufOf(pl[0]) || pl[0]);
+          return '<div class="vcell' + (pl[6] ? ' vcomp' : '') + (lead ? ' vprimary' : '') + '" data-vk="' + (pl[7] || '') + '">'
+               + '<div class="vlabel">' + lbl + ' (logfc ' + pl[1] + ')' + act + ns + '</div>'
+               + volEl(pl) + '</div>';
+        }
         var groups = {}, gorder = [];
         valRows.forEach(function(pl) {
           var st = valStemOf(pl[0]);
@@ -2013,15 +2042,12 @@ _INTERFACE_INJECT = '''
           groups[st].sort(function(a, b) { return valRank(a[0]) - valRank(b[0]); });
           html += '<div class="vstem-lab">' + currentGene + ' · ' + (groups[st][0][5] || cmp)
                 + ' · ' + st + '</div><div class="vstem">';
-          groups[st].forEach(function(pl) {
-            var act = pl[3] ? ' · ' + pl[3] : '';
-            var ns = pl[6] ? ' <span class="vns">not significant</span>' : '';
-            html += '<div class="vcell' + (pl[6] ? ' vcomp' : '') + '" data-vk="' + (pl[7] || '') + '"><div class="vlabel">'
-                  + (valSufOf(pl[0]) || pl[0]) + ' (logfc ' + pl[1] + ')' + act + ns + '</div>'
-                  + volEl(pl) + '</div>';
-          });
+          primaryRows.forEach(function(pl) { html += vcell(pl, true); });   // primary screen first
+          groups[st].forEach(function(pl) { html += vcell(pl, false); });
           html += '</div>';
         });
+        // No visible stem but a primary row survived (its own plate is ticked): show it stacked.
+        if (!gorder.length) normRows = normRows.concat(primaryRows);
         // Non-validation (dated) plates: stacked, one per row, as before.
         normRows.forEach(function(pl) {
           var act = pl[3] ? ' · ' + pl[3] : '';
@@ -3694,6 +3720,7 @@ def plot_3d_interface(
                 has_mbid = 'molecule_batch_id' in compounds_df.columns  # per-plate batch id
                 has_comp = 'is_completion' in compounds_df.columns  # ride-along validation-stem condition (gene not significant here)
                 has_ms = 'ms_score' in compounds_df.columns  # per-(gene,compound,plate) MS score for the slider
+                has_primary = 'is_primary' in compounds_df.columns  # broad primary-screen volcano attached to a validation stem
                 import re as _re_v   # validation-plate matcher: only these rows carry a contrast id (vk) for the trace
                 _vp_suf = [str(s).upper() for s in (plate_validation_suffixes or [])]
                 _vp_re = _re_v.compile('(' + '|'.join(_vp_suf) + ')$', _re_v.I) if _vp_suf else None
@@ -3718,7 +3745,7 @@ def plot_3d_interface(
                         smi = (cg['smiles'].dropna().iloc[0]
                                if cg['smiles'].notna().any() else None)
                         ei = len(entries)
-                        plate_rows = []   # [plate, logfc, volcano, activity, n_genes, mbid, is_completion] per plate
+                        plate_rows = []   # per plate: [plate, logfc, volcano, activity, n_genes, mbid, is_completion, vk, ms_score, [fx,fy], is_primary]
                         # column arrays once per group (avoids a per-row Series from iterrows)
                         _plate = cg['plate'].to_numpy()
                         _logfc = cg['logfc'].to_numpy()
@@ -3727,6 +3754,7 @@ def plot_3d_interface(
                         _mbid = cg['molecule_batch_id'].to_numpy() if has_mbid else None
                         _comp = cg['is_completion'].to_numpy() if has_comp else None
                         _ms = cg['ms_score'].to_numpy() if has_ms else None
+                        _prim = cg['is_primary'].to_numpy() if has_primary else None
                         _vk = cg[vkey_col].to_numpy()
                         for pi in range(len(cg)):
                             lf = _logfc[pi]
@@ -3738,9 +3766,10 @@ def plot_3d_interface(
                                 (str(int(_ng[pi])) if has_ng and pd.notna(_ng[pi]) else ''),
                                 (str(_mbid[pi]) if has_mbid and pd.notna(_mbid[pi]) else ''),
                                 (1 if has_comp and bool(_comp[pi]) else 0),
-                                (str(_vk[pi]) if (_is_valp(_plate[pi]) and pd.notna(_vk[pi])) else ''),  # contrast id (validation rows only) for the trace
+                                (str(_vk[pi]) if ((_is_valp(_plate[pi]) or (has_primary and bool(_prim[pi]))) and pd.notna(_vk[pi])) else ''),  # contrast id — validation + primary-screen rows carry it for the trace
                                 (round(float(_ms[pi]), 3) if (has_ms and pd.notna(_ms[pi])) else None),  # per-compound MS score (pl[8]); null on completion rows
                                 None,   # pl[9] = [fx, fy] focal-gene ring position on the shared base (filled in the render pass)
+                                (1 if has_primary and bool(_prim[pi]) else 0),   # pl[10] = primary-screen row -> leading cell of the stem client-side
                             ])
                             vk = _vk[pi]
                             if pd.notna(vk):
@@ -3866,10 +3895,15 @@ def plot_3d_interface(
                 task_vks = {}
                 for (g, vk, ei, pi) in tasks:
                     task_vks.setdefault(str(vk), []).append((str(g), ei, pi))
+                _focal = {vk: {g for (g, _e, _p) in lst} for vk, lst in task_vks.items()}
                 _existing = set(os.listdir(volcano_dir))
-                # a vk needs rendering if its base image is missing OR we lack its ring positions
+                # A vk needs (re)rendering if its base image is missing, we lack its positions, OR its
+                # focal set grew beyond the cached positions — e.g. primary-screen genes newly attached
+                # to an already-cached base. Without the last check those genes would never get a ring
+                # position (the base is skipped as "cached") and their location wouldn't show.
                 render_vks = [vk for vk in task_vks
-                              if _bfname(vk) not in _existing or vk not in positions]
+                              if _bfname(vk) not in _existing or vk not in positions
+                              or not _focal[vk].issubset(positions.get(vk, {}))]
                 n_bases, n_render = len(task_vks), len(render_vks)
                 n_cached = n_bases - n_render
                 written_ok = set()
@@ -3898,7 +3932,6 @@ def plot_3d_interface(
                                  _vsrc.loc[_vsrc['compound'].isin(render_vks), _cols].dropna()
                                  .groupby('compound', sort=False)}
                     _empty = _vsrc.iloc[0:0][_cols]
-                    _focal = {vk: {g for (g, _e, _p) in task_vks[vk]} for vk in render_vks}
                     print(f'> rendering {n_render:,} base volcanoes (one per experiment) for '
                           f'{len(tasks):,} (gene,plate) cells on {volcano_n_jobs} workers '
                           f'({n_cached:,} cached) [significant SVG]...', flush=True)
@@ -3935,11 +3968,13 @@ def plot_3d_interface(
                                 _fh.write(svg)
                         except Exception:
                             return (vk, False, {})
+                        # record EVERY focal gene — measured -> [fx,fy]; not measured here -> None — so the
+                        # render_vks subset check terminates (a focal gene absent from the experiment stays
+                        # a key, else its vk would re-render on every build).
                         pos = {}
                         for _g in _focal.get(vk, ()):
                             _fr = _ring_frac(geom, _g)
-                            if _fr:
-                                pos[_g] = [round(_fr[0], 4), round(_fr[1], 4)]
+                            pos[_g] = [round(_fr[0], 4), round(_fr[1], 4)] if _fr else None
                         return (vk, True, pos)
                     _ow = min(64, max(1, volcano_n_jobs) * 2)
                     with ThreadPoolExecutor(max_workers=_ow) as _ex:
@@ -4215,7 +4250,7 @@ def plot_3d_interface(
                     continue
                 for _row in entry[3]:
                     if not (isinstance(_row, list) and len(_row) > 9 and _row[7] and _row[9]):
-                        continue   # validation rows (contrast id at 7) with a ring position at 9
+                        continue   # validation + primary-screen rows (contrast id at 7, ring pos at 9)
                     _hit = 0 if (len(_row) > 6 and _row[6]) else 1
                     stem_trace.setdefault(str(_row[7]), {})[str(g)] = [_row[9][0], _row[9][1], 1.0, _hit]
         if stem_trace:

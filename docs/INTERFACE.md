@@ -61,9 +61,13 @@ Three classes: **`PARAMS`** (reads `config.yaml`), **`DATA`** (loads raw inputs)
   (OpenTargets, ranked by `PRIORITY_DISEASE_AREAS`), `ms_score`. Genes with `R2 > PHARMA_R2_CUTOFF`
   that are in the pharma/BMS lists get `disease_area = 'pharma'`/`'BMS'`.
 - **`compounds_df`** — one row per (gene, compound, plate) significant-**down** hit, plus report
-  metadata, SMILES, `molecule_batch_id`, and **validation-stem completion rows** (`is_completion=True`):
+  metadata, SMILES, `molecule_batch_id`, **validation-stem completion rows** (`is_completion=True`):
   a gene significant in a stem's WT but not its KO gets a ride-along KO row *iff* the compound was
-  actually run there and the gene was measured (else the condition is correctly omitted).
+  actually run there and the gene was measured (else the condition is correctly omitted), and
+  **primary-screen attach rows** (`is_primary=True`): for each validation hit, the compound's broad
+  primary-screen volcano — the non-validation contrast where the gene has the highest MS score (else
+  its strongest-logfc measurement) — is flagged (an existing hit row in place, else a ride-along
+  added), so the client can render it as the stem's leading cell and link it into the hover-trace.
 - **`meas`** — the volcano source (unified `measure`, noisy plates dropped, 0.0 p-values floored).
 - **`plate2date`** — `{plate: date}` for the date-nested Plates filter.
 
@@ -159,11 +163,21 @@ stale images. `xlim`/`size_px` must match across runs or filenames won't align.
 ### Cross-plate hover trace
 
 `stem_trace` (`{vk: {gene: [fx, fy, 1.0, isHit]}}`) is built straight from `custom`'s `pl[9]` (the
-same ring positions), so it works on both the fresh-render and the panels-cache path (`pl[9]` is
-persisted in `panels.json`) with no dependency on any on-disk position file. Injected as
-**`__STEM_TRACE__`**; the client draws the trace polyline from those fractions + the `<object>` rect,
-so it works over `file://` and http **without** reading the SVG's `contentDocument` (which `file://`
-blocks). See [`wiki/wiki.md`](../wiki/wiki.md) for the full trace UX.
+same ring positions) for every row that carries a contrast id (`pl[7]`) — the **validation** rows
+**and** the **primary-screen** rows (`pl[10]==1`). It works on both the fresh-render and the
+panels-cache path (`pl[9]` is persisted in `panels.json`) with no dependency on any on-disk position
+file. Injected as **`__STEM_TRACE__`**; the client draws the trace polyline from those fractions +
+the `<object>` rect, so it works over `file://` and http **without** reading the SVG's
+`contentDocument` (which `file://` blocks). See [`wiki/wiki.md`](../wiki/wiki.md) for the full trace UX.
+
+### Primary-screen cell in the stem
+
+`buildVolcanoHtml` groups validation rows by stem and **prepends the compound's primary-screen
+volcano** (`isPrimaryPlate`, `pl[10]==1`) as the stem's left-most `.vcell` (labelled *"primary
+screen"*, styled `.vprimary`). Because that cell carries `data-vk` (`pl[7]`) it joins the same
+`traceGene` polyline, so hovering the gene links `primary → WT → MLN → KO`. `visPlates` makes the
+primary cell visible **whenever its validation stem is** (bypassing its own dated-plate tick); if no
+stem is visible it falls back to a normal stacked volcano.
 
 ---
 
@@ -321,6 +335,11 @@ Hash keys: `p=` (exact plate list), `pg`/`pc` (pinned), `hg`/`hc` (hidden), `sp=
 - `config.yaml`: `ACTIVE_C` (pharma dot), `BMS_C` (BMS dot), `VALIDATION_PLATE_SUFFIXES`
   (`[WT, MLN, KO]`), `GENE_SIZE_BUCKETS` (6 dot px for #significant-compounds = 1,2,3,4,5,>5),
   `GENE_RING_PX` (ring rim thickness in px; underlay dot = fill + 2×this).
+- **`SHOW_PLATE` / `--show_plate`** — which plate **date(s)** open default-ticked in the Plates filter.
+  Config `SHOW_PLATE: [20260812, 20260813]` (list of YYYYMMDD), or CLI `--show_plate "20260812, 20260813"`
+  (overrides the config). Empty/absent → the single **latest** date only (previous default). `build_interface`
+  resolves it via `resolve_plate_defaults(plate2date, SHOW_PLATE)` (normalises YYYYMMDD → the `YYYY-MM-DD`
+  form `plate2date` stores) and passes the result as `plot_3d_interface(plate_defaults=)`.
 - **`NJOBS`** — parallel workers for the volcano render (the only multiprocessing in the build:
   joblib base render + threaded SVG writes). `0`/blank/`<0` → auto `max(1, CPU-2)`; a positive int →
   exactly that many. `build_interface` passes `resolve_n_jobs(params.NJOBS)` to
@@ -333,13 +352,17 @@ Hash keys: `p=` (exact plate list), `pg`/`pc` (pinned), `hg`/`hc` (hidden), `sp=
   fetch the saved search `CDD_SEARCH` from vault `CDD_VAULT` using the token in `CDD_TOKEN_FILE`, writing
   `SRB-XXXXXXX.png` into `SRB_PNG_DIR`. It's **resume-safe** (skips files already on disk), so a normal
   run only pulls newly-added compounds; leave `UPDATE_PNGS: false` for the common case. PNGs stay local.
-- **Build memory** — `MEASURE` is ~47.7M rows, so the build is RAM-bound. `combine_datasets` downcasts
-  the repeated string columns (`genes`, `uniquecontrast`, `plate`, `compound`, `pg`, `source`) of
-  `measure`/`mscore`/`report` to `category` (round-trips through parquet, transparent to
-  groupby/isin/`.str`/merge); `get_iface`'s validation-stem `_measured` set is scoped to validation-plate
-  contrasts (never the full 47.7M rows); and **`FREE_UPSTREAM`** (config; default off so tests keep the
-  frames) frees the `FBX_*`/`MS`/`df_raw` sources as soon as they're absorbed. `self.measure/mscore/report`
-  are kept (the notebook exports them to `Px_MEASURE/MSCORE/REPORT.parquet`).
+- **Build memory** — `MEASURE` is tens of millions of rows (≈65M with the EM_S tranche), so the build is
+  RAM-bound. `combine_datasets` downcasts the repeated string columns (`genes`, `uniquecontrast`, `plate`,
+  `compound`, `pg`, `source`) of `measure`/`mscore`/`report` to `category` (round-trips through parquet,
+  transparent to groupby/isin/`.str`/merge); `get_iface`'s validation-stem `_measured` set is scoped to
+  validation-plate contrasts (never the full frame); and **`FREE_UPSTREAM`** (config; default off so tests
+  keep the frames) frees the heavy frames as soon as they're absorbed — the `FBX_*`/`MS`/`df_raw` sources,
+  **and now the combined `measure`/`mscore`/`report` inside `get_iface`** (`measure` right after `meas` is
+  built, `mscore`/`report` after their derivations). The render only needs `meas`, so the full ~65M-row
+  frame no longer coexists with `meas` through `get_iface` + the render. Set **`EXPORT_COMBINED: true`**
+  (with `PX_PARQUET_DIR`) to dump `Px_MEASURE/MSCORE/REPORT.parquet` in `combine_datasets` before the frames
+  are freed — replaces the old notebook cell-6 export that held them resident the whole time.
 - `PRIORITY_DISEASE_AREAS` (module constant in `Px_interface.py`) is the **single source of truth**
   for disease-area ranking; `build_interface` asserts `DISEASE_AREA_COLORS` covers it.
 - `VALIDATION_COLORS` (fill + ring per category) is defined in `build_interface` and defaulted once

@@ -50,6 +50,21 @@ def resolve_n_jobs(njobs):
     return max(1, (os.cpu_count() or 8) - 2) if n <= 0 else n
 
 
+def resolve_plate_defaults(plate2date, show_plate=None):
+    """
+    Which plates to default-tick in the interface's Plates filter. show_plate = a list of YYYYMMDD
+    dates (config SHOW_PLATE / --show_plate); those dates' plates are ticked. Empty/None -> the
+    single latest date only (previous default). YYYYMMDD is normalised to the YYYY-MM-DD form
+    plate2date stores, so it matches regardless of the source (FBX folder name or df_raw export).
+    param dict plate2date: {plate -> 'YYYY-MM-DD'}
+    param list show_plate: YYYYMMDD date strings/ints (or None/[] for latest-only)
+    return tuple: (sorted plate names to tick, sorted 'YYYY-MM-DD' dates selected)
+    """
+    show = [str(d).strip() for d in (show_plate or []) if str(d).strip()]
+    dates = {pd.to_datetime(d).strftime('%Y-%m-%d') for d in show} if show else {max(plate2date.values())}
+    return sorted(p for p, d in plate2date.items() if d in dates), sorted(dates)
+
+
 class PARAMS():
     def __init__(self, config_path):
         self.config_path = config_path
@@ -313,6 +328,17 @@ class OUTPUT():
         print(f'> categorized string columns | MEASURE now '
               f'{self.measure.memory_usage(deep=True).sum() / 1e9:.1f} GB')
 
+        # optional parquet dump of the combined tables (opt-in) — done here while they're complete, so
+        # get_iface can free them afterwards (with FREE_UPSTREAM) instead of holding ~65M rows through
+        # the render just to keep the export possible. Category dtype round-trips through parquet.
+        if getattr(params, 'EXPORT_COMBINED', False):
+            _pq = os.path.expanduser(params.PX_PARQUET_DIR)
+            os.makedirs(_pq, exist_ok=True)
+            self.measure.to_parquet(os.path.join(_pq, 'Px_MEASURE.parquet'))
+            self.mscore.to_parquet(os.path.join(_pq, 'Px_MSCORE.parquet'))
+            self.report.to_parquet(os.path.join(_pq, 'Px_REPORT.parquet'))
+            print(f'> exported combined tables -> {_pq} (Px_MEASURE/MSCORE/REPORT.parquet)')
+
         # free the FBX_* sources + MS now — fully absorbed into measure/mscore/report and unused
         # past here (get_iface needs only df_raw/serac_df/target2R2_df + the combined tables). Frees
         # the big FBX_MEASURE BEFORE get_iface allocates its own copy, so the peak doesn't hit swap.
@@ -370,6 +396,13 @@ class OUTPUT():
             meas = self.measure.loc[~self.measure['plate'].isin(DROP_PLATES), _MEAS_COLS].copy()
             _pmin = self.measure.loc[self.measure['pvalue'] > 0, 'pvalue'].min()
             meas.loc[meas['pvalue'].eq(0.0), 'pvalue'] = _pmin
+            # self.measure is fully absorbed into `meas` now (the only frame the render needs); free the
+            # ~65M-row original so it doesn't coexist with `meas` through the rest of get_iface + render.
+            if getattr(params, 'FREE_UPSTREAM', False):
+                self.measure = None
+                gc.collect()
+                try: ctypes.CDLL('libc.so.6').malloc_trim(0)
+                except Exception: pass
 
             # --- gene-level axes: x=R2 (SAR full-genome), y=OpenTargets association + top area, z=ms_score ---
             R2_df = data.target2R2_df[['genes', 'R2']]
@@ -410,6 +443,13 @@ class OUTPUT():
             # mscore table (single source of truth), so the slider filters each experiment by the SAME
             # official ms_score the dot's z-max is derived from. Keyed by (genes, uniquecontrast).
             ms_per_uc = self.mscore.dropna(subset=['ms_score']).groupby(['genes', 'uniquecontrast'])['ms_score'].max()
+            # last use of the combined mscore/report frames (rep + ms_per_uc are derived above); free them
+            # so only the small derived tables + `meas` remain for the completion/primary passes + render.
+            if getattr(params, 'FREE_UPSTREAM', False):
+                self.mscore = self.report = None
+                gc.collect()
+                try: ctypes.CDLL('libc.so.6').malloc_trim(0)
+                except Exception: pass
             hits['ms_score'] = [ms_per_uc.get((g, u)) for g, u in zip(hits['gene'], hits['uniquecontrast'])]
             hits = hits.sort_values(['gene', 'compound', 'plate', 'logfc'])
             compounds_df = (hits.groupby(['gene', 'compound', 'plate'], as_index=False).first()
@@ -477,8 +517,12 @@ class OUTPUT():
                     _seen.add((_r['gene'], _r['compound'], _sib))
                     _add.append({'gene': _r['gene'], 'compound': _r['compound'], 'plate': _sib, 'uniquecontrast': _uc})
             if _add:
-                _mean_logfc = meas.dropna(subset=['logfc']).groupby(['genes', 'uniquecontrast'])['logfc'].mean()
                 add_df = pd.DataFrame(_add)
+                # mean logfc only for the experiments we're adding rows for (a handful), NOT a groupby over
+                # all ~65M measured (gene,uc) pairs — that builds a frame-sized Series and pushes into swap.
+                _mean_logfc = (meas.loc[meas['uniquecontrast'].isin(set(add_df['uniquecontrast'])),
+                                        ['genes', 'uniquecontrast', 'logfc']]
+                               .dropna(subset=['logfc']).groupby(['genes', 'uniquecontrast'])['logfc'].mean())
                 add_df['logfc'] = [_mean_logfc.get((g, u)) for g, u in zip(add_df['gene'], add_df['uniquecontrast'])]
                 add_df = (add_df.merge(rep[['uniquecontrast', 'activity']].drop_duplicates('uniquecontrast'), on='uniquecontrast', how='left')
                                 .merge(n_genes, on='uniquecontrast', how='left')
@@ -494,6 +538,64 @@ class OUTPUT():
             print(f'> validation-stem completion: added {len(_add):,} ride-along condition rows '
                   f'across {len({(a["gene"], a["compound"]) for a in _add}):,} (gene,compound) pairs')
 
+            # --- attach the primary-screen volcano to each validation stem -------------
+            # For a (gene, compound) that has a validation-plate hit, also surface the
+            # compound's broad primary-screen volcano — the NON-validation contrast where the
+            # gene has the highest MS score (else its strongest-logfc measurement, as a
+            # ride-along). The client renders it as the leading cell of the stem so the
+            # hover-trace links primary -> WT -> KO. is_primary flags the row; an existing hit
+            # row is flagged in place, otherwise a ride-along row is added.
+            compounds_df['is_primary'] = False
+            _vp = compounds_df['plate'].isin(_val_plates)
+            _val_pairs = set(zip(compounds_df.loc[_vp, 'gene'], compounds_df.loc[_vp, 'compound']))
+            # compound -> its primary (non-validation) contrasts, and where each gene was measured
+            _prim = (rep.loc[~rep['plate'].isin(_val_plates), ['compound', 'plate', 'uniquecontrast']]
+                     .dropna(subset=['uniquecontrast']).drop_duplicates('uniquecontrast'))
+            _prim_by_cmp = {c: list(zip(g['plate'], g['uniquecontrast'])) for c, g in _prim.groupby('compound')}
+            # measured (gene, contrast) + mean logfc for the primary contrasts — restricted to the
+            # validation genes (the only genes the attach loop below queries). Over the full non-validation
+            # slice this would be a ~60M-entry Series + a ~60M-tuple set (nearly all of meas) -> swap.
+            _val_genes = {g for g, _c in _val_pairs}
+            _pm = meas.loc[meas['uniquecontrast'].isin(set(_prim['uniquecontrast']))
+                           & meas['genes'].isin(_val_genes),
+                           ['genes', 'uniquecontrast', 'logfc']].dropna(subset=['logfc'])
+            _prim_logfc = _pm.groupby(['genes', 'uniquecontrast'])['logfc'].mean()
+            _prim_measured = set(zip(_pm['genes'], _pm['uniquecontrast']))
+            _mark, _padd = set(), []
+            for _g, _c in _val_pairs:
+                _cands = [(p, u) for (p, u) in _prim_by_cmp.get(_c, []) if (_g, u) in _prim_measured]
+                if not _cands:
+                    continue                                                 # no primary volcano for this gene -> skip
+                # highest MS score for (gene, contrast); tie-break strongest (most negative) logfc
+                _pl, _uc = max(_cands, key=lambda pu: (
+                    (ms_per_uc.get((_g, pu[1])) if pd.notna(ms_per_uc.get((_g, pu[1]))) else -1e9),
+                    -float(_prim_logfc.get((_g, pu[1]), 0.0))))
+                if (_g, _c, _pl) in _seen:
+                    _mark.add((_g, _c, _pl))                                 # existing hit row -> flag in place
+                else:
+                    _padd.append({'gene': _g, 'compound': _c, 'plate': _pl, 'uniquecontrast': _uc})
+            if _mark:
+                compounds_df.loc[[(g, c, p) in _mark for g, c, p in
+                                  zip(compounds_df['gene'], compounds_df['compound'], compounds_df['plate'])],
+                                 'is_primary'] = True
+            if _padd:
+                padd_df = pd.DataFrame(_padd)
+                padd_df['logfc'] = [_prim_logfc.get((g, u)) for g, u in zip(padd_df['gene'], padd_df['uniquecontrast'])]
+                padd_df = (padd_df.merge(rep[['uniquecontrast', 'activity']].drop_duplicates('uniquecontrast'), on='uniquecontrast', how='left')
+                                  .merge(n_genes, on='uniquecontrast', how='left')
+                                  .merge(chemlib, on='compound', how='left'))
+                padd_df['molecule_batch_id'] = padd_df['uniquecontrast'].map(_uc2mbid)
+                _pm2 = padd_df['molecule_batch_id'].isna()
+                _pp = padd_df.loc[_pm2, 'uniquecontrast'].str.split('_vs_').str[0].str.replace('.', '-', regex=False)
+                _pv = [p.startswith(c) for p, c in zip(_pp, padd_df.loc[_pm2, 'compound'].astype(str))]
+                padd_df.loc[_pm2, 'molecule_batch_id'] = _pp.where(pd.Series(_pv, index=_pp.index))
+                padd_df['is_completion'] = True     # a ride-along (gene not a hit here) -> bypasses MS filtering
+                padd_df['is_primary'] = True
+                padd_df['ms_score'] = float('nan')
+                compounds_df = pd.concat([compounds_df, padd_df[compounds_df.columns]], ignore_index=True)
+            print(f'> primary-screen attach: {len(_mark):,} existing + {len(_padd):,} ride-along '
+                  f'primary volcanoes flagged across {len(_val_pairs):,} validation (gene,compound) pairs')
+
             print(f'> compounds_df: {len(compounds_df):,} (gene,compound,plate) rows across '
                 f'{compounds_df["gene"].nunique():,} genes, {compounds_df["uniquecontrast"].nunique():,} volcanoes to render')
 
@@ -507,9 +609,9 @@ class OUTPUT():
             self.iface_df, self.compounds_df, self.meas = iface_df, compounds_df, meas
             print(f'> saved interface inputs -> {params.IFACE_DIR}/ ({", ".join(_IFACE_KEYS)})')
             # free df_raw now (FBX_* + MS were freed at the end of combine) — absorbed into the render
-            # inputs and unused past here. self.measure/mscore/report are KEPT (the notebook still
-            # exports them to parquet after the render). Opt-in via FREE_UPSTREAM so callers that still
-            # inspect data.df_raw / FBX_* (e.g. tests) can keep them.
+            # inputs and unused past here. self.measure/mscore/report were already freed above once their
+            # derivations finished (optionally exported first via EXPORT_COMBINED). Opt-in via FREE_UPSTREAM
+            # so callers that still inspect data.df_raw / FBX_* / self.measure (e.g. tests) can keep them.
             if getattr(params, 'FREE_UPSTREAM', False):
                 for _a in ('df_raw', 'MS', 'FBX_MEASURE', 'FBX_MSSCORE', 'FBX_REPORT'):
                     setattr(data, _a, None)
@@ -564,10 +666,10 @@ class OUTPUT():
             'background': '#CFE3F0',
         }
         MUST_INCLUDE = sorted(self.iface_df.loc[self.iface_df['disease_area'].isin(['pharma', 'BMS']), 'gene'])
-        # Plates filter starts with only the latest tranche's plates ticked; untick to widen.
-        _latest_date = max(self.plate2date.values())
-        PLATE_DEFAULTS = sorted(p for p, d in self.plate2date.items() if d == _latest_date)
-        print(f'> Plates default-ticked: {len(PLATE_DEFAULTS)} plate(s) on latest date {_latest_date}')
+        # Plates filter starts ticked on SHOW_PLATE's dates (config/--show_plate), else the latest
+        # tranche only; untick to widen. resolve_plate_defaults normalises YYYYMMDD -> YYYY-MM-DD.
+        PLATE_DEFAULTS, _show_dates = resolve_plate_defaults(self.plate2date, getattr(params, 'SHOW_PLATE', None))
+        print(f'> Plates default-ticked: {len(PLATE_DEFAULTS)} plate(s) on {", ".join(_show_dates)}')
         # gene_research = {gene_name: record}; tolerate a dict, a list of records, or a bad/stale value
         _R = data.gene_research
         if isinstance(_R, dict):
@@ -634,11 +736,16 @@ if __name__ == "__main__":
     ap = argparse.ArgumentParser(description="Build/update the Px 3D interface.")
     ap.add_argument('--config', default='config/config.yaml', help="path to the YAML config")
     ap.add_argument('--output_dir', default='output', help="base dir for the HTML + volcanoes (interfaces/ is created under it)")
+    ap.add_argument('--show_plate', default=None,
+                    help='comma-separated YYYYMMDD dates to default-tick in the Plates filter, '
+                         'overriding config SHOW_PLATE; e.g. "20260812, 20260813". Empty -> latest date only.')
     args = ap.parse_args()
 
     ## params:
     params = PARAMS(args.config)
     params.load_params()
+    if args.show_plate is not None:   # CLI overrides config SHOW_PLATE
+        params.SHOW_PLATE = [s.strip() for s in args.show_plate.split(',') if s.strip()]
 
     ## data:
     data = DATA()
