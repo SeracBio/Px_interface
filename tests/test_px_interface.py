@@ -153,6 +153,25 @@ class TestDataPipeline(unittest.TestCase):
                            & (sdf['Px_Target_interest'].notnull())]['compound'])
         self.assertEqual(set(out.validated_compounds), expected)
 
+    def test_validated_target_file_override(self):
+        """VALIDATED_TARGET_FILE replaces the CDD-derived validated_targets with the file's
+        comma/whitespace-delimited gene list (upper-cased, deduped); empty/absent keeps CDD."""
+        import tempfile
+        from types import SimpleNamespace
+        out = px.OUTPUT()
+        # a comma + newline + whitespace mix, mixed case -> normalised to a sorted upper-case set
+        with tempfile.NamedTemporaryFile('w', suffix='.txt', delete=False) as f:
+            f.write("brd4, myc\nCDK9  tp53,brd4\n")
+            path = f.name
+        out.get_de_validated(self.data, SimpleNamespace(VALIDATED_TARGET_FILE=path))
+        # the override wins: exactly the file's genes, upper-cased and deduped
+        self.assertEqual(out.validated_targets, ['BRD4', 'CDK9', 'MYC', 'TP53'])
+        # empty/absent -> CDD-derived list is kept (non-empty from the fixture, not the override set)
+        out2 = px.OUTPUT()
+        out2.get_de_validated(self.data, SimpleNamespace(VALIDATED_TARGET_FILE=''))
+        self.assertNotEqual(set(out2.validated_targets), {'BRD4', 'CDK9', 'MYC', 'TP53'})
+        os.remove(path)
+
     def test_iface_df(self):
         """get_iface builds gene dots with R2/association filled to 0.0 (never NaN)."""
         idf = self.output.iface_df
@@ -255,6 +274,22 @@ class TestRender(unittest.TestCase):
         self.assertTrue(os.path.exists(os.path.join(base, 'Serac_Px_interface.html')))
         # the deferred data blob exists
         self.assertTrue(os.path.exists(os.path.join(base, 'Serac_Px_interface_data.js')))
+
+    def test_labels_toggle_and_dependent_on_top_wired(self):
+        """The DISPLAY row carries the Labels eye toggle, and the client JS carries both the
+        label-hiding rule (hideOtherLabels) and the 2D dependent-on-top depth bump (_depthX).
+        Guards against the wiring being dropped from the injected interface HTML."""
+        html = open(os.path.join(self.out_dir, 'interfaces', 'Serac_Px_interface.html')).read()
+        # the eye toggle element is present in the panel markup
+        self.assertIn('id="label-toggle"', html)
+        # labels-hiding flag + the refreshLabels dependent-only guard are emitted
+        self.assertIn('hideOtherLabels', html)
+        # the 2D depth-bump helper that brings FBXO31-dependent circles to the front is emitted
+        self.assertIn('_depthX', html)
+        # the V-mode legend key follows its Target-validation tickbox (untick -> key removed)
+        self.assertIn('syncValLegendFromTicks', html)
+        # the 2D labels-off leader-line declutter is emitted
+        self.assertIn('declutterLabels', html)
 
     def test_volcanoes_written(self):
         """At least one volcano SVG is rendered into volcanoes_px/."""
@@ -459,6 +494,34 @@ class TestRender(unittest.TestCase):
         html = open(os.path.join(self.out_dir, 'interfaces', 'Serac_Px_interface.html')).read()
         self.assertIn('function msOk(pl)', html)
         self.assertIn('msLo = b.z[0]', html)
+
+
+class TestFbxo31IndependentTicked(unittest.TestCase):
+    """FBXO31_INDEPENDENT_TICKED controls the target-validation filter's default tick state.
+    false -> the interface opens with only the 'FBXO31 dependent' box ticked (independent genes
+    hidden on load, still toggle-able), injected as __VALIDATION_DEFAULTS__; true/absent -> both
+    boxes ticked (__VALIDATION_DEFAULTS__ = null)."""
+
+    def _defaults_line(self, out_dir):
+        import re
+        js = open(os.path.join(out_dir, 'interfaces', 'Serac_Px_interface_data.js')).read()
+        return re.search(r'window\.__VALIDATION_DEFAULTS__ = (.*?);', js).group(1)
+
+    def test_independent_unticked_when_false(self):
+        params, data, output = _pipeline()
+        params.FBXO31_INDEPENDENT_TICKED = False
+        output.build_interface(data, params, 'tmp/out_indep_off')
+        line = self._defaults_line('tmp/out_indep_off')
+        # only the dependent box is ticked on load; independent is excluded
+        self.assertIn('FBXO31 dependent', line)
+        self.assertNotIn('FBXO31 independent', line)
+
+    def test_both_ticked_when_true(self):
+        params, data, output = _pipeline()
+        params.FBXO31_INDEPENDENT_TICKED = True
+        output.build_interface(data, params, 'tmp/out_indep_on')
+        # None -> both boxes ticked (no default filter injected)
+        self.assertEqual(self._defaults_line('tmp/out_indep_on'), 'null')
 
 
 class TestMemoryFreeing(unittest.TestCase):

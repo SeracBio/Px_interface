@@ -54,7 +54,7 @@ OT_ROOT: data/external/opentarget
 PHARMA_PATENT_CSV: /home/gtamo/MS_ML/data/patent/20260528_pharma_sm.csv
 BMS_GENES: /home/gtamo/MS_ML/data/patent/BMS_Pipeline_genes.csv
 OT_CACHE: /home/gtamo/MS_ML/output/MS/opentargets_target_disease.parquet
-GENE_SAR_OUT: /home/gtamo/MS_ML/output/MS/20260529_geneSAR_R2_full_genome.csv
+GENE_SAR_OUT: /home/gtamo/Px_interface/output/MS/20260812_geneSAR_R2_full_genome.csv # /home/gtamo/MS_ML/output/MS/20260529_geneSAR_R2_full_genome.csv
 MCS_CSV: output/MS/20260505_target_final_mcs.csv
 ML_MODEL_OUTPUT: output/ML/trained_models/20260617_select_genes # date should match that of last MS tranche
 
@@ -69,6 +69,11 @@ VALIDATION_PLATE_SUFFIXES:         # plate-name suffixes forming a validation st
 - WT
 - MLN
 - KO
+FBXO31_INDEPENDENT_TICKED: false   # false -> the "FBXO31 independent" target box starts UNticked (those genes
+                                   # hidden on load, still toggle-able); true -> both validation boxes ticked
+VALIDATED_TARGET_FILE: /home/gtamo/Px_interface/data/validated.txt            # optional path to a comma/whitespace-delimited gene list that REPLACES the
+                                   # CDD-derived validated (FBXO31-dependent) targets, e.g. data/validated.txt.
+                                   # Empty -> keep the list derived from CDD as before.
 GENE_SIZE_BUCKETS: [6, 8, 10, 12, 15, 20]   # 3D dot px by #compounds the gene is significant in: 1,2,3,4,5,>5
 GENE_RING_PX: 2                              # thickness (px) of the dark ring around each gene dot (gl3d caps marker outlines, so the ring is drawn as a larger dot under the fill)
 
@@ -82,8 +87,8 @@ GENE_RESEARCH: /mnt/c/Users/gtamo/Desktop/GT/disease_association/20260623_10Kgen
 
 CHEMLIB_OVERWRITE: false
 UPDATE_PNGS: false               # true -> fetch new/missing PNGs before building (resume-safe: skips existing)
-DFRAW_OVERWRITE: true
-IFACE_OVERWRITE: true           # true -> rebuild + save the interface inputs; false -> load them from IFACE_DIR + free RAM
+DFRAW_OVERWRITE: false
+IFACE_OVERWRITE: false           # true -> rebuild + save the interface inputs; false -> load them from IFACE_DIR + free RAM
 
 
 # Parallelism: workers for the volcano render (joblib base render + threaded SVG writes).

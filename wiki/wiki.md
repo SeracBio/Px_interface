@@ -242,6 +242,13 @@ data shares the namespace); no real PNGs so thumbnails are RDKit-rendered from `
   `*FBX_<KIND>*.csv` is a tranche; plate dates come from the **folder name**. Drop a new folder in +
   one `IFACE_OVERWRITE=True` rebuild — no config/code edits. (Replaced the old `FBX_BATCHES` list +
   `_FBX_DATE` dict.)
+  - **⚠️ Duplicate-tranche gotcha (2026-08-13):** `plate2date` is built by `dict.update()` over the
+    **sorted** tranches, so if two date folders hold the **same plate names**, the *later* folder wins
+    the date and the earlier date **vanishes entirely** from the interface (its plates are all restamped).
+    Diagnosed live: `20260812` and `20260814` were identical copies of the same 5 plates
+    (`Pw222/223/226/227/255`) → no `2026-08-12` ever appeared, and those rows were also loaded twice
+    (mostly absorbed by the mscore/compounds de-dups, but wasted RAM). **Fix is at the data layer** —
+    don't keep two date folders with the same plates. (User removed the duplicate folder manually.)
 - **`plate_dates=` →** Plates filter renders **nested-by-date** (collapsible per-date sub-blocks,
   tri-state parents). **`plate_defaults=`** (list of plates) starts only those ticked; the driver
   passes whatever `resolve_plate_defaults(plate2date, SHOW_PLATE)` selects so the default view opens
@@ -252,6 +259,52 @@ data shares the namespace); no real PNGs so thumbnails are RDKit-rendered from `
   single **latest** date only (previous behaviour). `resolve_plate_defaults()` (in `Px_interface.py`,
   beside `resolve_n_jobs`) normalises YYYYMMDD → the `YYYY-MM-DD` form `plate2date` stores and returns
   `(plates_to_tick, dates_selected)`. Unit-tested by `TestResolvePlateDefaults`.
+- **`FBXO31_INDEPENDENT_TICKED` config (2026-08-14):** default tick state of the target-validation
+  filter's "FBXO31 independent" box. `false` → interface opens with only "FBXO31 dependent" ticked
+  (independent genes hidden on load, still toggle-able); `true`/absent → both ticked (previous
+  behaviour). Driver-level: `build_interface` maps it to `plot_3d_interface(validation_defaults=)`
+  (`None` when true, `['FBXO31 dependent']` when false) → injected `__VALIDATION_DEFAULTS__` (`null`
+  vs the dependent-only list). Only the **target** filter; the compound-validation filter is untouched.
+  Unit-tested by `TestFbxo31IndependentTicked`.
+- **`VALIDATED_TARGET_FILE` config (2026-08-14):** optional override for the validated
+  (FBXO31-dependent) target list. A path to a comma/whitespace-delimited gene file (e.g.
+  `data/validated.txt`) **replaces** `self.validated_targets` at the end of `get_de_validated`
+  (genes upper-cased + deduped, split on `[,\s]+`); empty/absent keeps the CDD-derived list. This is
+  the single source of the "dependent" set, so it drives V-mode purple colouring, the Target-validation
+  filter, and the dependent-on-top / Labels behaviours. Unit-tested by `test_validated_target_file_override`.
+- **Val-legend follows the target tickbox (2026-08-14):** in V mode, each validation legend key now
+  tracks its **Target-validation** tickbox — `syncValLegendFromTicks()` sets the proxy trace's
+  `showlegend` from `tickedVal` (`dependent`↔`valLabelYes`, `independent`↔`valLabelNo`; `rest`/"other"
+  has no box → always shown). So unticking "FBXO31 independent" **removes** the orange key (not just
+  dims it, unlike the legend-click `valCatShown` path); re-ticking restores it. Wired via a new optional
+  `onChange` arg to `buildGroup` (called before the redraw) and also fired on V/D switch, session load,
+  and init (so `FBXO31_INDEPENDENT_TICKED=false` opens with the key already absent). Verified via headless
+  CDP: proxies `[true,true,true]`→`[true,false,true]`→`[true,true,true]`, legend names drop the middle key.
+- **Labels eye toggle + FBXO31-dependent-on-top (2026-08-14):** two DISPLAY-row additions (both
+  client-only, in `functions.py`).
+  - **Labels toggle** (`#label-toggle`, open/closed-eye SVG): flips a `hideOtherLabels` flag; when on,
+    `refreshLabels()` skips every gene whose `valCatOf` ≠ `"dependent"` (pinned genes always keep
+    labels), so only FBXO31-dependent labels remain. Just a `scene.annotations` rebuild, no data
+    re-layout.
+  - **Leader-line declutter (2D + labels-off, added 2026-08-14):** `declutterLabels()` spreads the
+    dependent labels so they don't overlap and draws a short arrow from each moved label to its dot.
+    Key facts established via CDP: **gl3d scene annotations are real DOM** (`text.annotation-text`, in
+    `g.annotation-text-g`), gl3d **honours `ax`/`ay`** (text moved 386→315px for `ay:-80`) and **draws
+    the arrow** (element class is `annotation-arrow-g`, *not* `.annotation-arrow`). Algorithm: measure
+    each rendered label box (`getBoundingClientRect` — note **DOMRect is `.width`/`.height`, not
+    `.w`/`.h`**, the bug that first made it a no-op), estimate each dot's screen pos, greedily walk
+    top-to-bottom pushing any label overlapping an already-placed one (same x column) below it, then
+    relayout with `showarrow`+pixel `ay`. Runs one frame after the paint (boxes must exist) and on 2D
+    pan. **2D-only** (3D reprojects each rotation). CDP-verified: 45 clustered dependent labels →
+    overlapping pairs **15→0**, 18 labels displaced, arrows render; toggling labels back on clears them.
+  - **Dependent-on-top**: in the **2D orthographic** view the camera looks down the x (SAR) axis, so
+    a point's x sets only its **depth**, not its on-screen y/z. `applyRanges` (`_depthX`) pushes the
+    *plotted* x of dependent genes to just past `R.x.max` → their full circles render in front of every
+    other dot. Plotted copy only (`fx` + ring underlay); `o.x`/mask/hover/labels keep the real x. **3D
+    shows the SAR axis, so no bump there** (a rotatable scene has no stable "on top"); `setMode` re-runs
+    `recolor3d` to apply/drop the bump on 2D↔3D switch. Verified via headless CDP on the synthetic
+    render: 6 dependent genes bumped to x=0.63 (>0.60 max) in 2D, bump gone in 3D, labels drop 290→6
+    when the eye is toggled, no JS errors.
 - **Validation plates (2026-07-17):** plates whose name ends in a configured suffix — param
   `plate_validation_suffixes=('WT','MLN','KO')` on `plot_3d_interface`, injected as
   `__VALIDATION_SUFFIXES__` — are pulled out of their date groups into a **dedicated "validation"

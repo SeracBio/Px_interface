@@ -1044,6 +1044,14 @@ _INTERFACE_INJECT = '''
   #filter-panel .disp-toggle .seg.active { color: #fff; background: #1D3557; }
   /* thin divider between the Axes and Color toggles on the shared Display row */
   #filter-panel .disp-sep { color: #ccc; margin: 0 2px; }
+  /* Labels eye toggle: click to hide/show the 'other' (non-FBXO31-dependent) gene labels */
+  #filter-panel .disp-eye { display: inline-flex; align-items: center; cursor: pointer;
+                            user-select: none; color: #1D3557; }
+  #filter-panel .disp-eye svg { width: 18px; height: 18px; }
+  #filter-panel .disp-eye .eye-shut { display: none; }
+  #filter-panel .disp-eye.off { color: #b04a4a; }
+  #filter-panel .disp-eye.off .eye-open { display: none; }
+  #filter-panel .disp-eye.off .eye-shut { display: inline; }
   /* Plates nested by date: collapsible sub-block per date inside the Plates group. */
   #filter-panel .pf-date + .pf-date { margin-top: 4px; }
   #filter-panel .pf-date-head { cursor: pointer; font-weight: 600; color: #1D3557;
@@ -1242,6 +1250,12 @@ _INTERFACE_INJECT = '''
       <span class="disp-label">Color</span>
       <span class="disp-toggle" id="color-toggle" role="switch" title="V = colour genes by FBXO31 validation (purple = dependent, orange = independent, light blue = other); D = colour by disease area. The top-right legend follows the mode.">
         <span class="seg segV active" data-cmode="V">V</span><span class="seg segD" data-cmode="D">D</span>
+      </span>
+      <span class="disp-sep">|</span>
+      <span class="disp-label">Labels</span>
+      <span class="disp-eye" id="label-toggle" role="switch" tabindex="0" title="Show or hide the gene-name labels of 'other' (non-FBXO31-dependent) genes on the plot. FBXO31-dependent labels always stay. Pinned genes always keep their labels.">
+        <svg class="eye-open" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M1 12s4-7 11-7 11 7 11 7-4 7-11 7-11-7-11-7z"/><circle cx="12" cy="12" r="3"/></svg>
+        <svg class="eye-shut" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19m-6.72-1.07a3 3 0 1 1-4.24-4.24"/><line x1="1" y1="1" x2="23" y2="23"/></svg>
       </span>
     </div>
   </div>
@@ -1480,6 +1494,7 @@ _INTERFACE_INJECT = '''
     var CLICK_RING = "#2ca02c";   // ring colour marking the currently clicked (panel-pinned) gene
     // FBXO31 category → dark ring + light fill (like the reference volcano circles).
     function valCatOf(g) { return validatedSet[g] ? "dependent" : (devalidatedSet[g] ? "independent" : "rest"); }
+    var hideOtherLabels = false;   // Labels eye toggle: true -> only FBXO31-dependent (+ pinned) genes keep labels
     function valFillOf(g) { return (VCOL[valCatOf(g)] || {}).fill || "#cccccc"; }
     function valRingOf(g) { return (VCOL[valCatOf(g)] || {}).ring || "#333333"; }
     var VAL_CATS = ["dependent", "independent", "rest"];   // same order as VAL_LEGEND_TRACES
@@ -1490,6 +1505,18 @@ _INTERFACE_INJECT = '''
     var valDefaults = window.__VALIDATION_DEFAULTS__ || null;
     var tickedVal = {};
     valCats.forEach(function(c) { tickedVal[c] = valDefaults ? (valDefaults.indexOf(c) !== -1) : true; });
+    // V-mode legend keys follow the Target-validation tickboxes: unticking a category's box removes
+    // its legend key (dependent<->valLabelYes, independent<->valLabelNo; 'rest' has no box -> always
+    // shown). Only acts in V mode (D hides all proxies); set gd.data first, then a redraw repaints it.
+    function _valTickLabel(cat) { return cat === "dependent" ? valLabelYes : (cat === "independent" ? valLabelNo : null); }
+    function syncValLegendFromTicks() {
+      if (COLOR_MODE !== "V" || !gd || !gd.data) return;
+      VAL_LEGEND_TRACES.forEach(function(ti, i) {
+        if (!gd.data[ti]) return;
+        var lbl = _valTickLabel(VAL_CATS[i]);
+        gd.data[ti].showlegend = (lbl == null) ? true : (tickedVal[lbl] !== false);
+      });
+    }
     function valAllowed(gene) {
       if (!valCats.length) return true;
       var isV = validatedSet[gene], isD = devalidatedSet[gene];
@@ -1583,9 +1610,10 @@ _INTERFACE_INJECT = '''
           // without rotating out of the flat view; 3D restores rotate (turntable).
           "scene.dragmode": two ? "pan" : "turntable"
         });
-        // Re-run the label pass so the SAR (x) axis annotation is added/removed for the new mode.
-        // Deferred so it lands after the camera relayout settles (avoids a merge/clobber race).
-        setTimeout(refreshLabelsHook, 0);
+        // Re-run the mask (recolor3d = applyRanges) so (a) the 2D depth-bump keeping FBXO31-dependent
+        // circles in front is applied in 2D / removed in 3D, and (b) the SAR (x) axis annotation is
+        // added/removed. Deferred so it lands after the camera relayout settles (avoids a clobber race).
+        setTimeout(function () { recolor3d(); refreshLabelsHook(); }, 0);
       }
       tg.addEventListener("click", function (e) {
         var seg = e.target.closest(".seg");
@@ -1632,7 +1660,7 @@ _INTERFACE_INJECT = '''
       window.addEventListener("resize", fitBox);
       // Default view = 2D (orthographic, centred) on load; session/hash load can still override.
       // Poll until the plot has rendered (_fullLayout) so the relayout + resize land.
-      (function initTwoD() { if (gd._fullLayout) { setMode(true); fitBox(); }
+      (function initTwoD() { if (gd._fullLayout) { syncValLegendFromTicks(); setMode(true); fitBox(); }
                              else setTimeout(initTwoD, 30); })();
     })();
 
@@ -1655,6 +1683,7 @@ _INTERFACE_INJECT = '''
           (_R.areaTraces || []).forEach(function(ti) { if (gd.data[ti]) gd.data[ti].showlegend = !v; });
           VAL_LEGEND_TRACES.forEach(function(ti) { if (gd.data[ti]) gd.data[ti].showlegend = v; });
         }
+        syncValLegendFromTicks();   // in V, re-hide any legend key whose Target-validation box is unticked
         recolor3d();   // applyRanges re-applies the active mode's colours + redraws (picks up showlegend)
       };
       if (tg) tg.addEventListener("click", function (e) {
@@ -1663,6 +1692,21 @@ _INTERFACE_INJECT = '''
         setColorModeHook(v ? "V" : "D");
       });
       syncUI();   // reflect the default mode on load (Python sets the initial legend + colours)
+    })();
+
+    // --- Labels eye toggle: hide/show the 'other' (non-FBXO31-dependent) gene labels.
+    // Flips hideOtherLabels + the closed/open-eye icon, then rebuilds the label layer.
+    (function () {
+      var tg = document.getElementById("label-toggle");
+      if (!tg) return;
+      function apply() {
+        tg.classList.toggle("off", hideOtherLabels);   // .off swaps to the closed-eye icon (see CSS)
+        refreshLabelsHook();                            // redraw scene.annotations with the new rule
+      }
+      tg.addEventListener("click", function () { hideOtherLabels = !hideOtherLabels; apply(); });
+      tg.addEventListener("keydown", function (e) {
+        if (e.key === "Enter" || e.key === " ") { e.preventDefault(); hideOtherLabels = !hideOtherLabels; apply(); }
+      });
     })();
 
     var pinned = false;
@@ -2289,7 +2333,7 @@ _INTERFACE_INJECT = '''
     // One generic group; both filter the same way (Option B): a plate-row is
     // shown only if its plate AND its activity are ticked, and a compound is
     // listed only if it has a visible plate-row.
-    function buildGroup(items, tickedMap, boxesEl, allId, noneId) {
+    function buildGroup(items, tickedMap, boxesEl, allId, noneId, onChange) {
       if (!items.length) {
         if (boxesEl.parentNode) boxesEl.parentNode.style.display = "none";
         return false;
@@ -2304,6 +2348,7 @@ _INTERFACE_INJECT = '''
         if (!e.target || e.target.type !== "checkbox") return;
         tickedMap[e.target.value] = e.target.checked;
         page = 0;
+        if (onChange) onChange();  // e.g. sync V-mode legend keys to the ticks BEFORE the redraw
         recolor3d();              // re-colour genes (a gene greys out if it has no
         if (pinned) renderPage(); // compound on the ticked plates/activities)
       });
@@ -2312,6 +2357,7 @@ _INTERFACE_INJECT = '''
         var cbs = boxesEl.querySelectorAll("input");
         for (var i = 0; i < cbs.length; i++) cbs[i].checked = v;
         page = 0;
+        if (onChange) onChange();
         recolor3d();
         if (pinned) renderPage();
       }
@@ -2480,7 +2526,8 @@ _INTERFACE_INJECT = '''
     var _lfG = document.getElementById("lof-group");
     if (_lfG && hasLofG) _lfG.style.display = "";
     // Target validation (Y/N) group — generic checkbox group keyed by "Yes"/"No".
-    var hasValG = buildGroup(valCats, tickedVal, vfBoxes, "vf-all", "vf-none");
+    // onChange syncs the V-mode legend keys to the ticks (untick a box -> drop its legend key).
+    var hasValG = buildGroup(valCats, tickedVal, vfBoxes, "vf-all", "vf-none", syncValLegendFromTicks);
     var _vg = document.getElementById("validation-group");
     if (_vg && hasValG) _vg.style.display = "";
     // Section labels: hide a section header if none of its groups are present.
@@ -2574,6 +2621,7 @@ _INTERFACE_INJECT = '''
           var o = orig[ti], m = lastMasks[ti]; if (!o || !m) return;
           if (gd.data[ti] && gd.data[ti].visible === "legendonly") return;
           for (var k = 0; k < m.length; k++) if (m[k] && !pinSet[o.text[k]]) {
+            if (hideOtherLabels && valCatOf(o.text[k]) !== "dependent") continue;   // Labels toggle: only dependent (+ pins) keep labels
             cand.push({x: o.x[k], y: o.y[k], z: o.z[k], text: o.text[k]});   // pinned genes label via the overlay trace
           }
         });
@@ -2612,7 +2660,52 @@ _INTERFACE_INJECT = '''
                      text: "SAR predictability", showarrow: false, yshift: -22,
                      font: {size: 13, color: "#2a3f5f"}});
         }
-        Plotly.relayout(gd, {"scene.annotations": anns});
+        // Labels-off + 2D: after painting the labels at their dots, spread them vertically with
+        // leader lines so the (few) dependent labels don't overlap. In 2D there's no SAR-axis
+        // annotation, so anns == the gene labels 1:1 with cand. Declutter needs the rendered box
+        // sizes, so it runs on the next frame once the SVG <text> exist.
+        var _decl2d = hideOtherLabels && (_seg2d && _seg2d.classList.contains("active")) && cand.length > 1;
+        var _rl = Plotly.relayout(gd, {"scene.annotations": anns});
+        if (_decl2d && _rl && _rl.then) _rl.then(function () { requestAnimationFrame(function () { declutterLabels(cand); }); });
+      }
+      // Greedy leader-line declutter for the 2D labels-off view (see refreshLabels): measure each
+      // rendered label box (gl3d annotations are real DOM <text class="annotation-text">), then walk
+      // them top-to-bottom and drop any label that would overlap an already-placed one (sharing an x
+      // column) below it, drawing a short arrow from the moved label back to its dot.
+      var LBL_LIFT = 14, LBL_GAP = 2;
+      function declutterLabels(cand) {
+        var box = {}, texts = document.querySelectorAll(".annotation-text");
+        for (var t = 0; t < texts.length; t++) box[(texts[t].textContent || "").trim()] = texts[t].getBoundingClientRect();
+        var items = [];
+        cand.forEach(function (c, idx) {
+          var b = box[c.text]; if (!b) return;
+          // dot screen pos ≈ label-box centre shifted back down by the 9px yshift used at paint time
+          items.push({idx: idx, cx: b.x + b.width / 2, dotY: b.y + b.height / 2 + 9, w: b.width, h: b.height, ly: 0});
+        });
+        if (items.length < 2) return;
+        items.forEach(function (o) { o.ly = o.dotY - LBL_LIFT; });   // start LIFT px above the dot
+        items.sort(function (a, b) { return a.dotY - b.dotY; });      // top-to-bottom
+        for (var i = 0; i < items.length; i++) {
+          var a = items[i];
+          for (var j = 0; j < i; j++) {
+            var p = items[j];
+            if (Math.abs(a.cx - p.cx) >= (a.w + p.w) / 2) continue;  // different x column -> independent
+            if (a.ly - a.h / 2 < p.ly + p.h / 2 + LBL_GAP)           // would overlap p -> drop below it
+              a.ly = p.ly + p.h / 2 + LBL_GAP + a.h / 2;
+          }
+        }
+        var anns2 = cand.map(function (c) {
+          return {x: c.x, y: c.y, z: c.z, text: c.text, font: {size: 11, color: "#000"},
+                  showarrow: false, yshift: LBL_LIFT};                // unmoved: no arrow, sits LIFT px up
+        });
+        items.forEach(function (o) {
+          if (o.ly > o.dotY - LBL_LIFT + 0.5) {                       // displaced -> leader line to the dot
+            var a = anns2[o.idx]; delete a.yshift;
+            a.showarrow = true; a.ax = 0; a.ay = o.ly - o.dotY;       // text pixel offset from the dot
+            a.arrowhead = 2; a.arrowsize = 1; a.arrowwidth = 1; a.arrowcolor = "#888"; a.standoff = 2;
+          }
+        });
+        Plotly.relayout(gd, {"scene.annotations": anns2});
       }
       function applyRanges() {
         var b = {};
@@ -2660,11 +2753,21 @@ _INTERFACE_INJECT = '''
         // x/y/z on a gl3d scatter3d updates the data but doesn't reliably repaint the
         // 3D scene — Plotly.redraw() does).
         var urx = [], ury = [], urz = [], urs = [], urc = [];   // shared ring-underlay: coords, sizes, colours
+        // FBXO31-dependent-on-top: in the 2D orthographic view the camera looks straight down the
+        // x (SAR) axis, so a point's x sets ONLY its depth, not its on-screen y/z position. Pushing
+        // dependent genes to a plotted x just past the data max brings their full circles in front
+        // of every other dot (which sits at x <= R.x.max) without moving them on screen. Bump the
+        // plotted copy only (fx / ring underlay) — o.x, the mask, hover and labels keep the real x.
+        // 3D shows the SAR axis, so no bump there (a rotatable scene has no stable "on top").
+        var _seg2dA = document.querySelector("#disp-toggle .seg2d");
+        var _is2d = !!(_seg2dA && _seg2dA.classList.contains("active"));
+        var _frontX = R.x.max + ((R.x.max - R.x.min) || 1) * 0.05;
+        function _depthX(g, x) { return (_is2d && valCatOf(g) === "dependent") ? _frontX : x; }
         R.areaTraces.forEach(function(ti) {
           var o = orig[ti], m = masks[ti]; if (!o || !m || !gd.data[ti]) return;
           var fx = [], fy = [], fz = [], ft = [], fcd = [], fhov = [];
           for (var k = 0; k < m.length; k++) if (m[k]) {
-            fx.push(o.x[k]); fy.push(o.y[k]); fz.push(o.z[k]);
+            fx.push(_depthX(o.text[k], o.x[k])); fy.push(o.y[k]); fz.push(o.z[k]);
             ft.push(o.text[k]); fcd.push(o.cd[k]); fhov.push(o.hover[k]);
           }
           var tr = gd.data[ti];
@@ -3216,6 +3319,7 @@ _INTERFACE_INJECT = '''
           contaminantOn = f.contaminant; var cb2 = document.getElementById("contaminant-toggle"); if (cb2) cb2.checked = contaminantOn;
         }
         if (s.colorMode === "V" || s.colorMode === "D") setColorModeHook(s.colorMode);
+        syncValLegendFromTicks();                 // restored ticks -> matching V-mode legend keys
         recolor3d();                              // re-run the mask (filters+hidden+ranges) + labels + count
         if (typeof s.mode2d === "boolean") setMode2DHook(s.mode2d);
         if (s.camera) { try { Plotly.relayout(gd, {"scene.camera": s.camera}); } catch (e) {} }

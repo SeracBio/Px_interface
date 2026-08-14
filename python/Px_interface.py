@@ -366,6 +366,14 @@ class OUTPUT():
         self.devalidated_compounds = list(set(_dep0['compound']))
         self.validated_compounds   = list(set(_dep1['compound']))
 
+        # optional override: replace the CDD-derived validated_targets with a user-curated list
+        # (comma/whitespace-delimited gene symbols in VALIDATED_TARGET_FILE). Empty/absent -> keep CDD.
+        _vtf = getattr(params, 'VALIDATED_TARGET_FILE', None)
+        if _vtf and str(_vtf).strip():
+            with open(os.path.expanduser(str(_vtf).strip())) as _f:
+                self.validated_targets = sorted({g.strip().upper() for g in re.split(r'[,\s]+', _f.read()) if g.strip()})
+            print(f'> validated_targets overridden from {_vtf}: {len(self.validated_targets)} genes')
+
         print(f'> target: {len(self.validated_targets)} validated - {len(self.devalidated_targets)} devalidated targets')
         print(f'> compound: {len(self.validated_compounds)} validated - {len(self.devalidated_compounds)} devalidated compounds')
 
@@ -670,6 +678,9 @@ class OUTPUT():
         # tranche only; untick to widen. resolve_plate_defaults normalises YYYYMMDD -> YYYY-MM-DD.
         PLATE_DEFAULTS, _show_dates = resolve_plate_defaults(self.plate2date, getattr(params, 'SHOW_PLATE', None))
         print(f'> Plates default-ticked: {len(PLATE_DEFAULTS)} plate(s) on {", ".join(_show_dates)}')
+        # Target-validation filter: untick the FBXO31-independent box on load when configured
+        # (FBXO31_INDEPENDENT_TICKED=false -> only the dependent box ticked); default keeps both ticked.
+        _val_defaults = None if getattr(params, 'FBXO31_INDEPENDENT_TICKED', True) else ['FBXO31 dependent']
         # gene_research = {gene_name: record}; tolerate a dict, a list of records, or a bad/stale value
         _R = data.gene_research
         if isinstance(_R, dict):
@@ -710,7 +721,7 @@ class OUTPUT():
             validated_compounds=self.validated_compounds, devalidated_compounds=self.devalidated_compounds,  # Compound validation tickboxes
             compound_validated_label='FBXO31 dependent', compound_devalidated_label='FBXO31 independent',
             depmap_defaults=['Selective', 'Non-essential'], conf_defaults=['High', 'Med'],
-            lof_defaults=['Yes'], validation_defaults=None,  # default ticked boxes on load (validation: all)
+            lof_defaults=['Yes'], validation_defaults=_val_defaults,  # None -> all ticked; FBXO31_INDEPENDENT_TICKED=false -> only dependent
             volcano_significant=True, volcano_dir=os.path.join(output_dir, 'interfaces', 'volcanoes_px'),
             volcano_n_jobs=resolve_n_jobs(getattr(params, 'NJOBS', 0)),  # config NJOBS (0 -> CPUs-2) for the volcano render
             volcano_xlim=(-8, 8), volcano_size_px=350,

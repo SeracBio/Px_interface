@@ -228,7 +228,25 @@ rounded to step multiples, so round handle values land **exactly** — MS step =
 - **Colour V/D toggle** — V = FBXO31 validation (light fill + dark ring via `valFillOf`/`valRingOf`),
   D = disease-area colours. The toggle flips `showlegend` between the disease traces and the 3
   proxy legend traces; in V, `plotly_legendclick`/`doubleclick` on a proxy key is intercepted
-  (returns `false`) to toggle/isolate `valCatShown` categories.
+  (returns `false`) to toggle/isolate `valCatShown` categories. `syncValLegendFromTicks()` then binds
+  each V-mode legend key to its **Target-validation tickbox** — unticking "FBXO31 independent" (or
+  "dependent") sets that proxy's `showlegend=false` so the key disappears; re-ticking restores it
+  (`rest`/"other" has no box, always shown). Runs on tick change, V/D switch, session load, and init.
+- **Labels eye toggle** — `#label-toggle` (open/closed-eye SVG) flips `hideOtherLabels`; when on,
+  `refreshLabels()` keeps only FBXO31-dependent (and pinned) gene labels — every "other"/independent
+  label is skipped. No re-layout of data, just a `scene.annotations` rebuild.
+- **Leader-line label declutter (2D + labels-off)** — with the labels toggle off in the 2D view,
+  `declutterLabels()` spreads the (few) dependent labels so they don't overlap and draws a short arrow
+  from each moved label back to its dot. It measures the *rendered* label boxes (gl3d annotations are
+  real DOM `text.annotation-text`, and gl3d honours `ax`/`ay` + `showarrow`), then greedily walks them
+  top-to-bottom pushing any label that would overlap an already-placed one (same x column) below it,
+  and relayouts with `showarrow` + a pixel `ay` offset. Runs a frame after the paint (needs the boxes)
+  and re-runs on 2D pan (camera event). 2D-only — 3D reprojects every rotation, so it's left off there.
+- **FBXO31-dependent-on-top (2D)** — in the 2D orthographic view the camera looks straight down the
+  x (SAR) axis, so x sets only a point's *depth*, not its screen position. `applyRanges` pushes the
+  plotted x of dependent genes to just past `R.x.max` (`_depthX`), bringing their full circles in
+  front of every other dot. Bumps the plotted copy only (`fx` + ring underlay); `o.x`/mask/hover/labels
+  keep the real x. 3D shows the SAR axis, so no bump there (`setMode` re-runs `recolor3d` to apply/drop it).
 - **Pins / hide / solo** — a pin overlay trace no filter touches; double-click the master toggle for
   "only pinned" (solo) view.
 - **Session save/load** (`.iface`) and **shareable URL hash** — a hash is just a partial session
@@ -340,6 +358,15 @@ Hash keys: `p=` (exact plate list), `pg`/`pc` (pinned), `hg`/`hc` (hidden), `sp=
   (overrides the config). Empty/absent → the single **latest** date only (previous default). `build_interface`
   resolves it via `resolve_plate_defaults(plate2date, SHOW_PLATE)` (normalises YYYYMMDD → the `YYYY-MM-DD`
   form `plate2date` stores) and passes the result as `plot_3d_interface(plate_defaults=)`.
+- **`VALIDATED_TARGET_FILE`** — optional path to a comma/whitespace-delimited gene list (e.g.
+  `data/validated.txt`) that **replaces** the CDD-derived validated (FBXO31-dependent) targets at the
+  end of `get_de_validated` (genes upper-cased + deduped). Empty/absent keeps the CDD list. Drives the
+  V-mode "dependent" colouring, the Target-validation filter, and the dependent-on-top / labels rules.
+- **`FBXO31_INDEPENDENT_TICKED`** — default tick state of the target-validation filter's "FBXO31
+  independent" box. `false` opens the interface with only "FBXO31 dependent" ticked (independent genes
+  hidden on load, still toggle-able via the box/legend); `true`/absent ticks both. `build_interface`
+  passes it through as `plot_3d_interface(validation_defaults=None or ['FBXO31 dependent'])`. Target
+  filter only — the compound-validation filter is unaffected.
 - **`NJOBS`** — parallel workers for the volcano render (the only multiprocessing in the build:
   joblib base render + threaded SVG writes). `0`/blank/`<0` → auto `max(1, CPU-2)`; a positive int →
   exactly that many. `build_interface` passes `resolve_n_jobs(params.NJOBS)` to
