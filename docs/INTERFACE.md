@@ -48,7 +48,7 @@ Three classes: **`PARAMS`** (reads `config.yaml`), **`DATA`** (loads raw inputs)
 
 | Step | Method | What it produces |
 |---|---|---|
-| Load | `DATA.load_new_df` / `load_old_df` / `load_chemical_lib_df` | `df_raw`, `MS`, `FBX_MEASURE/MSSCORE/REPORT`, `serac_df`, `target2R2_df`, `uc2compound` |
+| Load | `DATA.load_new_df` / `load_old_df` / `load_chemical_lib_df` | `df_raw`, `MS`, `FBX_MEASURE/MSSCORE/REPORT`, `serac_df`, `target2R2_df`, `uc2compound`. Tranches are auto-discovered by their FBX_REPORT; a tranche may **omit a kind** (validation-only: MEASURE+REPORT, no MSSCORE) — `_fbx_csv` returns `None` and `_load_fbx` skips it (with a `> note:` line). A tranche may also **omit the `plate` column** — `_ensure_plate` reconstructs it from the uniquecontrast (`…_complement_Pw144VM_BIND` → `Pw144VMBIND`) |
 | PNGs (opt-in) | `DATA.download_cdd_pngs` | refreshes `SRB_PNG_DIR` from CDD Vault when `UPDATE_PNGS` is true (resume-safe; no-op otherwise) |
 | Combine | `OUTPUT.combine_datasets` | `measure`, `mscore` (both per-compound, one row per (gene,uniquecontrast)), `report`, `plate2date` — FBX wins on shared uniquecontrasts |
 | Validation lists | `OUTPUT.get_de_validated` | `validated_targets`/`devalidated_targets`, `validated_compounds`/`devalidated_compounds` (FBXO31 ligase-dependent vs not) |

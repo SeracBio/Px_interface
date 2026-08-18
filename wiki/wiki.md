@@ -242,6 +242,33 @@ data shares the namespace); no real PNGs so thumbnails are RDKit-rendered from `
   `*FBX_<KIND>*.csv` is a tranche; plate dates come from the **folder name**. Drop a new folder in +
   one `IFACE_OVERWRITE=True` rebuild — no config/code edits. (Replaced the old `FBX_BATCHES` list +
   `_FBX_DATE` dict.)
+  - **Missing-kind tranches tolerated (2026-08-14):** a tranche need not carry all three kinds —
+    a **validation-only** drop-in ships MEASURE + REPORT but **no MSSCORE** (its MS scores were
+    computed in an earlier tranche). `_fbx_csv` now returns `None` when a kind is absent (was
+    `next(...)` → `StopIteration` crash), and `_load_fbx` skips those tranches for that kind, printing
+    `> note: no FBX_<KIND> in N tranche(s), skipped: …` so a *genuinely* missing file isn't swallowed
+    silently. Discovery still keys on FBX_REPORT, so every tranche must have REPORT. Diagnosed on the
+    `20260817` tranche (MEASURE+REPORT only). Tested by `TestValidationOnlyTranche`.
+  - **Missing `plate` column reconstructed (2026-08-14):** the same `20260817` validation tranche also
+    ships **no `plate` column** in MEASURE/REPORT (its REPORT is minimal: `uniquecontrast, srbnumber,
+    condition, target`) — the plate is embedded in the contrast instead:
+    `SRB…_vs_SRB…_complement_Pw144VM_BIND` → `Pw144VMBIND` (stem+condition, the `Pw###VM{WT,MLN,KO,BIND}`
+    convention). `_plate_from_uc` parses it and `_ensure_plate` fills a missing/NaN `plate` from the
+    contrast (existing values untouched), applied to FBX_MEASURE/REPORT in `load_new_df` and in the
+    `plate2date` loop (which now reads the whole small REPORT, not `usecols=['plate']` — that was the
+    `ValueError: Usecols do not match columns … ['plate']` crash). Real-data check: MEASURE 100%
+    (398,523 rows), REPORT 48/49 reconstructed → 5 stems (`Pw105/122/144/177/193 VM`) × `{WT,KO,BIND}`.
+    **`BIND` added to `VALIDATION_PLATE_SUFFIXES`** (now `WT/MLN/KO/BIND`) so those form validation stems.
+    Note some stems (e.g. `Pw105VM`) **collide** with the earlier 2026-06-01 tranche's plates → the
+    duplicate-tranche rule below restamps them to 2026-08-17. Tested by `TestPlateReconstruction`.
+  - **⚠️ Duplicate-tranche gotcha (2026-08-13):** `plate2date` is built by `dict.update()` over the
+    **sorted** tranches, so if two date folders hold the **same plate names**, the *later* folder wins
+    the date and the earlier date **vanishes entirely** from the interface (its plates are all restamped).
+    Diagnosed live: `20260812` and `20260814` were identical copies of the same 5 plates
+    (`Pw222/223/226/227/255`) → no `2026-08-12` ever appeared, and those rows were also loaded twice
+    (mostly absorbed by the mscore/compounds de-dups, but wasted RAM). **Fix is at the data layer** —
+    don't keep two date folders with the same plates. (User removed the duplicate folder manually.)
+    Now guarded by `TestDuplicateTrancheDate` (last-tranche-wins on shared plate names).
   - **⚠️ Duplicate-tranche gotcha (2026-08-13):** `plate2date` is built by `dict.update()` over the
     **sorted** tranches, so if two date folders hold the **same plate names**, the *later* folder wins
     the date and the earlier date **vanishes entirely** from the interface (its plates are all restamped).

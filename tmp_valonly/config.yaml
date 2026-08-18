@@ -1,0 +1,34 @@
+DFRAW_PATH: tmp_valonly/df_raw.parquet
+MS_PATH: tmp_valonly/MS.parquet
+FBX_DIR: tmp_valonly/fbx
+GENE_SAR_OUT: tmp_valonly/gene_sar.csv
+CHEMLIB_OVERWRITE: false
+CHEMLIB_PATH: tmp_valonly/serac_lib.csv
+CLEAN_PROTEOMICS_PATH: tmp_valonly/clean_proteomics.csv
+PX_20260520_CDDVAULT: tmp_valonly/px_20260520_cddvault.csv
+PX_20260529_CDDVAULT: tmp_valonly/px_20260529_cddvault.csv
+PX_20260520_DB: tmp_valonly/px_20260520_db.csv
+PX_20260529_DB: tmp_valonly/px_20260529_db.csv
+PLATE_DATE_OVERRIDES: {}
+CONTROLS:
+- SRB-0000000
+- SRB-0000001
+CONTAMINANTS: tmp_valonly/contaminants.csv
+GENE_RESEARCH: tmp_valonly/gene_research.json
+OT_CACHE: tmp_valonly/ot_cache.parquet
+PHARMA_PATENT_CSV: tmp_valonly/pharma_patent.csv
+BMS_GENES: tmp_valonly/bms_genes.csv
+PHARMA_R2_CUTOFF: 0.08
+IFACE_DIR: tmp_valonly/interface
+IFACE_OVERWRITE: true
+ACTIVE_C: '#008bfb'
+BMS_C: '#BA09D9'
+GENE_SIZE_BUCKETS:
+- 5
+- 7
+- 9
+- 11
+- 13
+- 16
+GENE_RING_PX: 5
+SRB_PNG_DIR: tmp_valonly/srb_png

@@ -26,9 +26,34 @@ from get_library import get_df   # CDD Vault collection export
 
 
 def _fbx_csv(tranche, kind):
-    """Path to the one *FBX_<kind>*.csv in a tranche folder (tolerates a _02 re-export suffix)."""
-    return os.path.join(tranche, next(f for f in os.listdir(tranche)
-                                      if f'FBX_{kind}' in f and f.endswith('.csv')))
+    """Path to the one *FBX_<kind>*.csv in a tranche folder (tolerates a _02 re-export suffix), or
+    None if the tranche has no file of that kind — a validation-only tranche ships MEASURE + REPORT
+    but no MSSCORE (its MS scores were already computed in an earlier tranche)."""
+    f = next((f for f in os.listdir(tranche) if f'FBX_{kind}' in f and f.endswith('.csv')), None)
+    return os.path.join(tranche, f) if f else None
+
+
+_PLATE_UC_RE = re.compile(r'_complement_(.+)$')
+
+def _plate_from_uc(uc):
+    """Reconstruct a plate name from a validation uniquecontrast whose export omitted the `plate`
+    column: 'SRB…_vs_SRB…_complement_Pw144VM_BIND' -> 'Pw144VMBIND' (stem+condition, matching the
+    Pw###VM{WT,MLN,KO,BIND} convention). None when the pattern is absent."""
+    m = _PLATE_UC_RE.search(str(uc))
+    return m.group(1).replace('_', '') if m else None
+
+def _ensure_plate(df):
+    """Guarantee a usable `plate` column: keep the existing one and fill any gaps (or build it whole
+    when the column is absent) from `uniquecontrast`. Validation-only tranches ship no `plate` column
+    in MEASURE/REPORT — the plate is embedded in the contrast instead. Modifies + returns df."""
+    if 'uniquecontrast' not in df.columns:
+        return df
+    if 'plate' not in df.columns:
+        df['plate'] = df['uniquecontrast'].map(_plate_from_uc)
+    elif df['plate'].isna().any():
+        _m = df['plate'].isna()
+        df.loc[_m, 'plate'] = df.loc[_m, 'uniquecontrast'].map(_plate_from_uc)
+    return df
 
 # OpenTargets therapeutic areas in display/priority order; a gene's disease_area is its
 # highest-ranked area here. Single source of truth: get_iface ranks by it, build_interface's
@@ -166,12 +191,17 @@ class DATA():
             and any('FBX_REPORT' in f for f in os.listdir(t)))
 
         def _load_fbx(kind):
-            return pd.concat([pd.read_csv(_fbx_csv(t, kind)) for t in self.FBX_TRANCHES],
-                             ignore_index=True)
+            # a tranche may lack a given kind (validation-only tranches have no MSSCORE) -> skip it,
+            # noting which so a genuinely missing file isn't silently swallowed
+            paths = [(os.path.basename(t), _fbx_csv(t, kind)) for t in self.FBX_TRANCHES]
+            _missing = [b for b, p in paths if not p]
+            if _missing:
+                print(f'> note: no FBX_{kind} in {len(_missing)} tranche(s), skipped: {", ".join(_missing)}')
+            return pd.concat([pd.read_csv(p) for _b, p in paths if p], ignore_index=True)
 
-        self.FBX_MEASURE  = _load_fbx('MEASURE')
-        self.FBX_MSSCORE  = _load_fbx('MSSCORE')
-        self.FBX_REPORT   = _load_fbx('REPORT')
+        self.FBX_MEASURE  = _ensure_plate(_load_fbx('MEASURE'))   # validation-only tranches omit `plate`;
+        self.FBX_MSSCORE  = _load_fbx('MSSCORE')                  # reconstruct it from the uniquecontrast
+        self.FBX_REPORT   = _ensure_plate(_load_fbx('REPORT'))
         self.target2R2_df = pd.read_csv(params.GENE_SAR_OUT).rename(columns={'gene': 'genes'})
 
         # uniquecontrast -> compound (SRB-XXXXXXX, batch stripped); reused by every combine
@@ -306,8 +336,10 @@ class OUTPUT():
             self.plate2date.update({pl: _d for pl in pd.read_csv(_p, usecols=[_c], dtype=str)[_c].dropna().unique()})
         for _t in data.FBX_TRANCHES:   # FBX last -> wins on shared plates; date from the folder name
             _d = pd.to_datetime(os.path.basename(_t)[:8]).strftime('%Y-%m-%d')
-            self.plate2date.update({pl: _d for pl in pd.read_csv(_fbx_csv(_t, 'REPORT'),
-                                                                 usecols=['plate'])['plate'].dropna().astype(str).unique()})
+            # read the whole REPORT (small) so _ensure_plate can rebuild `plate` from the uniquecontrast
+            # for validation-only tranches whose export omits the column (else usecols=['plate'] crashes)
+            _plates = _ensure_plate(pd.read_csv(_fbx_csv(_t, 'REPORT')))['plate']
+            self.plate2date.update({pl: _d for pl in _plates.dropna().astype(str).unique()})
         self.plate2date.update(params.PLATE_DATE_OVERRIDES)
         for _df in (self.measure, self.mscore, self.report):
             _df['date'] = pd.to_datetime(_df['plate'].astype(str).map(self.plate2date))

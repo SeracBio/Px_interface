@@ -65,10 +65,11 @@ DFRAW_PATH: /home/gtamo/Px_interface/output/MS/df_raw.parquet
 MS_PATH: /home/gtamo/Px_interface/output/MS/MS.parquet
 
 IFACE_DIR: output/interface            # iface_df / compounds_df / meas / plate2date checkpoint for the 3D interface
-VALIDATION_PLATE_SUFFIXES:         # plate-name suffixes forming a validation stem (…WT/…MLN/…KO shown side by side)
+VALIDATION_PLATE_SUFFIXES:         # plate-name suffixes forming a validation stem (…WT/…MLN/…KO/…BIND shown side by side)
 - WT
 - MLN
 - KO
+- BIND
 FBXO31_INDEPENDENT_TICKED: false   # false -> the "FBXO31 independent" target box starts UNticked (those genes
                                    # hidden on load, still toggle-able); true -> both validation boxes ticked
 VALIDATED_TARGET_FILE: /home/gtamo/Px_interface/data/validated.txt            # optional path to a comma/whitespace-delimited gene list that REPLACES the
@@ -87,8 +88,8 @@ GENE_RESEARCH: /mnt/c/Users/gtamo/Desktop/GT/disease_association/20260623_10Kgen
 
 CHEMLIB_OVERWRITE: false
 UPDATE_PNGS: false               # true -> fetch new/missing PNGs before building (resume-safe: skips existing)
-DFRAW_OVERWRITE: false
-IFACE_OVERWRITE: false           # true -> rebuild + save the interface inputs; false -> load them from IFACE_DIR + free RAM
+DFRAW_OVERWRITE: true
+IFACE_OVERWRITE: true           # true -> rebuild + save the interface inputs; false -> load them from IFACE_DIR + free RAM
 
 
 # Parallelism: workers for the volcano render (joblib base render + threaded SVG writes).

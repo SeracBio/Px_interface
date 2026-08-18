@@ -258,6 +258,105 @@ class TestDataPipeline(unittest.TestCase):
             self.assertTrue(os.path.exists(os.path.join(d, f)), f'{f} not saved')
 
 
+class TestValidationOnlyTranche(unittest.TestCase):
+    """A validation-only tranche ships MEASURE + REPORT but no MSSCORE (its MS scores were computed
+    in an earlier tranche). _fbx_csv returns None for the absent kind, load_new_df skips it instead
+    of raising StopIteration, and the whole pipeline still builds — the tranche's plates flow through
+    via MEASURE/REPORT and its folder date lands in plate2date."""
+
+    @classmethod
+    def setUpClass(cls):
+        import glob
+        make_synthetic.main('tmp_valonly')
+        cls.params = px.PARAMS('tmp_valonly/config.yaml').load_params()
+        tranches = sorted(t for t in glob.glob(os.path.join(cls.params.FBX_DIR, '*')) if os.path.isdir(t))
+        cls.latest = tranches[-1]
+        cls.removed = glob.glob(os.path.join(cls.latest, '*FBX_MSSCORE*.csv'))
+        for f in cls.removed:
+            os.remove(f)                                  # drop MSSCORE -> simulate a validation-only drop-in
+        data = px.DATA()
+        data.load_chemical_lib_df(cls.params); data.load_old_df(cls.params)
+        data.load_new_df(cls.params)                      # must NOT raise StopIteration
+        data.get_contaminants_and_controls(cls.params); data.get_gene_research(cls.params)
+        out = px.OUTPUT()
+        out.combine_datasets(data, cls.params)
+        out.get_de_validated(data, cls.params)
+        out.get_iface(data, cls.params)                   # full build must complete
+        cls.data, cls.out = data, out
+
+    def test_precondition_msscore_removed(self):
+        # the latest tranche really did have an MSSCORE for us to delete
+        self.assertTrue(self.removed)
+
+    def test_fbx_csv_none_for_absent_kind(self):
+        # absent kind -> None; the kinds the tranche does have still resolve to a path
+        self.assertIsNone(px._fbx_csv(self.latest, 'MSSCORE'))
+        self.assertIsNotNone(px._fbx_csv(self.latest, 'MEASURE'))
+        self.assertIsNotNone(px._fbx_csv(self.latest, 'REPORT'))
+
+    def test_msscore_loaded_from_other_tranches(self):
+        # MSSCORE is still populated from the tranche(s) that have it
+        self.assertGreater(len(self.data.FBX_MSSCORE), 0)
+
+    def test_latest_tranche_date_in_plate2date(self):
+        # the validation-only tranche's plates still carry its folder date (sourced from REPORT)
+        _d = os.path.basename(self.latest)[:8]
+        self.assertIn(f'{_d[:4]}-{_d[4:6]}-{_d[6:8]}', set(self.out.plate2date.values()))
+
+
+class TestDuplicateTrancheDate(unittest.TestCase):
+    """Duplicate-tranche gotcha: plate2date is built by dict.update over the SORTED tranches, so when
+    two date folders hold the SAME plate names the LATER folder wins the date (and the earlier date
+    vanishes). Guards the diagnosed Plate 12/14 issue — identical plates copied under a newer date."""
+
+    def test_later_tranche_wins_shared_plate_date(self):
+        import glob, shutil
+        make_synthetic.main('tmp_dup')
+        params = px.PARAMS('tmp_dup/config.yaml').load_params()
+        newdate = '20260701'                              # a LATER date carrying the SAME plates
+        dst = os.path.join(params.FBX_DIR, newdate)
+        if os.path.isdir(dst): shutil.rmtree(dst)         # clear any leftover from a prior run
+        tranches = sorted(t for t in glob.glob(os.path.join(params.FBX_DIR, '*')) if os.path.isdir(t))
+        src = tranches[-1]; src_name = os.path.basename(src)
+        os.makedirs(dst)
+        for f in os.listdir(src):
+            shutil.copy(os.path.join(src, f), os.path.join(dst, f.replace(src_name, newdate)))
+        data = px.DATA()
+        data.load_chemical_lib_df(params); data.load_old_df(params); data.load_new_df(params)
+        data.get_contaminants_and_controls(params); data.get_gene_research(params)
+        out = px.OUTPUT(); out.combine_datasets(data, params)
+        shared = pd.read_csv(px._fbx_csv(dst, 'REPORT'), usecols=['plate'])['plate'].dropna().astype(str).unique()
+        # precondition: the duplicated tranche has plates to test
+        self.assertGreater(len(shared), 0)
+        _later = f'{newdate[:4]}-{newdate[4:6]}-{newdate[6:8]}'
+        for p in shared:
+            # every shared plate resolves to the LATER folder's date (last-tranche-wins)
+            self.assertEqual(out.plate2date.get(p), _later)
+
+
+class TestPlateReconstruction(unittest.TestCase):
+    """Validation-only tranches omit the `plate` column; it's embedded in the uniquecontrast
+    (…_complement_Pw144VM_BIND -> Pw144VMBIND). _plate_from_uc parses it and _ensure_plate fills a
+    missing/NaN plate column from it, leaving existing plate values untouched."""
+
+    def test_plate_from_uc(self):
+        # stem + condition concatenated, matching the Pw###VM{WT,MLN,KO,BIND} convention
+        self.assertEqual(px._plate_from_uc('SRB.0000519.002_vs_SRB.0000519.002_complement_Pw144VM_BIND'), 'Pw144VMBIND')
+        self.assertEqual(px._plate_from_uc('x_vs_y_complement_Pw105VM_WT'), 'Pw105VMWT')
+        # no _complement_ token -> None (not every contrast is a validation complement)
+        self.assertIsNone(px._plate_from_uc('SRB.1_vs_SRB.2'))
+
+    def test_ensure_plate_builds_missing_column(self):
+        # no plate column at all -> build it wholly from the contrast
+        df = pd.DataFrame({'uniquecontrast': ['a_vs_b_complement_Pw1_WT', 'a_vs_b_complement_Pw1_KO']})
+        self.assertEqual(list(px._ensure_plate(df)['plate']), ['Pw1WT', 'Pw1KO'])
+
+    def test_ensure_plate_fills_only_gaps(self):
+        # existing plate values kept; only NaN rows are reconstructed
+        df = pd.DataFrame({'plate': ['Pw9', None], 'uniquecontrast': ['x', 'a_vs_b_complement_Pw2_BIND']})
+        self.assertEqual(list(px._ensure_plate(df)['plate']), ['Pw9', 'Pw2BIND'])
+
+
 class TestRender(unittest.TestCase):
     """End-to-end render: build_interface writes the HTML, data.js and volcano SVGs."""
 
