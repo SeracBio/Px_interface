@@ -151,6 +151,21 @@ _Durable, aggregate memory of this repo — read at session start. Aggregate onl
   etc. unaffected. NOTE: old `g2`/`g2v` per-gene files are ignored — delete `volcanoes_px/` before the
   next build so only the ~4k `b1` bases remain. Client ring is static-checked + math-verified; hard-refresh
   + eyeball the actual overlay after rebuild.
+- **Shared y-max per validation stem (2026-08-14).** So a stem's volcanoes are visually comparable, all
+  volcanoes in one stem — a compound's WT/MLN/KO/BIND conditions **plus its attached primary-screen
+  volcano** — render on **one shared y-axis max** = the stem's tallest `-log10 p`. Server-side by
+  necessity: the y-scale is baked into the external base SVG (points + axis ticks) **and** the client
+  ring fractions (`geom['ymax']` in `_ring_frac`), so a client-only rescale would desync the rings and
+  misrender the ticks (confirmed by reading the render path — the base is an external `<object>`, not
+  reachable/rescalable from JS). `_stem_shared_ymax(compounds_df, vsrc, suffixes)` returns `{vk: ymax}`
+  for only the volcanoes scaled **up** — the tallest keeps auto-scale, so **only the rescaled stem
+  volcanoes get a new cache name (`_volcano_base_cache_fname(…, ymax=)`) and re-render**; every standalone
+  volcano is untouched (no re-render). The override threads `_volcano_base_worker` →
+  `_volcano_base_svg(ymax_override=)` (never below the data's own max), so points/axis/rings stay
+  consistent. Only PATH 1 (`if _sig and _external`, the real interface) applies it; the non-external /
+  non-significant `else` fallback stays auto. End-to-end verified: stem `SRB-0000006/Pw10`'s KO/MLN/WT
+  auto-scale to different y-maxes but share **6.3** with the override. Tested by `TestStemSharedYmax`
+  (grouping + skips-tallest + `_volcano_base_svg` honours the override).
 - Extracted from `MS_ML` (2026-06-23) so the interface lives on its own. The engine
   `python/functions.py` is the **whole** MS_ML module (carries some unused ML/signature/cytotox
   helpers); the driver is `vignettes/MS_Interface.ipynb`. `Rdkit_tools`/`Statistics_tools` imports
@@ -958,3 +973,12 @@ and a *merged* cluster means either a <55px (tight, good) gap or an overlap (loo
   `healthcheck.sh` **7 ok / 0 fail, SSM Online, nginx active**. Closes the deferred **L3 "pin AMI"** hardening
   item. **Lesson:** never leave AL2023 on `most_recent` for a box you can only manage via SSM — a bad agent build
   silently locks you out on the next replace. Bump the pin deliberately (test SSM comes up) rather than floating.
+- 2026-08-18 — **manual source-data fix: force-significant on 2 rows.** Set `significant` 0 → 1 for two
+  specific (uniquecontrast, genes) rows directly in the Dropbox `FBX_MEASURE` source CSVs (per user request):
+  `STK4` / plate `Pw107` in `20260616/20260616_FBX_MEASURE.csv`, and `ATM` / plate `Pw109` in
+  `20260616_02/20260616_FBX_MEASURE_02.csv`. A scan of all 13 `FBX_MEASURE` files confirmed each row exists in
+  exactly one file (no dup in the `20260616`↔`20260616_02` re-export pair). Edit was surgical/line-level (only the
+  matched line rewritten, every other line byte-for-byte; asserted exactly 1 replacement per file), verified
+  `significant==1` post-edit. Pre-edit originals backed up (off-Dropbox) to
+  `C:\Users\gtamo\Desktop\GT\interfaces\MS_data_backups\`. Change flows into the interface only on a
+  from-source rebuild (`IFACE_OVERWRITE=true`); the `IFACE_DIR` checkpoint still holds the old `meas`.

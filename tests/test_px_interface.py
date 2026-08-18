@@ -357,6 +357,48 @@ class TestPlateReconstruction(unittest.TestCase):
         self.assertEqual(list(px._ensure_plate(df)['plate']), ['Pw9', 'Pw2BIND'])
 
 
+class TestStemSharedYmax(unittest.TestCase):
+    """Validation-stem volcanoes (WT/MLN/KO/BIND + the attached primary) render on ONE shared y-max
+    = the stem's tallest. _stem_shared_ymax returns {vk: ymax} only for the volcanoes scaled UP; the
+    tallest keeps auto-scale (absent from the map -> its on-disk cache stays valid, no re-render)."""
+
+    def test_shares_stem_max_and_skips_tallest(self):
+        from python import functions as fn
+        import numpy as np
+        # one stem: compound C1 on plate-stem PwX with a tall WT (p=1e-8) + short KO (p=1e-2), + primary
+        cdf = pd.DataFrame({'compound': ['C1', 'C1', 'C1'],
+                            'plate': ['PwXWT', 'PwXKO', 'Pw00'],       # Pw00 = primary (non-validation)
+                            'uniquecontrast': ['ucWT', 'ucKO', 'ucP'],
+                            'is_primary': [False, False, True]})
+        vsrc = pd.DataFrame({'compound': ['ucWT', 'ucKO', 'ucP'],       # vk lives in 'compound' (render slices it)
+                             'pvalue': [1e-8, 1e-2, 1e-4],
+                             'genes': ['G1', 'G1', 'G1'], 'logfc': [-2, -1, -1.5]})
+        m = fn._stem_shared_ymax(cdf, vsrc, ['WT', 'MLN', 'KO', 'BIND'])
+        tall = -np.log10(1e-8) * 1.05     # WT is tallest -> the shared max
+        # WT is the tallest -> keeps auto (not overridden); KO + primary are scaled UP to WT's height
+        self.assertNotIn('ucWT', m)
+        self.assertAlmostEqual(m['ucKO'], tall, places=4)
+        self.assertAlmostEqual(m['ucP'], tall, places=4)
+
+    def test_noop_without_suffixes_or_df(self):
+        from python import functions as fn
+        # no compounds_df / no suffixes -> empty map (feature off, every volcano auto-scales)
+        self.assertEqual(fn._stem_shared_ymax(None, None, ['WT']), {})
+        self.assertEqual(fn._stem_shared_ymax(pd.DataFrame({'x': [1]}), None, ['WT']), {})
+
+    def test_volcano_base_svg_honors_override(self):
+        from python import functions as fn
+        # a shallow volcano (p=1e-2 -> auto ymax ~2.1); the override must win and drive geom['ymax']
+        # (which the client uses for ring fractions), never falling below the data's own max
+        df = pd.DataFrame({'compound': ['uc', 'uc'], 'genes': ['G1', 'G2'],
+                           'logfc': [-2.0, 2.0], 'pvalue': [1e-2, 1e-2], 'significant': [1, 1]})
+        _, geom_auto = fn._volcano_base_svg(df, 'uc', key='compound')
+        _, geom_ovr = fn._volcano_base_svg(df, 'uc', key='compound', ymax_override=40.0)
+        # auto scales to the data; the override raises it to the shared stem max
+        self.assertLess(geom_auto['ymax'], 40.0)
+        self.assertEqual(geom_ovr['ymax'], 40.0)
+
+
 class TestRender(unittest.TestCase):
     """End-to-end render: build_interface writes the HTML, data.js and volcano SVGs."""
 

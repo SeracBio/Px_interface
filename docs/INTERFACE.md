@@ -160,6 +160,19 @@ stale images. `xlim`/`size_px` must match across runs or filenames won't align.
   supplies each cell's `pl[9]` without re-rendering. A vk re-renders only if its base image **or** its
   positions are missing.
 
+### Shared y-max per validation stem
+
+So a stem's volcanoes are visually comparable, all volcanoes in one stem — a compound's WT/MLN/KO/BIND
+conditions **plus its attached primary-screen volcano** — render on **one shared y-axis max** = the
+stem's tallest `-log10 p`. `_stem_shared_ymax(compounds_df, vsrc, suffixes)` computes `{vk: ymax}` for
+only the volcanoes that get scaled **up** (the tallest keeps auto-scale, so its cache stays valid and it
+is not re-rendered). The override threads through `_volcano_base_worker` → `_volcano_base_svg(ymax_override=)`
+(never below the data's own max), and salts the base cache filename (`_volcano_base_cache_fname(…, ymax=)`)
+so **only the rescaled stem volcanoes get a new name + re-render** — standalone volcanoes are untouched.
+Because `geom['ymax']` drives the client ring fractions too, points, axis, and rings stay consistent.
+Server-side by necessity: the scale is baked into the external base SVG (points + ticks) and the ring
+fractions, so a client-only rescale can't touch it without desyncing. Tested by `TestStemSharedYmax`.
+
 ### Cross-plate hover trace
 
 `stem_trace` (`{vk: {gene: [fx, fy, 1.0, isHit]}}`) is built straight from `custom`'s `pl[9]` (the

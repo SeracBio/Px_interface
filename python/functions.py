@@ -3981,8 +3981,15 @@ def plot_3d_interface(
                 _volcano_base = _rel   # emitted once; rows store only the base filename
                 _ext = '.svg'
 
+                # shared y-max per validation stem (WT/MLN/KO/BIND + primary) -> those volcanoes
+                # render on one scale. Only the scaled-up ones get an override (+ a new cache name).
+                stem_ymax = _stem_shared_ymax(compounds_df, _vsrc, plate_validation_suffixes)
+                if stem_ymax:
+                    print(f'> shared y-max on {len(stem_ymax):,} validation-stem volcano(es)')
+
                 def _bfname(vk):
-                    return _volcano_base_cache_fname(vk, volcano_xlim, volcano_size_px, _ext)
+                    return _volcano_base_cache_fname(vk, volcano_xlim, volcano_size_px, _ext,
+                                                     ymax=stem_ymax.get(str(vk)))
 
                 # persisted focal-gene ring positions {vk: {gene: [fx, fy]}} so a rebuild whose base
                 # images are already cached can fill pl[9] without re-rendering the base.
@@ -4043,7 +4050,7 @@ def plot_3d_interface(
                     if volcano_n_jobs == 1:
                         base_res = [_volcano_base_worker(
                             (vk, sub_cache.get(vk, _empty), volcano_size_px,
-                             volcano_xlim[0], volcano_xlim[1], _focal.get(vk)))
+                             volcano_xlim[0], volcano_xlim[1], _focal.get(vk), stem_ymax.get(str(vk))))
                             for vk in tqdm(render_vks, desc='volcano bases', unit='vol',
                                            mininterval=0.5, ncols=80)]
                     else:
@@ -4057,7 +4064,7 @@ def plot_3d_interface(
                             base_res = Parallel(n_jobs=volcano_n_jobs, backend='loky')(
                                 delayed(_volcano_base_worker)(
                                     (vk, sub_cache.get(vk, _empty), volcano_size_px,
-                                     volcano_xlim[0], volcano_xlim[1], _focal.get(vk)))
+                                     volcano_xlim[0], volcano_xlim[1], _focal.get(vk), stem_ymax.get(str(vk))))
                                 for vk in render_vks)
                     import gc as _gc
                     del sub_cache; _gc.collect()   # ~meas-sized; not needed once the bases are rendered
@@ -5751,13 +5758,59 @@ def per_class_report(y_true, y_pred, proba, classes, names=None, sep_width=82):
 _VOLCANO_AXRECT = (0.185, 0.15, 0.965, 0.945)
 
 
+def _stem_shared_ymax(compounds_df, vsrc, suffixes):
+    """Shared volcano y-max per validation stem so a stem's volcanoes are visually comparable.
+
+    A stem = a compound's validation conditions (plates ending in a ``suffixes`` entry —
+    WT/MLN/KO/BIND) plus the primary-screen volcano attached to it. Every volcano in the stem is
+    rescaled to the stem's tallest y (max ``-log10 p``). Returns ``{vk: ymax}`` ONLY for the volcanoes
+    that get scaled UP — the tallest keeps its auto scale (no override → its on-disk cache stays
+    valid, so it is not re-rendered). ``vsrc`` carries the vk in a ``'compound'`` column (the render
+    slices it by that name). No-op ({}) when there is no compounds_df / suffixes / stem member.
+    """
+    import re
+    _sufs = [str(s).upper() for s in (suffixes or ())]
+    if compounds_df is None or 'uniquecontrast' not in compounds_df.columns or not _sufs:
+        return {}
+    _valre = re.compile(r'(' + '|'.join(_sufs) + r')$', re.I)
+    cdf = compounds_df[['compound', 'plate', 'uniquecontrast']].copy()
+    cdf['plate'] = cdf['plate'].astype(str)
+    cdf['uniquecontrast'] = cdf['uniquecontrast'].astype(str)
+    cdf['_isval'] = cdf['plate'].map(lambda p: bool(_valre.search(p)))
+    cdf['_prim'] = compounds_df['is_primary'].to_numpy() if 'is_primary' in compounds_df.columns else False
+    _stem_vks = set(cdf.loc[cdf['_isval'] | cdf['_prim'], 'uniquecontrast'])
+    if not _stem_vks:
+        return {}
+    # per-contrast own y-max (matches _volcano_base_svg), scoped to stem members only (cheap groupby)
+    _pmin = (vsrc.loc[vsrc['compound'].astype(str).isin(_stem_vks), ['compound', 'pvalue']]
+             .dropna().assign(compound=lambda d: d['compound'].astype(str))
+             .groupby('compound')['pvalue'].min())
+    _own = {str(k): max(-np.log10(max(float(v), 1e-300)) * 1.05, 1.0) for k, v in _pmin.items()}
+    # stem groups: (compound, plate-stem) -> validation vks; each compound's primaries join its stems
+    _groups, _prim_by_cmp = {}, {}
+    for _c, _p, _vk, _isv, _isp in zip(cdf['compound'], cdf['plate'], cdf['uniquecontrast'],
+                                       cdf['_isval'], cdf['_prim']):
+        if _isv:
+            _groups.setdefault((_c, _valre.sub('', _p)), set()).add(_vk)
+        if _isp:
+            _prim_by_cmp.setdefault(_c, set()).add(_vk)
+    out = {}
+    for (_c, _stem), _vks in _groups.items():
+        _vks = _vks | _prim_by_cmp.get(_c, set())
+        _ym = max((_own.get(v, 1.0) for v in _vks), default=1.0)
+        for v in _vks:
+            if _ym > _own.get(v, 1.0) + 1e-9:      # only volcanoes scaled UP need an override
+                out[v] = max(out.get(v, 0.0), _ym)
+    return out
+
+
 def _volcano_base_svg(df, uniquecontrast,
                       *,
                       key='uniquecontrast', sig_col='significant',
                       fc_thresh=1.0, p_thresh=0.05,
                       xmin=-8.0, xmax=8.0, size_px=350,
                       up_color='#008bfb', down_color='#ff0051', ns_color='lightgrey',
-                      focal_genes=None):
+                      focal_genes=None, ymax_override=None):
     """
     Render ONE experiment's interactive volcano *without* a focal-gene ring — the
     expensive, focal-gene-independent part (rasterised grey cloud + vector
@@ -5799,7 +5852,10 @@ def _volcano_base_svg(df, uniquecontrast,
     up = sig & (agg['logfc'] > 0)
     down = sig & (agg['logfc'] < 0)
     ns = ~sig
-    ymin, ymax = 0.0, float(max(agg['nlog10p'].max() * 1.05, 1.0))
+    # y-max: auto per volcano, unless a shared per-validation-stem override is passed (so a stem's
+    # WT/MLN/KO/BIND + primary volcanoes share one scale). Never below the data's own max.
+    _auto_ymax = float(max(agg['nlog10p'].max() * 1.05, 1.0))
+    ymin, ymax = 0.0, (max(float(ymax_override), _auto_ymax) if ymax_override is not None else _auto_ymax)
 
     L, B, R, T = _VOLCANO_AXRECT
     fig = plt.figure(figsize=(size_px / 100, size_px / 100), dpi=100)
@@ -5998,9 +6054,11 @@ def _volcano_base_worker(args):
     matplotlib.use('Agg')  # headless backend in workers
     vk, sub, size_px, xmin, xmax = args[:5]
     focal = args[5] if len(args) > 5 else None   # keep only these genes' positions in geom['xy']
+    ymax_override = args[6] if len(args) > 6 else None   # shared per-validation-stem y-max (else auto)
     try:
         svg, geom = _volcano_base_svg(sub, vk, key='compound', sig_col='significant',
-                                      xmin=xmin, xmax=xmax, size_px=size_px, focal_genes=focal)
+                                      xmin=xmin, xmax=xmax, size_px=size_px, focal_genes=focal,
+                                      ymax_override=ymax_override)
         return (vk, svg, geom)
     except Exception:
         return (vk, '', None)
@@ -6025,13 +6083,18 @@ def _volcano_cache_fname(gene, key, xlim, size_px, ext='.svg', version=''):
     return hashlib.md5(s.encode()).hexdigest()[:16] + ext
 
 
-def _volcano_base_cache_fname(vk, xlim, size_px, ext='.svg', version='b1'):
+def _volcano_base_cache_fname(vk, xlim, size_px, ext='.svg', version='b1', ymax=None):
     """On-disk filename for ONE experiment's shared base volcano — keyed by the experiment
     (``vk``) only, NOT the focal gene. One base per experiment (vs one file per
     (gene, experiment)) collapses the ~19× duplication of the embedded raster; the focal-gene
-    ring is drawn client-side from injected positions. Salt ``b1`` marks this base layout."""
+    ring is drawn client-side from injected positions. Salt ``b1`` marks this base layout.
+
+    ``ymax`` salts the key with a shared per-validation-stem y-max override, so ONLY the volcanoes
+    that get rescaled get a new filename (and re-render); ``None`` reproduces the original key, so
+    every auto-scaled volcano stays a cache hit."""
     import hashlib
-    s = f'{version}|{vk}|{xlim[0]}|{xlim[1]}|{size_px}|{ext}'
+    _y = f'|y{float(ymax):.4f}' if ymax is not None else ''
+    s = f'{version}|{vk}|{xlim[0]}|{xlim[1]}|{size_px}{_y}|{ext}'
     return hashlib.md5(s.encode()).hexdigest()[:16] + ext
 
 
