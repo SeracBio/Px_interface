@@ -982,3 +982,23 @@ and a *merged* cluster means either a <55px (tight, good) gap or an overlap (loo
   `significant==1` post-edit. Pre-edit originals backed up (off-Dropbox) to
   `C:\Users\gtamo\Desktop\GT\interfaces\MS_data_backups\`. Change flows into the interface only on a
   from-source rebuild (`IFACE_OVERWRITE=true`); the `IFACE_DIR` checkpoint still holds the old `meas`.
+- 2026-09-15 — **AWS ops cheat-sheet added to `README.md`** (new `## AWS — common commands` section, between
+  Layout and Data policy): SSM shell + `send-command`/`get-command-invocation`, file transfer via the interface
+  S3 bucket (SSM has **no native file transfer**; `aws s3 sync` laptop→bucket then a `send-command` sync
+  bucket→`/var/www/webapp/Px_interface/`), `healthcheck.sh`, the `terraform init -backend-config=backend.hcl` /
+  plan / apply / destroy cycle, and browsing via `webapp_url`. Every identifier is fetched live via
+  `terraform -chdir=aws-vpn output` — no account/instance IDs or IPs committed (repo sanitization convention).
+  Carries the three standing gotchas: apply-replaces-EC2 (upload to S3 first), keep `ec2_ami_id` pinned, and the
+  two must-exist local files (`aws-vpn/backend.hcl`, `~/.serac_aws`). Verified live (read-only): `ec2_instance_id`
+  → the pinned-AMI box, `interface_bucket`, `webapp_url` → `https://advantedge.seracbio.com/Px_interface/`.
+- 2026-09-15 — **RDS phase started locally; `rds/` gitignored.** New untracked `rds/` scripts connect to the
+  **production PostgreSQL RDS in `us-east-1`** (psycopg2, `sslmode=verify-full` against the Amazon CA bundle
+  `global-bundle.pem`) — the first step of the long-planned RDS source mode for `DATA.load_new_df`. The scripts
+  hold a **plaintext DB password**, so `rds/` was added to `.gitignore` (verified via `git check-ignore`;
+  `git log --all -- rds/` is empty, so nothing ever reached history and **no rotation is needed**). Before this
+  goes anywhere shared, move the password to an env var / AWS Secrets Manager. **Region mismatch to resolve:**
+  the RDS is `us-east-1` while the whole Px stack (VPC, EC2, S3, VPN) is `eu-north-1` — the future Fargate/Batch
+  rebuild job needs either cross-region networking or to run in `us-east-1` and write to S3 cross-region.
+  **Serving model reminder** (re-confirmed today): the EC2 installs only nginx + awscli — it is a pure static
+  file server, and **only the rendered artifacts** (HTML, `_data.js`, volcano SVGs, thumbnails) ship via S3.
+  The pipeline code and source data never go to the box; the render runs on the workstation.

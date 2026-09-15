@@ -80,6 +80,140 @@ Output paths are switched by the `interface_output` knob (`GTLOCAL` vs `DROPBOX_
 | `wiki/wiki.md` | Durable repo notes — read at session start |
 | `CLAUDE.md` | Collaboration rules + local-only data policy |
 
+## AWS — common commands
+
+The interface is served from a **private EC2 box inside a VPC**, reachable only over the
+FortiGate↔VPC Site-to-Site VPN. There is no public IP and **no SSH** — management is via
+**SSM Session Manager**, file transfer via **S3 over the gateway endpoint**. The Terraform
+stack lives in [`aws-vpn/`](aws-vpn/); the full runbook is
+[`aws-vpn/instructions.md`](aws-vpn/instructions.md), decisions are in
+[`docs/aws_docs.md`](docs/aws_docs.md).
+
+Resource IDs are never hard-coded here — fetch them live from Terraform. Region is `eu-north-1`.
+
+```bash
+terraform -chdir=aws-vpn output            # all outputs
+terraform -chdir=aws-vpn output -raw ec2_instance_id
+terraform -chdir=aws-vpn output -raw webapp_url
+```
+
+### Prerequisites
+
+```bash
+aws configure                              # once — credentials + region eu-north-1
+aws sts get-caller-identity                # verify the CLI is authenticated
+```
+
+Needs the `session-manager-plugin` installed alongside the AWS CLI. FortiClient VPN must be
+connected for anything that talks to the box over HTTPS (the AWS API calls themselves do not
+need the VPN).
+
+### Access the instance
+
+```bash
+# interactive shell on the box
+aws ssm start-session --region eu-north-1 \
+  --target "$(terraform -chdir=aws-vpn output -raw ec2_instance_id)"
+
+# one-off command without a shell
+aws ssm send-command --region eu-north-1 \
+  --instance-ids "$(terraform -chdir=aws-vpn output -raw ec2_instance_id)" \
+  --document-name AWS-RunShellScript \
+  --parameters 'commands=["systemctl status nginx --no-pager"]'
+
+# read that command's output back
+aws ssm get-command-invocation --region eu-north-1 \
+  --command-id <COMMAND_ID> \
+  --instance-id "$(terraform -chdir=aws-vpn output -raw ec2_instance_id)"
+```
+
+Useful on-box diagnostics: `systemctl status provision-webapp`,
+`journalctl -u provision-webapp`, `ls /var/www/webapp/Px_interface/`.
+
+### Move files to the instance
+
+SSM Session Manager has no native file transfer. Stage through the **interface S3 bucket** —
+the instance role already has read access, and traffic stays on the S3 gateway endpoint.
+
+```bash
+BUCKET=$(terraform -chdir=aws-vpn output -raw interface_bucket)
+IID=$(terraform -chdir=aws-vpn output -raw ec2_instance_id)
+
+# 1. laptop -> S3
+aws s3 sync tmp/out/interfaces/ "s3://$BUCKET/interfaces/" --region eu-north-1
+
+# 2. S3 -> box (the boot script does the same sync, so a reboot also works)
+aws ssm send-command --region eu-north-1 --instance-ids "$IID" \
+  --document-name AWS-RunShellScript \
+  --parameters "commands=[\"aws s3 sync s3://$BUCKET/interfaces/ /var/www/webapp/Px_interface/ --region eu-north-1\",\"chown -R root:nginx /var/www/webapp\"]"
+```
+
+For a **small** file (< ~100 KB) and no S3 round-trip, base64 it into a `send-command`
+instead. Anything larger must go through S3.
+
+To pull a file **off** the box, write it to the bucket from the instance
+(`aws s3 cp /path/file s3://$BUCKET/…`) and `aws s3 cp` it down locally.
+
+### Check the stack is healthy
+
+```bash
+bash aws-vpn/healthcheck.sh     # read-only: EC2, SSM, VPC endpoints, VPN tunnels, nginx
+```
+
+Expect `7 ok / 0 fail`. Tunnels reading `1/2 UP` is normal (one active, one standby).
+
+### Rebuild / change the infrastructure
+
+```bash
+cd aws-vpn
+terraform init -backend-config=backend.hcl   # -reconfigure if the backend changed
+terraform validate
+terraform plan                                # always read the plan first
+terraform apply
+```
+
+Two files must exist locally before an apply (both gitignored, neither is in the repo):
+
+- **`aws-vpn/backend.hcl`** — remote state bucket + lock table; copy
+  `backend.hcl.example` and fill from `terraform -chdir=aws-vpn/bootstrap output`.
+  Without it, `init` fails with "file could not be read".
+- **`~/.serac_aws`** — one line, `serac_user:$2y$…`, created with
+  `htpasswd -nbB serac_user 'password' > ~/.serac_aws && chmod 600 ~/.serac_aws` (password from
+  1Password). Without it the placeholder hash is baked in and nginx returns **HTTP 500** after
+  the password prompt.
+
+> **An `apply` that touches `user_data` or the private IP REPLACES the EC2.** The replacement
+> re-provisions itself from S3 at boot, so upload the interface to S3 *before* applying.
+>
+> **Keep the AMI pinned** (`ec2_ami_id` in `terraform.tfvars`). A floating `most_recent`
+> AL2023 once shipped a broken SSM agent and locked the box out — nginx kept serving while
+> management was dead. When bumping the pin, confirm `SSM ping: Online` before trusting it.
+
+### Tear down
+
+```bash
+cd aws-vpn && terraform destroy              # main stack
+cd aws-vpn/bootstrap && terraform destroy    # only when done with the project entirely
+```
+
+The state bucket and lock table carry `prevent_destroy = true` — remove those lifecycle
+blocks first or the bootstrap destroy errors out.
+
+### Browse the interface
+
+```bash
+terraform -chdir=aws-vpn output -raw webapp_url    # https://advantedge.seracbio.com/Px_interface/
+terraform -chdir=aws-vpn output -raw ec2_private_ip # fallback if DNS isn't forwarded yet
+```
+
+Requires the VPN connected, then Basic Auth (`serac_user` + the shared password). The
+self-signed cert warning is expected; install the CA from
+`terraform -chdir=aws-vpn output -raw tls_cert_pem` to silence it.
+
+> **Only synthetic data goes on this box.** Auth is a single shared password with no
+> per-user audit trail — real chemistry data is gated on M365 SSO landing first. See
+> [CLAUDE.md](CLAUDE.md).
+
 ## Data policy
 
 Chemistry data (SMILES, compound IDs, structures, screening results) **stays on this
