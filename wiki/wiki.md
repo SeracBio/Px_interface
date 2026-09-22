@@ -1002,3 +1002,63 @@ and a *merged* cluster means either a <55px (tight, good) gap or an overlap (loo
   **Serving model reminder** (re-confirmed today): the EC2 installs only nginx + awscli — it is a pure static
   file server, and **only the rendered artifacts** (HTML, `_data.js`, volcano SVGs, thumbnails) ship via S3.
   The pipeline code and source data never go to the box; the render runs on the workstation.
+- 2026-09-21 — **Signals webapp on AWS: handoff pack `aws_signals.zip`.** (The pack now lives at `~/Signals/aws/`; the copy in this repo is deleted.) A second
+  internal service (FastAPI/uvicorn, currently on-prem at Ridgeline) is to be hosted with the same access model
+  as the Px interface. **Decisions:** a **new EC2 in the EXISTING VPC** (not a second VPC/VPN — the tunnel,
+  SSM/S3 endpoints, private zone and resolver are ~$150/mo of shared infra, and a second tunnel means another
+  IT round), plus a **NAT gateway** because the app calls the Signals SaaS API. **Three NAT facts established:**
+  (1) NAT is **outbound-only** — inbound stays VPN-only, so adding it exposes nothing; (2) a NAT gateway is
+  **not a firewall** and cannot filter by destination; (3) **security groups have no deny rules**, so "internet
+  except the office LAN" is inexpressible as an SG — it needs a **NACL** with explicit denies for
+  `192.168.146.0/24` + `10.0.14.0/24`, which is what preserves the H1 anti-pivot hardening. Recommended egress
+  stack = SG 443-only + that NACL + a squid domain allow-list (AWS Network Firewall, ~$395/mo, documented as the
+  upgrade for true enforcement). Routing: put the app in its **own subnet/route table/NACL** so the Px box keeps
+  zero internet egress; the VPN routes are more specific than `0.0.0.0/0` so office traffic stays on the VGW;
+  a NAT gateway **re-introduces the public subnet + IGW deleted on 2026-07-22**. Cost delta ≈ **$47/mo**
+  (≈$18 with a `t4g.nano` NAT instance). Pack = `reference/` (reusable .tf incl. bootstrap + healthcheck +
+  .example), `rewrite/` (ec2.tf + user_data.sh.tftpl — static-site provisioning, must be rewritten for uvicorn;
+  the reusable pattern is the **systemd-oneshot provisioner**, not cloud-init), `docs/`, and a 232-line
+  `instructions.md`. Excluded + verified absent by an automated scan: real account ID, tfvars (holds the
+  FortiGate public IP), backend.hcl, state (TLS key + VPN PSKs), `~/.serac_aws`, unredacted diagram.
+  **Cert correction carried into the pack:** an internal A record does NOT make a public cert possible, but
+  **DNS-01 does** (challenge is a public TXT; the host never needs to be internet-reachable) — and an **AD
+  Certificate Services** cert is better still on domain-joined machines. My earlier "public cert impossible for
+  a private IP" was true only of HTTP-01.
+- 2026-09-21 — **Handoff pack finalised (484-line `instructions.md`) and delivered to `~/Signals/aws/`.**
+  Added §7b **isolation checklist** — both boxes share the VPC, so the wall is configuration, not a free
+  property. Verified starting position: the Px SG accepts 80/443/ICMP **only** from `192.168.146.0/24` +
+  `10.0.14.0/24` (`allowed_cidr`), with **no VPC-internal ingress**, so a packet from a Signals subnet is
+  dropped today. **The network is not the risk** — ranked: (1) an over-broad instance role (`ssm:*` →
+  `SendCommand` onto the Px box, bypassing the network entirely; `AmazonSSMManagedInstanceCore` alone does
+  NOT grant it), (2) write access to the Px S3 bucket = supply chain (the Px box syncs that bucket into its
+  webroot at boot), (3) wildcard SSM paths leaking the Px **TLS private key + htpasswd** (the Px role reads
+  exactly 3 ARNs; both roles share `alias/aws/ssm`, so ARN scoping is the control), (4) password reuse —
+  makes isolation moot with no compromise at all. Plus: scope the SSM-endpoint egress by **SG reference**
+  not `vpc_cidr` (which contains the Px box), use a **separate Terraform stack**, and re-test after deploy.
+  **Also settled this session:** `/32` allow-list **outranks** Network Firewall here (an SG/NACL rule is
+  unbypassable from the instance; an NF domain rule matches the **client-supplied, spoofable SNI**) — NF
+  only wins when destinations cannot be enumerated. Network Firewall price corrected **~$395 → ~$290/mo**
+  per endpoint. Signals resolves to **two stable `/32`s in AWS eu-central-1** (EC2 ranges) → PrivateLink is
+  plausible (vendor already on AWS; ask before building) and IP allow-listing is viable — allow the `/32`s,
+  **never** the `/14`/`/13` (AWS-wide Frankfurt). Adding the two Signals rules is **not** the whole job: the
+  NAT path (public subnet + **re-added IGW** + EIP + NAT + app subnet/RT/NACL) is the structural work, and
+  NACLs attach to **subnets, not instances**. All additive — no VPC/VPN destroy.
+- 2026-09-21 — **Signals webapp audit + handover to the Signals repo.** (This entry uses STE.)
+  **CLAUDE.md now requires ASD-STE100 Simplified Technical English** for replies, documentation, code
+  comments, and commit messages. The section sits at line 34. It is byte-identical to the section in
+  `/home/gtamo/Signals/CLAUDE.md`, and both start at line 34.
+  **Audit of `~/Signals/webapp/app.py` (120 lines).** Three checks passed. The API key stays on the
+  server. The app has no general proxy to Signals, so a smaller key scope gives a real benefit. The app
+  cannot publish, because that endpoint needs a browser session.
+  **One correction settled:** the server holds the compound data. The browser does almost no work.
+  `/api/upload` writes the file to a temporary directory, converts it on the server, and puts the frame
+  in the `STAGE` dictionary. `/api/create` then reads `STAGE` and writes to Signals. The path is browser,
+  then server, then Signals. **The code never removes an entry from `STAGE`**, so compound data stays in
+  memory until the process stops. So the data rule applies, and the Px rule of synthetic data until
+  single sign-on applies here too. **This decision is still open.**
+  **One risk to close:** `/api/create` sends `str(error)` to the browser. An `ElnError` message must
+  never contain the API key. Check `signals_eln.py`.
+  **No IT work is necessary.** The tunnel already routes all of `172.20.0.0/16`. Put the new subnet in
+  that range, for example `172.20.4.0/24`.
+  **Handover:** the pack is at `~/Signals/aws/` (21 files + zip). The Claude agent in the Signals repo
+  continues the work. The pack does not obey STE yet.

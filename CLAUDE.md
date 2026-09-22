@@ -31,6 +31,27 @@ gene names, gene-sets, metrics — **never** SMILES / compound IDs / per-compoun
 
 ---
 
+## Language — reply in Simplified Technical English (ASD-STE100)
+
+**Write every reply in ASD-STE100 Simplified Technical English.** This applies to chat replies, to
+documentation, to code comments, and to commit messages.
+
+Obey these rules:
+
+- Use approved words only. Use one word for one meaning, and one meaning for one word.
+- Use the active voice. Do not use the passive voice.
+- Use simple tenses only: simple present, simple past, and simple future.
+- Write 20 words or less in a procedural sentence. Write 25 words or less in a descriptive sentence.
+- Give one instruction in one sentence.
+- Do not use idioms, slang, or jargon.
+- Do not make a noun cluster of more than three words.
+- Use a vertical list for a complex action.
+- Write a WARNING before a step that can injure a person.
+- Write a CAUTION before a step that can cause damage or data loss.
+- Keep technical names and technical verbs. STE permits them.
+
+---
+
 ## Development Workflow
 
 ### 1. Prototype in Jupyter, then move to Python

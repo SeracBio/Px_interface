@@ -35,3 +35,6 @@ docs/aws_architecture_mermaid.md
 
 # RDS connection scripts — contain live prod database credentials. Keep local only.
 rds/
+
+# Handoff archive for the Signals webapp — internal CIDRs, transfer artifact not repo content.
+aws_signals.zip
