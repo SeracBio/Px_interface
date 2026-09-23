@@ -1,0 +1,18 @@
+# Terraform state (may contain secrets)
+*.tfstate
+*.tfstate.*
+.terraform/
+.terraform.lock.hcl
+
+# Saved plan files
+tfplan
+
+# Variable files with real values
+terraform.tfvars
+*.auto.tfvars
+
+# Backend config — embeds the account-id-bearing state bucket name (keep .example only)
+backend.hcl
+
+# Crash logs
+crash.log

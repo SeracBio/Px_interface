@@ -999,6 +999,10 @@ and a *merged* cluster means either a <55px (tight, good) gap or an overlap (loo
   goes anywhere shared, move the password to an env var / AWS Secrets Manager. **Region mismatch to resolve:**
   the RDS is `us-east-1` while the whole Px stack (VPC, EC2, S3, VPN) is `eu-north-1` — the future Fargate/Batch
   rebuild job needs either cross-region networking or to run in `us-east-1` and write to S3 cross-region.
+  **Correction (2026-09-23):** a live check found the company instances `seracbio-dev` and `seracbio-prod` in
+  **`eu-north-1`**, in the default VPC (`172.31.0.0/16`): PostgreSQL 18.3, Multi-AZ, publicly accessible.
+  The `rds/` scripts target two hosts, one in `eu-north-1` and one in `us-east-1`. Thus the region mismatch
+  applies only to the `us-east-1` host.
   **Serving model reminder** (re-confirmed today): the EC2 installs only nginx + awscli — it is a pure static
   file server, and **only the rendered artifacts** (HTML, `_data.js`, volcano SVGs, thumbnails) ship via S3.
   The pipeline code and source data never go to the box; the render runs on the workstation.
@@ -1062,3 +1066,65 @@ and a *merged* cluster means either a <55px (tight, good) gap or an overlap (loo
   that range, for example `172.20.4.0/24`.
   **Handover:** the pack is at `~/Signals/aws/` (21 files + zip). The Claude agent in the Signals repo
   continues the work. The pack does not obey STE yet.
+- 2026-09-23 — **Private PostgreSQL RDS in the VPN VPC: deployed and verified end to end.** (STE.)
+  **Stack `aws-rds/`** (Signals pattern): a separate stack with the same state bucket and lock table, key
+  `rds/terraform.tfstate`. It reads the VPC and VGW through data sources, so its `destroy` cannot touch
+  `aws-vpn/`. 10 resources: subnets `172.20.6.0/24` (1a) and `172.20.7.0/24` (1b), because a DB subnet group
+  needs two AZs; an own route table with VGW propagation (local + the two on-prem routes, no default route);
+  security group `px-rds-sg` (5432 from `192.168.146.0/24` + `10.0.14.0/24`, zero egress rules); DB subnet
+  group; parameter group `px-rds-pg18` (`rds.force_ssl=1`); instance `px-rds`. The instance is PostgreSQL 18.3
+  (same as `seracbio-prod`), `db.t4g.micro`, 20 GB gp3, encrypted, Single-AZ, not public, deletion protection
+  on, 7-day backups. Creation took 7.5 min. Cost: about $14.50/month (AWS Pricing API: $0.016/h, $0.12/GB-month).
+  **Secret:** RDS keeps the `px_admin` password in Secrets Manager (`manage_master_user_password`). Verified:
+  Terraform state holds only the secret ARN, no password.
+  **CLI `python/px_rds.py`** (`ML` env): `check`, `pull TABLE [--out]`, `set-password`, and the admin commands
+  `create-demo` and `create-user NAME`. **Explicit logins (decided 2026-09-23):** every command needs a login,
+  given AFTER the command name (`pull px_demo --admin`). `--user NAME` (or `RDS_USER`) asks for that user's
+  password; with `--host` (or `RDS_HOST`) too, it needs no AWS access. `--admin` reads the master secret from
+  AWS with boto3. Without a login, a command stops with a message before any AWS call: there is NO fallback
+  to the master (the user asked for this after the question "does a colleague get admin by default?"). The
+  answer was already no, because the admin path needs AWS credentials that can read the secret, but the
+  explicit flag also stops an accidental master login. `create-demo` and `create-user` refuse to run
+  without `--admin`; `set-password` refuses `--admin`; `--user` with `--admin` is a parser error. In a
+  notebook: `connect(cfg, admin=True)`. Every connection uses `sslmode=verify-full` and `global-bundle.pem`.
+  Tests: `tests/test_px_rds.py` (7, no AWS); `main(argv)` makes the CLI testable in-process.
+  **`pull` prints the rows** (user's edit, 2026-09-23). Thus the assistant must never run `pull` on real data.
+  Pins added: `psycopg2-binary==2.9.12`, `boto3==1.43.94`. README has a new `PostgreSQL RDS (aws-rds/)` section.
+  **Live results from WSL2 over the VPN** (WSL2 NAT mode, no `.wslconfig` change):
+  - Public DNS resolves the RDS name to its private IP (`172.20.7.x`). No Route 53 forwarder is necessary.
+  - TCP 5432 passes the FortiGate. No IT work was necessary.
+  - TLS 1.3 with a verified certificate. A login with `sslmode=disable` fails (`no encryption`).
+  - `create-demo` wrote 1000 synthetic rows (slim `meas` schema, fake `C_`/`G_`/`P_` ids) and read back
+    identical values. `pull` wrote Parquet and CSV to `data/rds/` (gitignored) with the same dtypes.
+  **Gotchas:**
+  - The `.gitignore` pattern `rds/` also ignores `aws-vpn/rds/`. That is why the stack is in `aws-rds/`.
+  - `rds.force_ssl` needs `apply_method = "pending-reboot"`. AWS reports that method (source `system`, type
+    dynamic), and `immediate` gives a diff on every plan. After the fix, the plan shows no changes.
+  - `create-demo` drops and makes again the table named by `RDS_DEMO_TABLE`. Never point it at a real table.
+  - Tear down: `terraform apply -var deletion_protection=false`, then `terraform destroy`. The destroy keeps
+    the snapshot `px-rds-final`.
+  **Data rule:** synthetic data only, until the user decides on real data.
+  **Personal login (decided 2026-09-23):** RDS rotates the master password every 7 days (next: 2026-10-01),
+  so a GUI client must not save it. `create-user NAME` makes a login role with read and write rights
+  (`pg_read_all_data` + `pg_write_all_data` + `CREATE` on `public`); it cannot drop tables that `px_admin`
+  owns. The user types the password at a hidden prompt and keeps it in 1Password (user's choice over a
+  Secrets Manager secret). `encrypt_password` makes the SCRAM-SHA-256 hash on the client, so the plain
+  password is in no SQL text and no log. A second run sets a new password. Verified live with a temporary
+  role: read, insert and create table work; a drop of `px_demo` fails; after a reset the old password fails.
+  To remove a role that owns no tables: `REVOKE CREATE ON SCHEMA public FROM <name>; DROP ROLE <name>`.
+  **Master secret facts (read 2026-09-23):** Secrets Manager secret `rds!db-<id>` in `eu-north-1`, owned by
+  RDS (`OwningService: rds`), encrypted with the AWS-managed key `aws/secretsmanager`. It holds JSON with
+  `username` and `password`. RDS rotates it every 7 days; the next rotation happens by 2026-10-01 02:00 CEST.
+  Open sessions survive a rotation, and the CLI reads the secret at each connection, so a rotation does not
+  affect it. The control is IAM (`secretsmanager:GetSecretValue`), and CloudTrail logs each read. Emergency
+  rotation: `aws secretsmanager rotate-secret --secret-id <arn>`.
+  **More users:** `max_connections` is 79 on `db.t4g.micro` (3 reserved). The user made a login `seracbio` on
+  2026-09-23. For a colleague (user's choice: share by repo clone, not by a single file): the admin runs
+  `create-user <name> --admin` with a temporary password, and sends it with the endpoint name through 1Password (the
+  endpoint stays out of git). The colleague sets `RDS_HOST` + `RDS_USER` (or passes `--host`/`--user`) and runs
+  `set-password`. The colleague needs the VPN and the repo, but no AWS access. Verified live with a temporary
+  role and no AWS credentials in the environment: `check`, `pull` and `set-password` work, and the old
+  password fails after the change.
+  **Not done:** the RDS source mode of `DATA.load_new_df`; a client inside the VPC (that needs an ingress
+  rule on `px-rds-sg`). The Signals stack is still not applied, and it reserves
+  `172.20.4.0/24` and `172.20.5.0/24`.

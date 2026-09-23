@@ -1,0 +1,6 @@
+# Copy to backend.hcl (gitignored). The values are the same as in ../aws-vpn/backend.hcl:
+#   cp ../aws-vpn/backend.hcl .
+#   terraform init -backend-config=backend.hcl
+
+bucket         = "REPLACE-with-your-tf-state-bucket"   # e.g. vpn-project-tf-state-<account-id>
+dynamodb_table = "vpn-project-tf-lock"

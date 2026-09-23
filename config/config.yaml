@@ -110,3 +110,16 @@ FREE_UPSTREAM: true
 # frames in RAM through the render). Default off — leave off unless you need the parquet dumps.
 EXPORT_COMBINED: false
 PX_PARQUET_DIR: /mnt/c/Users/gtamo/Serac Biosciences Dropbox/Serac_team/4_Data_Sciences/15_ML/Daniela/Px_parquet_from_GT
+
+# Px RDS (Terraform stack aws-rds/), read by python/px_rds.py. Every command needs a login: RDS_USER (or --user) asks
+# for that user's password; --admin uses the master password from AWS. With RDS_HOST set, a colleague needs no AWS access.
+RDS_HOST: ""                         # endpoint name, from `terraform -chdir=aws-rds output -raw db_address`; empty = AWS lookup
+RDS_USER: ""                         # personal login (asks for its password); empty = pass --user or --admin on each command
+RDS_INSTANCE_ID: px-rds              # RDS instance identifier = project_name in aws-rds/variables.tf
+RDS_REGION: eu-north-1               # region of the VPN VPC and the RDS instance
+RDS_DB_NAME: px                      # database name = db_name in aws-rds/variables.tf
+RDS_SSLROOTCERT: global-bundle.pem   # Amazon RDS CA bundle (repo root) for sslmode=verify-full
+RDS_PULL_DIR: data/rds               # default output folder of `pull` (gitignored under data/)
+RDS_DEMO_TABLE: px_demo              # synthetic table that `create-demo` replaces
+RDS_DEMO_ROWS: 1000                  # rows in the synthetic table
+RDS_DEMO_SEED: 0                     # random seed of the synthetic table

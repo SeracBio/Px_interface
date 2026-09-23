@@ -214,6 +214,73 @@ self-signed cert warning is expected; install the CA from
 > per-user audit trail — real chemistry data is gated on M365 SSO landing first. See
 > [CLAUDE.md](CLAUDE.md).
 
+### PostgreSQL RDS (`aws-rds/`)
+
+A private PostgreSQL 18 instance (`px-rds`, `db.t4g.micro`, 20 GB gp3, encrypted) sits in two
+new subnets of the same VPC (`172.20.6.0/24`, `172.20.7.0/24`). It is a **separate Terraform
+stack**: it reads the VPC and the VPN gateway but does not manage them, so a destroy of
+`aws-rds/` cannot touch `aws-vpn/`. Port 5432 accepts only the office LAN and the FortiClient
+pool. RDS keeps the master password in Secrets Manager (never in Terraform state), and the
+server refuses connections without TLS.
+
+```bash
+cd aws-rds
+cp ../aws-vpn/backend.hcl .                  # same bucket + lock table, own state key
+terraform init -backend-config=backend.hcl
+terraform plan -out=tfplan                   # read the plan first
+terraform apply tfplan
+```
+
+Use the CLI in the `ML` env, with the VPN connected. **Every command needs a login**, given after
+the command name (the `RDS_*` keys in `config/config.yaml` hold the defaults):
+
+- **Personal — `--user NAME`** (or `RDS_USER`): the CLI asks for that user's password. With
+  `--host` (or `RDS_HOST`) too, it needs no AWS access.
+- **Master — `--admin`:** the CLI reads the endpoint and the `px_admin` password from AWS at run
+  time (Secrets Manager), so your AWS keys must allow it. `create-demo` and `create-user` need it.
+
+Without a login a command stops with a message: the CLI never falls back to the master login.
+
+```bash
+python python/px_rds.py check --admin                # endpoint, DNS, TCP 5432, TLS + SQL, one line each
+python python/px_rds.py pull px_demo --user <name>   # -> data/rds/px_demo.parquet (or --out file.csv)
+python python/px_rds.py set-password --user <name>   # change your own password
+python python/px_rds.py create-demo --admin          # replace px_demo with synthetic rows, compare
+python python/px_rds.py create-user <name> --admin   # new login (hidden prompt); again = new password
+```
+
+Every connection uses `sslmode=verify-full` against `global-bundle.pem`. If `check` stops at
+`tcp`, the FortiGate policy does not permit 5432 to `172.20.6.0/23`.
+
+**Personal logins (colleagues, DBeaver, pgAdmin, psql).** RDS rotates the master password every
+7 days, so do not save it in a client, and do not share it. Give each person a login:
+
+1. Admin: `create-user <name> --admin` with a temporary password. Send it, and the endpoint name
+   from `terraform -chdir=aws-rds output -raw db_address`, through 1Password.
+2. Colleague: clone the repo, connect the VPN, and install `psycopg2-binary pandas pyarrow pyyaml
+   boto3` (or use the `ML` env). Set `RDS_HOST` and `RDS_USER` in the local `config/config.yaml`,
+   or pass `--host` and `--user` on each command. No AWS account is needed.
+3. Colleague: `python python/px_rds.py set-password` asks for the temporary password, then for the
+   new one twice.
+
+A login can read and write every table and create tables in `public`, but it cannot drop the
+tables that `px_admin` owns. Only a SCRAM hash of a password reaches the server; keep passwords
+in 1Password. Client settings: host = the endpoint name, port 5432, database `px`, SSL mode
+`verify-full`, root certificate `global-bundle.pem` (from a Windows client:
+`\\wsl$\<distro>\<repo path>\global-bundle.pem`). To remove a login that owns no tables, run
+`REVOKE CREATE ON SCHEMA public FROM <name>; DROP ROLE <name>;` as `px_admin`.
+
+> **CAUTION — `create-demo` replaces the table named by `RDS_DEMO_TABLE`.** Never point it at a
+> real table.
+>
+> **CAUTION — tear down.** Deletion protection is on. To remove the database, run
+> `terraform apply -var deletion_protection=false`, then `terraform destroy`. The destroy keeps a
+> final snapshot `px-rds-final`; delete it by hand when you do not need it. Without that
+> snapshot, all data in the database is lost.
+>
+> **Only synthetic data goes into this database** until a decision on real data. See
+> [CLAUDE.md](CLAUDE.md).
+
 ## Data policy
 
 Chemistry data (SMILES, compound IDs, structures, screening results) **stays on this
