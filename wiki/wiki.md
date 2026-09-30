@@ -284,13 +284,6 @@ data shares the namespace); no real PNGs so thumbnails are RDKit-rendered from `
     (mostly absorbed by the mscore/compounds de-dups, but wasted RAM). **Fix is at the data layer** —
     don't keep two date folders with the same plates. (User removed the duplicate folder manually.)
     Now guarded by `TestDuplicateTrancheDate` (last-tranche-wins on shared plate names).
-  - **⚠️ Duplicate-tranche gotcha (2026-08-13):** `plate2date` is built by `dict.update()` over the
-    **sorted** tranches, so if two date folders hold the **same plate names**, the *later* folder wins
-    the date and the earlier date **vanishes entirely** from the interface (its plates are all restamped).
-    Diagnosed live: `20260812` and `20260814` were identical copies of the same 5 plates
-    (`Pw222/223/226/227/255`) → no `2026-08-12` ever appeared, and those rows were also loaded twice
-    (mostly absorbed by the mscore/compounds de-dups, but wasted RAM). **Fix is at the data layer** —
-    don't keep two date folders with the same plates. (User removed the duplicate folder manually.)
 - **`plate_dates=` →** Plates filter renders **nested-by-date** (collapsible per-date sub-blocks,
   tri-state parents). **`plate_defaults=`** (list of plates) starts only those ticked; the driver
   passes whatever `resolve_plate_defaults(plate2date, SHOW_PLATE)` selects so the default view opens
@@ -801,7 +794,8 @@ and a *merged* cluster means either a <55px (tight, good) gap or an overlap (loo
   membership with repo-create rights; authorize SAML SSO if prompted). (2) Old path redirects to
   `github.com/<ORG>/Px_interface`. (3) Re-point the local clone:
   `git remote set-url origin git@github.com:<ORG>/Px_interface.git` then `git remote -v` + `git fetch origin`.
-  Fill in `<ORG>` with the actual slug once known; update this entry when the transfer is confirmed done.
+  **Done (checked 2026-09-30, `git remote -v`):** `origin` is `git@github.com:SeracBio/Px_interface.git`, so
+  the org slug is `SeracBio`.
 - 2026-07-16 — **security review of `aws-vpn/` + `docs/`** (defensive; own infra). Baseline is strong (private
   EC2, no public ingress, SSM-not-SSH, IMDSv2 required, encrypted EBS, IKEv2/AES-256/SHA2-256/DH14, state bucket
   encrypted+versioned+public-blocked+TLS-only+`prevent_destroy`); no internet-facing unauth path. **Fixes
@@ -1103,7 +1097,9 @@ and a *merged* cluster means either a <55px (tight, good) gap or an overlap (loo
   - `create-demo` drops and makes again the table named by `RDS_DEMO_TABLE`. Never point it at a real table.
   - Tear down: `terraform apply -var deletion_protection=false`, then `terraform destroy`. The destroy keeps
     the snapshot `px-rds-final`.
-  **Data rule:** synthetic data only, until the user decides on real data.
+  **Data rule:** synthetic data only, until the user decides on real data. **Superseded (2026-09-30):**
+  `px-seracbio-prod` holds a copy of the real `seracbio-prod` data. Treat it as real data. The assistant never
+  reads its rows.
   **Personal login (decided 2026-09-23):** RDS rotates the master password every 7 days (next: 2026-10-01),
   so a GUI client must not save it. `create-user NAME` makes a login role with read and write rights
   (`pg_read_all_data` + `pg_write_all_data` + `CREATE` on `public`); it cannot drop tables that `px_admin`
@@ -1180,3 +1176,20 @@ and a *merged* cluster means either a <55px (tight, good) gap or an overlap (loo
   df_raw report rows. So the **newest** run decides the activity for **all older runs of that compound**,
   and a later line drops every `activity == 'Silent'` row. A compound with more than one run can lose an
   old plate this way. Only df_raw rows use this fallback; FBX rows carry their own activity.
+- 2026-09-30 — **RDS copy `px-seracbio-prod` is live, and the secret mechanism is documented.** (STE.)
+  The stack `aws-rds/` restored a snapshot of `seracbio-prod` into the VPN VPC: `db.m7g.large`,
+  600 GB gp3, Multi-AZ, **private**, force_ssl parameter group, user `seracbio`. Verified: PostgreSQL
+  18.3, schema `public` with 10 tables, 14 GB of data in the `postgres` database. The placeholder
+  `px-rds` is deleted; its final snapshot `px-rds-final` (20 GB) remains. **The copy improves the
+  source in two ways:** the source sits in the **default VPC** and is **publicly accessible**; the copy
+  is private and reachable over the VPN only. Raise the public source with the team.
+  **Password:** `manage_master_user_password = true`, so RDS owns the secret `rds!db-<uuid>` in
+  Secrets Manager (`eu-north-1`), and **rotates it every 7 days**. Never copy it into a file.
+  `rds/connect2.py` now reads the endpoint, the user and the password from AWS at run time and holds
+  **no password**. Run it with `conda run -n ML python rds/connect2.py`; the base environment has no
+  `boto3`. **The full mechanism (SigV4, the one-Allow-no-Deny rule, the `kms:ViaService` condition on
+  the AWS managed key, and the two separate network needs) is in Part 7 of
+  [`docs/aws_architecture_learn.md`](../docs/aws_architecture_learn.md).**
+  **Finding to act on:** all three IAM users are IAM users, not SSO, and **two hold
+  `AdministratorAccess`**. A colleague therefore needs no new policy, only AWS credentials and the VPN.
+  The doc lists three ways to narrow this.

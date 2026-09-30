@@ -1,3 +1,14 @@
+# The master password comes from ~/.px_db_password, one line "user:password", like ~/.serac_aws
+# does for the webapp. Everything after the first colon is the password. sensitive() keeps it out
+# of the plan output.
+locals {
+  _pw_file = pathexpand("~/.px_db_password")
+  _pw_raw  = fileexists(local._pw_file) ? trimspace(file(local._pw_file)) : var.master_password
+  master_password = sensitive(
+    can(regex("^[^:]+:(.+)$", local._pw_raw)) ? regex("^[^:]+:(.+)$", local._pw_raw)[0] : local._pw_raw
+  )
+}
+
 # A copy of an existing database, restored from a snapshot into THIS stack's VPN networking.
 # The source (seracbio-prod) sits in the default VPC and is publicly accessible. The copy is
 # private, reachable only over the VPN, and it uses the force_ssl parameter group.
@@ -19,9 +30,11 @@ resource "aws_db_instance" "restored" {
   storage_encrypted = true
   kms_key_id        = var.restore_kms_key_id
 
-  # RDS makes a NEW password in Secrets Manager and rotates it. The copy then stops sharing
-  # the password of the source. The password never enters Terraform state.
-  manage_master_user_password = true
+  # A FIXED password for the master user, shared through 1Password, so a person without an
+  # AWS account signs in with seracbio + password over the VPN.
+  # CAUTION: a fixed password is written to the Terraform state file.
+  # Omit manage_master_user_password: the provider refuses it beside `password`.
+  password = local.master_password
 
   multi_az               = var.restore_multi_az
   db_subnet_group_name   = aws_db_subnet_group.db.name

@@ -132,3 +132,10 @@ variable "restore_deletion_protection" {
   type        = bool
   default     = true
 }
+
+variable "master_password" {
+  description = "Fallback master password. Prefer the file ~/.px_db_password with one line user:password."
+  type        = string
+  sensitive   = true
+  default     = ""
+}

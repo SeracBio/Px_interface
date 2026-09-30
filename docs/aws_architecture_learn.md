@@ -201,6 +201,69 @@ exactly three things and nothing more (least privilege):
 
 The instance automatically assumes this role — no secret keys stored anywhere.
 
+### The RDS master password (Secrets Manager)
+
+The database `px-seracbio-prod` does not keep its master password in Terraform. The resource sets
+`manage_master_user_password = true`, so RDS makes the password, stores it, and rotates it.
+
+Facts about that secret:
+
+- It lives in **AWS Secrets Manager**, in `eu-north-1`, in our account. It is not in the VPC, and it
+  is not on any disk.
+- RDS owns it. Its name follows the pattern `rds!db-<uuid>`, and it has no friendly name.
+- RDS rotates it **every 7 days**. So never copy the password into a file or a config.
+- It has **no resource policy**. One layer decides access: the caller's IAM policy.
+
+The console hides it well. The direct route is through RDS, not through Secrets Manager: open the
+RDS console in `eu-north-1`, open the instance, open the **Configuration** tab, then click the
+**Master credentials ARN** link.
+
+### How a caller reads that secret — the four steps
+
+This chain explains why an administrator sees the password, and why a script needs no KMS grant.
+
+1. **The client signs the request.** `boto3` signs each call with the SigV4 algorithm. The signature
+   proves the identity. The secret key never travels.
+2. **IAM decides.** Secrets Manager asks one question: may this principal run
+   `secretsmanager:GetSecretValue` on this secret? IAM reads the identity policy, the resource policy
+   on the secret, and any explicit Deny. One Allow, and no Deny, gives access. The policy
+   `AdministratorAccess` is `{"Effect": "Allow", "Action": "*", "Resource": "*"}`, so its wildcard
+   matches this action and every other action in the account.
+3. **Secrets Manager decrypts the value.** The stored value is ciphertext. The service calls KMS with
+   the AWS managed key `aws/secretsmanager`.
+4. **AWS returns the plaintext over TLS.** The password exists only in the memory of the script.
+
+> **Why step 3 needs no KMS statement in your policy:** the key policy of an AWS managed key permits
+> every principal in the account, but only under the condition
+> `"kms:ViaService": "secretsmanager.<region>.amazonaws.com"`. So the account can decrypt with that
+> key **through Secrets Manager only**. A direct `kms:Decrypt` call fails. This is the same pattern as
+> the SSM note above: the service does the decrypt, and a condition limits the path.
+
+### Two network needs, and why they confuse people
+
+A script that reads the password and then connects to the database needs **two** separate things:
+
+| Need | Reaches | Works without the VPN? |
+|---|---|---|
+| AWS credentials | the Secrets Manager and RDS APIs | **yes** |
+| VPN connection | the database on port 5432 | no |
+
+The AWS APIs are public endpoints, so the first half works from anywhere. Only the database needs the
+tunnel. A person without the VPN therefore sees the first lines succeed, and then a connection
+timeout. That looks like a broken script, but it is a network problem.
+
+### Narrowing an administrator's reach
+
+Every user in this account holds `AdministratorAccess` today. That one wildcard permits reading every
+secret, deleting every database, and removing the VPN. Three ways to narrow it:
+
+- **A resource policy on the secret.** An explicit Deny for every principal except two. An explicit
+  Deny beats any Allow, so it overrules `AdministratorAccess`.
+- **A customer managed KMS key.** The reader then needs the secret permission **and** the key
+  permission, and the key policy names the permitted principals.
+- **A read-only policy for daily work**, with `AdministratorAccess` on a separate role that a person
+  assumes only when a task needs it. This is the usual practice and the simplest of the three.
+
 ### Self-signed TLS certificate
 A normal HTTPS certificate is issued by a public authority and tied to a public domain name. We have
 neither (the box is private, no public DNS), so Terraform generates a **self-signed** cert. Browsers

@@ -13,11 +13,6 @@ output "db_name" {
   value       = try(aws_db_instance.restored[0].db_name, "")
 }
 
-output "master_secret_arn" {
-  description = "Secrets Manager secret with the master user name and password"
-  value       = try(aws_db_instance.restored[0].master_user_secret[0].secret_arn, "")
-}
-
 output "security_group_id" {
   description = "Security group of the database. A later client inside the VPC needs an ingress rule here."
   value       = aws_security_group.db.id
