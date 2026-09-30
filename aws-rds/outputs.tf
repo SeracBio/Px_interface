@@ -1,24 +1,29 @@
 output "db_address" {
   description = "RDS endpoint name. It resolves to the private IP, which only the VPN can reach."
-  value       = aws_db_instance.db.address
+  value       = try(aws_db_instance.restored[0].address, "")
 }
 
 output "db_port" {
   description = "PostgreSQL port"
-  value       = aws_db_instance.db.port
+  value       = try(aws_db_instance.restored[0].port, 0)
 }
 
 output "db_name" {
   description = "Database name"
-  value       = aws_db_instance.db.db_name
+  value       = try(aws_db_instance.restored[0].db_name, "")
 }
 
 output "master_secret_arn" {
   description = "Secrets Manager secret with the master user name and password"
-  value       = aws_db_instance.db.master_user_secret[0].secret_arn
+  value       = try(aws_db_instance.restored[0].master_user_secret[0].secret_arn, "")
 }
 
 output "security_group_id" {
   description = "Security group of the database. A later client inside the VPC needs an ingress rule here."
   value       = aws_security_group.db.id
+}
+
+output "restored_endpoint" {
+  description = "Address of the restored copy. Empty when restore.tf creates nothing."
+  value       = try(aws_db_instance.restored[0].address, "")
 }

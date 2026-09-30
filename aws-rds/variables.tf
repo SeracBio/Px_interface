@@ -43,9 +43,9 @@ variable "engine_version" {
 }
 
 variable "instance_class" {
-  description = "DB instance class"
+  description = "DB instance class. A change here modifies the instance in place; it does not replace it."
   type        = string
-  default     = "db.t4g.micro"
+  default     = "db.m7g.large"
 }
 
 variable "allocated_storage" {
@@ -74,6 +74,61 @@ variable "backup_retention_days" {
 
 variable "deletion_protection" {
   description = "Set to false and apply before you destroy the database"
+  type        = bool
+  default     = true
+}
+
+# --- restore.tf: a copy of an existing database into this stack's VPN networking ---
+
+variable "restore_snapshot_identifier" {
+  description = "Snapshot to restore. Empty means restore.tf creates nothing."
+  type        = string
+  default     = ""
+}
+
+variable "restore_identifier" {
+  description = "Name of the restored instance. RDS needs lowercase."
+  type        = string
+  default     = "px-seracbio-prod"
+
+  validation {
+    condition     = var.restore_identifier == lower(var.restore_identifier)
+    error_message = "restore_identifier must be lowercase."
+  }
+}
+
+variable "restore_allocated_storage" {
+  description = "Storage in GB. It must be equal to or larger than the snapshot."
+  type        = number
+  default     = 600
+}
+
+variable "restore_storage_type" {
+  description = "gp3 costs less than the source io2. Use io2 only if you need its IOPS."
+  type        = string
+  default     = "gp3"
+}
+
+variable "restore_iops" {
+  description = "Provisioned IOPS. It applies to io1 and io2 only."
+  type        = number
+  default     = 3000
+}
+
+variable "restore_multi_az" {
+  description = "Multi-AZ, as the source is. It doubles the cost and it gives an automatic failover."
+  type        = bool
+  default     = true
+}
+
+variable "restore_kms_key_id" {
+  description = "KMS key of the restored volume. Empty keeps the key of the snapshot."
+  type        = string
+  default     = ""
+}
+
+variable "restore_deletion_protection" {
+  description = "Protection for the restored copy only. It is separate from the placeholder flag."
   type        = bool
   default     = true
 }

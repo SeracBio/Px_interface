@@ -38,3 +38,6 @@ rds/
 
 # Handoff archive for the Signals webapp — internal CIDRs, transfer artifact not repo content.
 aws_signals.zip
+
+# AWS login-security runbook. It describes the security state of the AWS account. Keep it local only.
+docs/pwd_security.md

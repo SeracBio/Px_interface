@@ -108,6 +108,10 @@ Needs the `session-manager-plugin` installed alongside the AWS CLI. FortiClient 
 connected for anything that talks to the box over HTTPS (the AWS API calls themselves do not
 need the VPN).
 
+> **Security:** `aws configure` stores a long-lived access key. To replace it with short-lived SSO
+> credentials and MFA (IAM Identity Center), follow the local runbook `docs/pwd_security.md`
+> (gitignored, so it exists only on the admin's machine).
+
 ### Access the instance
 
 ```bash

@@ -1128,3 +1128,55 @@ and a *merged* cluster means either a <55px (tight, good) gap or an overlap (loo
   **Not done:** the RDS source mode of `DATA.load_new_df`; a client inside the VPC (that needs an ingress
   rule on `px-rds-sg`). The Signals stack is still not applied, and it reserves
   `172.20.4.0/24` and `172.20.5.0/24`.
+- 2026-09-23 — **Transcript audit: what infra information crossed to Anthropic.** (STE.) The user asked the
+  realistic risk that someone at Anthropic gets into the VPN VPC. Method: a local scan of the 82 Claude Code
+  transcripts on disk (projects Px_interface, Signals, Miscelaneous). The scan paired each command with its
+  output and printed only yes/no flags, never values. **Result: no key crossed.** No VPN PSK value, no AWS
+  access key (only the last 4 characters, from `aws configure list`), no DB password (the 2026-09-15 read of
+  `rds/` masked both password lines), no real htpasswd hash or password (the `htpasswd` hits were `<password>`
+  placeholders in docs), no private key. **What crossed is reconnaissance only:** the FortiGate public IP
+  (a 2026-07-03 read of `aws-vpn/terraform.tfvars`), the AWS tunnel endpoint IPs, the public TLS certificate,
+  the account ID, CIDRs, private IPs, resource IDs, the RDS DNS suffix of this account, user names, and the
+  full SG/route design. **Assessment:** low risk. Every way in needs a secret that did not cross: FortiClient
+  credentials or the office LAN, the PSK plus traffic from the FortiGate IP, or AWS IAM credentials. **Limits:**
+  transcripts older than the local retention period, and the Kiro sessions that generated the stack, cannot be
+  audited here. **Bigger risks than the transcripts:** the long-lived admin AWS keys in `~/.aws/credentials`
+  (they give SSM, the master secret and the VPC without the VPN); `seracbio-prod`/`-dev` are publicly
+  accessible and their DNS names follow from the suffix; the internet-facing FortiGate (patching, MFA).
+- 2026-09-23 — **AWS credentials: current state and the migration plan (not done yet).** (STE.) The CLI, Terraform
+  and `px_rds.py` use one long-lived access key of the IAM user `gtamo@seracbio.com` (`AdministratorAccess`
+  attached directly; key created 2026-06-30). The console login has MFA, but the key does not need MFA. The
+  account is standalone (no AWS Organizations) and has no IAM Identity Center instance. The account has 3 IAM
+  users. The state bucket policy has only `DenyNonTLS` + `DenyOutsideAccount`, with no principal allow-list,
+  so a change of credentials in the same account keeps state access. **Plan:** enable IAM Identity Center
+  (organization instance; it makes an Organization with this account as the management account), always-on
+  MFA, one user plus the `AdministratorAccess` permission set, then `aws configure sso` (profile
+  `serac-admin`, region `eu-north-1`; in WSL `--use-device-code`) and `export AWS_PROFILE=serac-admin`. Then
+  remove the key from `~/.aws/credentials`, test, set the key Inactive, and delete it after a week. Keep the
+  IAM user without keys, with MFA, as a break-glass login. **Rule:** the assistant never runs
+  `iam create-access-key`, because its output holds the new secret. Runbook: `docs/pwd_security.md` (gitignored, local only).
+- 2026-09-25 — **Recipe: a plate or volcano does not appear in the interface.** (STE.) A user could not see
+  plate `Pw73` for one compound and gene `BNIP3`. The data was correct. A **filter tickbox in the browser**
+  hid the row. Check the client filters **before** you doubt the pipeline.
+  **Order of checks:**
+  1. **Plate date.** `SHOW_PLATE` ticks only the listed dates. Every other plate starts **unticked**.
+     `Pw73` has the date `2026-04-29`, but `SHOW_PLATE` held three August dates. This alone hides a plate.
+  2. **Target validation.** `FBXO31_INDEPENDENT_TICKED: false` starts the "FBXO31 independent" box
+     unticked, so those genes are hidden on load. `VALIDATED_TARGET_FILE` (`data/validated.txt`, 16 genes)
+     **replaces** the dependent list. A gene that is in neither list falls in "other", which has no box
+     and always shows.
+  3. **MS slider**, then the Activity boxes. The MS slider filters each experiment by its own
+     per-(gene,compound,plate) score at `pl[8]`, not by the dot's z.
+  **Two facts that speed up the next diagnosis:**
+  - **Plates older than the first FBX tranche (`20260601`) are df_raw plates.** Their dates come from
+    `_DFRAW_DATE_SRC` in `combine_datasets` (`2026-04-29` = `CLEAN_PROTEOMICS_PATH`, plus `2026-05-20`
+    and `2026-05-29`), not from a tranche folder name. Do not look for an FBX file for them.
+  - **`FREE_UPSTREAM: true` sets `output.report`, `output.measure`, `output.mscore` and `data.MS` to
+    `None`.** Diagnose with `output.compounds_df`, `output.meas` and `output.plate2date`, which survive.
+    A row that is present in `compounds_df` passed every server-side filter, so the cause is client-side.
+  **Latent issue found while reading the code, NOT the cause here and NOT verified:**
+  `combine_datasets` builds the activity fallback with
+  `data.MS.sort_values('date').drop_duplicates('compound', keep='last')`, then `fillna`s it onto the
+  df_raw report rows. So the **newest** run decides the activity for **all older runs of that compound**,
+  and a later line drops every `activity == 'Silent'` row. A compound with more than one run can lose an
+  old plate this way. Only df_raw rows use this fallback; FBX rows carry their own activity.
