@@ -22,3 +22,8 @@ output "restored_endpoint" {
   description = "Address of the restored copy. Empty when restore.tf creates nothing."
   value       = try(aws_db_instance.restored[0].address, "")
 }
+
+output "dev_endpoint" {
+  description = "Address of the development database. Empty when create_dev is false."
+  value       = try(aws_db_instance.dev[0].address, "")
+}

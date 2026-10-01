@@ -81,9 +81,9 @@ variable "deletion_protection" {
 # --- restore.tf: a copy of an existing database into this stack's VPN networking ---
 
 variable "restore_snapshot_identifier" {
-  description = "Snapshot to restore. Empty means restore.tf creates nothing."
+  description = "Snapshot the prod copy was restored from. Pinned, so a bare apply never destroys it."
   type        = string
-  default     = ""
+  default     = "seracbio-prod-copy-20260929"
 }
 
 variable "restore_identifier" {
@@ -138,4 +138,54 @@ variable "master_password" {
   type        = string
   sensitive   = true
   default     = ""
+}
+
+# --- dev.tf: the empty development database ---
+
+variable "create_dev" {
+  description = "Build the development database. Set to false to remove it."
+  type        = bool
+  default     = true
+}
+
+variable "dev_identifier" {
+  description = "Name of the development instance. RDS needs lowercase."
+  type        = string
+  default     = "px-seracbio-dev"
+
+  validation {
+    condition     = var.dev_identifier == lower(var.dev_identifier)
+    error_message = "dev_identifier must be lowercase."
+  }
+}
+
+variable "dev_instance_class" {
+  description = "Graviton, and the cheapest class that runs PostgreSQL 18. It gives 1 GB of memory."
+  type        = string
+  default     = "db.t4g.micro"
+}
+
+variable "dev_allocated_storage" {
+  description = "gp3 storage in GB for the development database"
+  type        = number
+  default     = 20
+}
+
+variable "dev_master_username" {
+  description = "Master user of the development database"
+  type        = string
+  default     = "seracbio"
+}
+
+variable "dev_master_password" {
+  description = "Fallback password. Prefer the file ~/.px_db_dev_password with one line user:password."
+  type        = string
+  sensitive   = true
+  default     = ""
+}
+
+variable "dev_deletion_protection" {
+  description = "Off by default, because a development database is disposable."
+  type        = bool
+  default     = false
 }

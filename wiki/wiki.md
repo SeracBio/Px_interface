@@ -1069,7 +1069,9 @@ and a *merged* cluster means either a <55px (tight, good) gap or an overlap (loo
   group; parameter group `px-rds-pg18` (`rds.force_ssl=1`); instance `px-rds`. The instance is PostgreSQL 18.3
   (same as `seracbio-prod`), `db.t4g.micro`, 20 GB gp3, encrypted, Single-AZ, not public, deletion protection
   on, 7-day backups. Creation took 7.5 min. Cost: about $14.50/month (AWS Pricing API: $0.016/h, $0.12/GB-month).
-  **Secret:** RDS keeps the `px_admin` password in Secrets Manager (`manage_master_user_password`). Verified:
+  **STALE — `px-rds` was DELETED on 2026-09-29, and `python/px_rds.py` no longer exists. Read this
+  entry for the patterns only, not for live facts.**
+  **Secret:** RDS kept the `px_admin` password in Secrets Manager (`manage_master_user_password`). Verified:
   Terraform state holds only the secret ARN, no password.
   **CLI `python/px_rds.py`** (`ML` env): `check`, `pull TABLE [--out]`, `set-password`, and the admin commands
   `create-demo` and `create-user NAME`. **Explicit logins (decided 2026-09-23):** every command needs a login,
@@ -1108,6 +1110,8 @@ and a *merged* cluster means either a <55px (tight, good) gap or an overlap (loo
   password is in no SQL text and no log. A second run sets a new password. Verified live with a temporary
   role: read, insert and create table work; a drop of `px_demo` fails; after a reset the old password fails.
   To remove a role that owns no tables: `REVOKE CREATE ON SCHEMA public FROM <name>; DROP ROLE <name>`.
+  **STALE — these facts described `px-rds`, now deleted. `px-seracbio-prod` uses a FIXED 1Password
+  password since 2026-10-01, so no RDS-managed secret and no rotation apply to it.**
   **Master secret facts (read 2026-09-23):** Secrets Manager secret `rds!db-<id>` in `eu-north-1`, owned by
   RDS (`OwningService: rds`), encrypted with the AWS-managed key `aws/secretsmanager`. It holds JSON with
   `username` and `password`. RDS rotates it every 7 days; the next rotation happens by 2026-10-01 02:00 CEST.
@@ -1183,8 +1187,8 @@ and a *merged* cluster means either a <55px (tight, good) gap or an overlap (loo
   `px-rds` is deleted; its final snapshot `px-rds-final` (20 GB) remains. **The copy improves the
   source in two ways:** the source sits in the **default VPC** and is **publicly accessible**; the copy
   is private and reachable over the VPN only. Raise the public source with the team.
-  **Password:** `manage_master_user_password = true`, so RDS owns the secret `rds!db-<uuid>` in
-  Secrets Manager (`eu-north-1`), and **rotates it every 7 days**. Never copy it into a file.
+  **Password — SUPERSEDED on 2026-10-01, see the entry below.** It was `manage_master_user_password
+  = true` (RDS-owned secret `rds!db-<uuid>`, rotating weekly). It is now a fixed 1Password value.
   `rds/connect2.py` now reads the endpoint, the user and the password from AWS at run time and holds
   **no password**. Run it with `conda run -n ML python rds/connect2.py`; the base environment has no
   `boto3`. **The full mechanism (SigV4, the one-Allow-no-Deny rule, the `kms:ViaService` condition on
@@ -1193,3 +1197,42 @@ and a *merged* cluster means either a <55px (tight, good) gap or an overlap (loo
   **Finding to act on:** all three IAM users are IAM users, not SSO, and **two hold
   `AdministratorAccess`**. A colleague therefore needs no new policy, only AWS credentials and the VPN.
   The doc lists three ways to narrow this.
+
+- 2026-10-01 — **Two private databases now run in the VPN VPC. Connection details recorded.** (STE.)
+  **This supersedes the 2026-09-30 note that the prod password is RDS-managed.** The master password
+  of `px-seracbio-prod` is now a **fixed value shared through 1Password**, not an RDS-managed secret.
+  `manage_master_user_password` is gone from `restore.tf`; the provider refuses that flag beside
+  `password`, so you omit it rather than set it to `false`. Terraform reads the value from
+  `~/.px_db_password`, one line `user:password`, with the same `locals` pattern that `aws-vpn` uses for
+  `~/.serac_aws`. **CAUTION: the password now sits in the Terraform state file, and it no longer
+  rotates.** The user accepted this so a colleague without an AWS account can sign in. RDS deleted its
+  own secret; `MasterUserSecret` reads `null`.
+
+  | Field | `px-seracbio-prod` | `px-seracbio-dev` |
+  |---|---|---|
+  | Host | `px-seracbio-prod.cfyi0icu0fkt.eu-north-1.rds.amazonaws.com` | `px-seracbio-dev.cfyi0icu0fkt.eu-north-1.rds.amazonaws.com` |
+  | Port | 5432 | 5432 |
+  | Database | `postgres` | `postgres` |
+  | User | `seracbio` | `seracbio` |
+  | TLS | required, `sslmode=verify-full` + `global-bundle.pem` | the same |
+  | Engine | PostgreSQL 18.3 | PostgreSQL 18.3 |
+  | Region / zone | `eu-north-1` / `1b` | `eu-north-1` / `1b` |
+  | Class | `db.m7g.large` | `db.t4g.micro` |
+  | Storage | 600 GB gp3, Multi-AZ | 20 GB gp3, single-AZ |
+  | Data | 14 GB, 10 tables in `public` | empty |
+  | Password file | `~/.px_db_password` | `~/.px_db_dev_password` |
+  | Test script | `rds/connect2.py` | `python/20261001_test_dev_connect.py` |
+
+  **`px-seracbio-dev` is EMPTY and new** (`dev.tf`), not a restore. It reuses the prod subnet group,
+  security group and `force_ssl` parameter group, so a later edit to any of those three changes **both**
+  databases. `create_dev=false` removes it; `deletion_protection` is off, because dev is disposable.
+  **Trap fixed the same day:** `restore_snapshot_identifier` defaulted to `""`, so a bare
+  `terraform apply` planned to **destroy `px-seracbio-prod`**. The default is now pinned to
+  `seracbio-prod-copy-20260929`, and a bare plan shows `0 to destroy`.
+  **RDS password rule:** printable ASCII, 8-128 characters, but **never** `/ @ " or space`. The first
+  1Password value held `@` and the apply failed with `InvalidParameterValue`. Nothing changed on AWS.
+  **Both test scripts** read their credential file, accept `--prompt` to type the password instead, and
+  prompt on their own when the file is absent. They make **no AWS call**, so a colleague needs only the
+  VPN, `psycopg2`, `global-bundle.pem` and the password. CAUTION: `--prompt` fails under `conda run`
+  (`EOFError`, stdin closed); use `conda activate ML` first. `python/` is tracked by Git, so never write
+  a query result there: `uniquecontrast` holds compound identifiers.
