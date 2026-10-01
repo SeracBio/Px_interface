@@ -942,7 +942,7 @@ and a *merged* cluster means either a <55px (tight, good) gap or an overlap (loo
   53 udp/tcp; NOT all of seracbio.com) has been **sent to IT**. Once IT adds it,
   `https://advantedge.seracbio.com/Px_interface/` resolves over the VPN (verify with
   `nslookup advantedge.seracbio.com` → `172.20.2.10`). Until then, use the IP URL. **This is the last open item
-  on the AWS deployment.**
+  on the AWS deployment.** **Done 2026-10-01:** IT added the forwarder, and the friendly URL loads over the VPN.
 - 2026-07-22 — **removed the unused public subnet + Internet Gateway** (AWS contact asked why they were in the
   shared diagram). They carried no traffic: the EC2 lives in the private subnet, a S2S VPN needs no IGW, and all
   outbound goes via VPC endpoints (S3 gateway + SSM) — the public subnet/IGW were reserved-for-future scaffolding
@@ -1236,3 +1236,41 @@ and a *merged* cluster means either a <55px (tight, good) gap or an overlap (loo
   VPN, `psycopg2`, `global-bundle.pem` and the password. CAUTION: `--prompt` fails under `conda run`
   (`EOFError`, stdin closed); use `conda activate ML` first. `python/` is tracked by Git, so never write
   a query result there: `uniquecontrast` holds compound identifiers.
+
+- 2026-10-01 — **The friendly name is live. HTTPS needs a trusted certificate.** (STE.)
+  IT added the conditional forwarder, so `https://advantedge.seracbio.com/Px_interface/` loads over the VPN.
+  Chrome shows "Not secure" and a line through `https`. The cause is the certificate, not the protocol.
+  nginx already serves TLS on 443 and sends 80 to 443. But `aws-vpn/tls.tf` makes a **self-signed**
+  certificate, and no browser trusts its issuer. **Facts for the fix (checked 2026-10-01):**
+  - The public DNS of `seracbio.com` is at **GoDaddy** (`ns43`/`ns44.domaincontrol.com`). This AWS account
+    has only the private zone `advantedge.seracbio.com`. The ACM certificate list in `eu-north-1` is empty.
+  - `seracbio.com` has **no CAA record**, so Amazon and Let's Encrypt can issue a certificate for it.
+  - The box has no internet egress, so it cannot renew a certificate by itself.
+  - Internal ALB price in `eu-north-1` (AWS Pricing API): $0.02394/h (about $17.50/month), plus $0.0076
+    per LCU-hour. A non-exportable ACM public certificate is free.
+  - A public certificate puts the name in the public Certificate Transparency logs. The name still
+    resolves only over the VPN.
+  - The live certificate (`openssl s_client`): self-signed, `O=My Company`, `CA:FALSE`, valid 2026-07-16 to
+    **2028-10-18**. `CA:FALSE` means it cannot sign other certificates, so a laptop that trusts it trusts
+    only this one site.
+
+  **Recipe: trust the certificate on a Windows laptop (no IT, $0, no AWS change).** The user did these
+  steps on 2026-10-01, and they worked. Each user does them one time, in Chrome or Edge:
+  1. In Chrome, open the site, click "Not secure", then click "Certificate is not valid".
+  2. On the Details tab, click Export. Save the file as `advantedge.crt`.
+  3. Double-click the file, then click "Install Certificate".
+  4. Select "Current User".
+  5. Select "Place all certificates in the following store", then select "Trusted Root Certification
+     Authorities".
+  6. Click Finish, then click Yes at the security warning.
+  7. Close all Chrome windows, then open Chrome again.
+
+  The file holds no secret, so a user can send it to colleagues with these steps. Each new certificate
+  needs a new import. A change to `tls.tf` makes a new certificate, and so does the renewal before the
+  expiry on 2028-10-18. To remove the trust: run `certmgr.msc`, open Trusted Root Certification
+  Authorities → Certificates, and delete `advantedge.seracbio.com`.
+
+  **Open decision:** an ACM certificate on an internal ALB (one permanent CNAME at GoDaddy, automatic
+  renewal), Let's Encrypt with DNS-01 (free, one TXT at GoDaddy for each renewal), or a certificate from an
+  IT internal CA. The recipe above works, so this decision is not urgent. Enable HSTS (item M3) only after
+  a trusted certificate is live.
