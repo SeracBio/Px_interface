@@ -135,3 +135,9 @@ variable "tls_cert_validity_days" {
   type        = number
   default     = 825 # ~2 years; browsers reject > 825 days
 }
+
+variable "interface_noncurrent_days" {
+  description = "Days that the interface bucket keeps an old (replaced or deleted) file version before S3 deletes it"
+  type        = number
+  default     = 7
+}

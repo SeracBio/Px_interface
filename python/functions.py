@@ -7,6 +7,7 @@ Currently contains:
 """
 
 import os
+import xml.etree.ElementTree as ET   # load expat before RDKit Draw: its ChemDraw lib exports XML_* and corrupts a later parse
 import numpy as np
 import pandas as pd
 
@@ -5830,7 +5831,6 @@ def _volcano_base_svg(df, uniquecontrast,
         for placing the ring. ``('', None)`` on empty/failure.
     """
     import io
-    import xml.etree.ElementTree as ET
     import matplotlib
     matplotlib.use('Agg')
     import matplotlib.pyplot as plt

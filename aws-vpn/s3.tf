@@ -26,7 +26,7 @@ resource "aws_s3_bucket_versioning" "interface" {
 }
 
 # SSE-S3 (AES256) — encrypts at rest with no extra KMS-decrypt grant needed on the
-# instance role. Sufficient for the (synthetic) interface artifacts in a private bucket.
+# instance role. For the real interface data, the bucket policy also limits object reads to the VPC.
 resource "aws_s3_bucket_server_side_encryption_configuration" "interface" {
   bucket = aws_s3_bucket.interface.id
   rule {
@@ -67,9 +67,40 @@ resource "aws_s3_bucket_policy" "interface" {
         Condition = {
           StringNotEquals = { "aws:PrincipalAccount" = data.aws_caller_identity.current.account_id }
         }
+      },
+      {
+        # File reads only through the VPC's S3 gateway endpoint (the EC2); the publish lists and writes only.
+        Sid       = "DenyObjectReadOutsideVpc"
+        Effect    = "Deny"
+        Principal = "*"
+        Action    = ["s3:GetObject", "s3:GetObjectVersion"]
+        Resource  = ["${aws_s3_bucket.interface.arn}/*"]
+        Condition = { StringNotEquals = { "aws:SourceVpce" = aws_vpc_endpoint.s3.id } }
       }
     ]
   })
+}
+
+# Delete old (replaced or deleted) versions after interface_noncurrent_days, so old data does not stay.
+resource "aws_s3_bucket_lifecycle_configuration" "interface" {
+  bucket     = aws_s3_bucket.interface.id
+  depends_on = [aws_s3_bucket_versioning.interface]
+
+  rule {
+    id     = "expire-old-versions"
+    status = "Enabled"
+    filter {}
+
+    noncurrent_version_expiration {
+      noncurrent_days = var.interface_noncurrent_days
+    }
+    expiration {
+      expired_object_delete_marker = true
+    }
+    abort_incomplete_multipart_upload {
+      days_after_initiation = 1
+    }
+  }
 }
 
 # Let the EC2 instance role PULL (read) objects from this bucket via the S3 gateway endpoint.

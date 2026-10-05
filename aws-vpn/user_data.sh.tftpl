@@ -59,8 +59,11 @@ server {
     # which would hard-lock users. Re-enable it only after distributing a trusted
     # cert to employee trust stores:
     #   add_header Strict-Transport-Security "max-age=63072000" always;
-    add_header X-Frame-Options DENY always;
+    # SAMEORIGIN, not DENY: the page shows each volcano SVG in an <object>, which DENY blocks.
+    add_header X-Frame-Options SAMEORIGIN always;
     add_header X-Content-Type-Options nosniff always;
+    # Revalidate each file before use (304 if unchanged), so a publish shows without Ctrl+Shift+R.
+    add_header Cache-Control "no-cache" always;
 
     root /var/www/webapp;
 

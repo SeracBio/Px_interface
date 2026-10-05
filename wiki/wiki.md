@@ -3,6 +3,9 @@ _Durable, aggregate memory of this repo — read at session start. Aggregate onl
 
 ## Where we are now
 - **Focus:** building the per-gene 3D Px interface (`Serac_Px_interface.html`) via `fn.plot_3d_interface`.
+- **OPEN TO-DO (2026-10-05): security batch B on the AWS box** — bcrypt cost 10 + long password, secret
+  files at 0600 from the start, optional `limit_req` and per-person logins. It replaces the EC2, so do it at a
+  quiet time. Details: log entry "Signals agent handoff: SSM and password hardening for Px" (2026-10-05).
 - **Architecture doc:** [`docs/INTERFACE.md`](../docs/INTERFACE.md) — full map of how the build fits together
 - **Data-transform doc:** [`docs/data_transform.md`](../docs/data_transform.md) — how `measure`/`mscore`/`report` (+ `df_raw`/`MS`/FBX) are derived from the raw files
   (pipeline → `plot_3d_interface` → volcano cache → `_INTERFACE_INJECT` JS → the JS↔Python `__X__` contract +
@@ -212,12 +215,14 @@ end-to-end (data → combine → iface → render) and is verified on the synthe
 Run: `python python/Px_interface.py --config config/config.yaml --output_dir <dir>`.
 - `--config` (default `config/config.yaml`); `--output_dir` (default `output`) is the base for the
   HTML + volcanoes (`<output_dir>/interfaces/…`). The script self-locates repo root (`sys.path` +
-  `os.chdir`) so it works from any cwd.
+  `os.chdir`) so it works from any cwd. **`--output_dir <PUBLISH_URL>`** (2026-10-01) builds in
+  `PUBLISH_STAGE_DIR` and then publishes to S3 and the EC2 (see the 2026-10-01 publish log entry).
 - **`PARAMS(config_path)`** → `load_params()` reads the YAML and sets every key as an attribute
   (`params.DFRAW_PATH`, …); returns `self`.
 - **`DATA()`** — methods take `params`, store on `self`, return None: `load_chemical_lib_df` (serac_df:
-  CDD pull if `CHEMLIB_OVERWRITE` else cached csv; yes/no→1/0/NaN), `load_old_df` (df_raw + ms_score +
-  df_ms; MS), `load_new_df` (FBX MEASURE/MSSCORE/REPORT auto-discovered tranches, target2R2_df,
+  CDD pull if `CHEMLIB_OVERWRITE` else cached csv; yes/no→1/0/NaN), `download_cdd_pngs` (MAIN calls it
+  after the library load since 2026-10-01; no-op unless `UPDATE_PNGS`), `load_old_df` (df_raw + ms_score +
+  df_ms; MS; with `DFRAW_OVERWRITE` it first calls `build_old_df`, added 2026-10-01), `load_new_df` (FBX MEASURE/MSSCORE/REPORT auto-discovered tranches, target2R2_df,
   uc2compound), `get_contaminants_and_controls` (control_compounds, contaminants), `get_gene_research`
   (gene_research list).
 - **`OUTPUT()`** — methods take `(data, params)`: `combine_datasets` (§0.3: measure/mscore/report +
@@ -649,6 +654,7 @@ Decided direction (not yet built — RDS not functional; MVP starts with synthet
 - **Privacy:** keep the MVP on **synthetic** data (fake ids, `CCO`); no public exposure means real
   data would also be safe behind the VPN later, but gate real-data serving on M365 SSO for per-user
   *audit*. RDS + EC2 sit in Serac's VPC, encrypted, non-public. Full runbook: `docs/aws_docs.md`.
+  **Superseded 2026-10-01:** real Px interface files can now go on the box (see the 2026-10-01 decision entry).
 
 ## Local visual QA — headless chromium screenshots (2026-07-06)
 To visually check the rendered interface without a browser, screenshot it with the **cached Playwright
@@ -829,7 +835,7 @@ and a *merged* cluster means either a <55px (tight, good) gap or an overlap (loo
   kms:Decrypt grant is needed. `terraform validate` clean; not yet applied. Create the bucket alone without the
   staged EC2 replacement via `terraform apply -target=aws_s3_bucket.interface …` (+ the 4 bucket sub-resources
   + `aws_iam_role_policy.s3_interface_read`). And keep the box on the SYNTHETIC render until M365 SSO (hard
-  privacy rule). **Operational:** next `terraform init` needs `-backend-config=backend.hcl`
+  privacy rule; **superseded 2026-10-01**: real Px interface files can now go on the box). **Operational:** next `terraform init` needs `-backend-config=backend.hcl`
   (`-reconfigure` if migrating from the old hard-coded backend); applying H1 changes the SG in place (no EC2
   replace), but a full `apply` still triggers the pending boot/monitoring EC2 replacement — same "not before
   Step 6" caveat as above. The bootstrap bucket-policy apply is independent and safe anytime.
@@ -1053,7 +1059,8 @@ and a *merged* cluster means either a <55px (tight, good) gap or an overlap (loo
   in the `STAGE` dictionary. `/api/create` then reads `STAGE` and writes to Signals. The path is browser,
   then server, then Signals. **The code never removes an entry from `STAGE`**, so compound data stays in
   memory until the process stops. So the data rule applies, and the Px rule of synthetic data until
-  single sign-on applies here too. **This decision is still open.**
+  single sign-on applies here too. **This decision is still open.** (On 2026-10-01 the Px rule changed
+  for the Px box only. That change does not decide the Signals question.)
   **One risk to close:** `/api/create` sends `str(error)` to the browser. An `ElnError` message must
   never contain the API key. Check `signals_eln.py`.
   **No IT work is necessary.** The tunnel already routes all of `172.20.0.0/16`. Put the new subnet in
@@ -1084,6 +1091,7 @@ and a *merged* cluster means either a <55px (tight, good) gap or an overlap (loo
   without `--admin`; `set-password` refuses `--admin`; `--user` with `--admin` is a parser error. In a
   notebook: `connect(cfg, admin=True)`. Every connection uses `sslmode=verify-full` and `global-bundle.pem`.
   Tests: `tests/test_px_rds.py` (7, no AWS); `main(argv)` makes the CLI testable in-process.
+  **Removed 2026-10-01:** commit `853b993` deleted `python/px_rds.py`, so the user had its test file deleted too.
   **`pull` prints the rows** (user's edit, 2026-09-23). Thus the assistant must never run `pull` on real data.
   Pins added: `psycopg2-binary==2.9.12`, `boto3==1.43.94`. README has a new `PostgreSQL RDS (aws-rds/)` section.
   **Live results from WSL2 over the VPN** (WSL2 NAT mode, no `.wslconfig` change):
@@ -1274,3 +1282,222 @@ and a *merged* cluster means either a <55px (tight, good) gap or an overlap (loo
   renewal), Let's Encrypt with DNS-01 (free, one TXT at GoDaddy for each renewal), or a certificate from an
   IT internal CA. The recipe above works, so this decision is not urgent. Enable HSTS (item M3) only after
   a trusted certificate is live.
+
+- 2026-10-01 — **Decision: real Px interface files can go on the AWS box.** (STE.) The user decided this,
+  because the Basic-Auth password is now shared through 1Password. **Controls:** the box is reachable only
+  over the VPN (no public IP), nginx asks for the Basic-Auth password, and TLS encrypts the traffic.
+  **Accepted limit:** all users share one password, so the logs cannot show which person opened the
+  interface. M365 SSO stays the upgrade. S3 versioning is on, so the bucket keeps every old version of each
+  file. **Scope:** the Px interface only (the interface S3 bucket and the EC2). **No change to the assistant
+  rules:** the assistant never reads real data, and it tests only with synthetic builds. `CLAUDE.md` still
+  says that project data never leaves this machine; that text is not changed. This entry supersedes the
+  "synthetic only" rule in the 2026-07-01 privacy bullet, in the 2026-07-16 Step 6 entry, and in the README.
+
+- 2026-10-01 — **Fixed: the full test suite crashed with a segmentation fault.** (STE.)
+  **Symptom:** `python -m unittest discover -s tests` stopped in
+  `TestStemSharedYmax.test_volcano_base_svg_honors_override`, inside `ElementTree.fromstring`, which
+  `_volcano_base_svg` calls. The test passed when it ran alone.
+  **Cause:** the RDKit 2025.9.3 pip wheel has `rdkit.libs/libRDKitChemDraw`, which holds a private copy of
+  expat and exports 66 `XML_*` functions. If RDKit Draw (through its fontconfig) loads the conda `libexpat`
+  first, the loader binds some internal calls of `libexpat` to the RDKit copy (`LD_DEBUG=files` shows a
+  "relocation dependency"). A later parse by `pyexpat` then runs mixed code from two expat versions and
+  crashes. In the suite, `TestRender` draws thumbnails with RDKit before the first ElementTree parse in the
+  same process. No real build showed this crash. A probable reason: the volcano renders run in worker
+  processes.
+  **Fix:** `functions.py` imports `xml.etree.ElementTree` at the top (the local import in
+  `_volcano_base_svg` is gone), so `pyexpat` loads expat first, with correct bindings.
+  **Rule:** in each process, import `python.functions` (or `xml.etree.ElementTree`) before
+  `rdkit.Chem.Draw`. `from rdkit import Chem` alone is safe, because it does not load the Draw libraries.
+  The three notebooks obey this rule (cell 1: `rdkit.Chem`, then `python.functions`).
+  **Regression test:** `TestExpatImportOrder` runs the crash sequence in a child process (old code: exit 139;
+  new code: exit 0). The suite: 57 tests OK.
+
+- 2026-10-01 — **One-command publish to AWS: `--output_dir <PUBLISH_URL>`.** (STE.)
+  `python python/Px_interface.py --config config/config.yaml --output_dir "https://advantedge.seracbio.com/Px_interface/"`
+  builds the interface and pushes it to the box. **Flow** (`Px_interface.py`, next to `resolve_n_jobs`):
+  1. `resolve_output_dir`: a local path builds there, as before. The config `PUBLISH_URL` (last slash
+     optional) builds in `PUBLISH_STAGE_DIR`. Another URL stops the CLI.
+  2. `aws_publish_targets`, **before the build**: bucket = `<PUBLISH_PROJECT>-interface-<account>` (account
+     from STS), then `head_bucket`; EC2 = the one running instance with tag `Name=<project>-instance`; its
+     SSM ping must be Online. Thus git holds no bucket name and no instance ID.
+  3. `publish_interface`, after the build: `aws s3 sync <stage>/interfaces/ s3://<bucket>/<PUBLISH_S3_PREFIX>
+     --only-show-errors`, with `PUBLISH_EXCLUDE` (`*_2dtest.html`, `volcanoes_px/*.json`). Then one SSM
+     `AWS-RunShellScript`: `set -e`, a sync to `PUBLISH_WEBROOT` without `*.html`, a second sync (the HTML
+     last), then `chown -R root:nginx` and modes 644/755, as the boot script does. It polls
+     `get_command_invocation` until a final status.
+  The CLI prints counts only, because file names hold compound IDs. It needs AWS credentials, not the VPN.
+  **Config:** 7 `PUBLISH_*` keys at the end of `config/config.yaml`. **Tests:** `TestResolveOutputDir`,
+  `TestPublish` (mocked boto3 and subprocess, no network). Suite: 62 tests OK.
+  **Live test (synthetic only):** a scratch config with prefix `test_publish/interfaces/` and box folder
+  `/var/tmp/px_publish_test/`, so the live site did not change (the live HTML in S3 kept 2026-07-16).
+  First run: 18 s in total; 402 files (17 MB) in S3 after 6 s; the EC2 copy took 5 s and found 402 files.
+  S3 held none of the excluded files. Second run: the S3 step took 1 s, an unchanged SVG kept its S3 date,
+  and the HTML got a new one. So the sync sends only changed files.
+  **Also on 2026-10-01:** CLAUDE.md has the user's exception for this publish. The README has a "Publish the
+  interface" section and a new RDS section (prod + dev, 1Password passwords, the two test scripts).
+  **Facts found:** the `RDS_*` config keys had no reader (only the deleted `px_rds.py` read them), so the user
+  had them deleted on 2026-10-01. nginx on the box sent no `Cache-Control` and no `Expires` (fixed the same day: `no-cache`), so browsers
+  guess how long a saved copy stays valid (about 10% of the file age); after a publish, a browser can show
+  old files until a hard refresh. Both
+  `python/20261001_test_*_connect.py` scripts have the RDS endpoint names in their code, so these names are
+  in git. `20261001_test_prod_connect.py` prints the first 10 rows, so the assistant never runs it.
+
+- 2026-10-01 — **First real publish: the box is correct, but the build had no volcanoes or thumbnails.** (STE.)
+  The user emptied S3 `interfaces/` and the box folder, then ran the real publish. Checked by counts and md5:
+  S3 and the box hold the same 3 files as the local build (HTML, `_data.js`, `plotly.min.js`; md5 equal).
+  The real build has 11,328 genes, 5,348 compounds, 252 plates and 15 dates (2026-04-29 has 65 plates), the
+  same counts as the Dropbox build of 2026-08-18 (`DROPBOX_ML/interfaces/`).
+  **Symptom 1 — synthetic plates in the browser** (2026-05-20 with only `Pw02`): the browser used its saved
+  copy of the July synthetic `_data.js` (nginx sends no `Cache-Control`). A hard refresh (Ctrl+Shift+R) fixes it.
+  **Symptom 2 — no volcanoes and no thumbnails:** with `IFACE_OVERWRITE: false`, `build_interface` loads the
+  cached compound panels (`IFACE_DIR/panels.json`), and that path skips the volcano render and the PNG copy.
+  `PUBLISH_STAGE_DIR` (`output/`) was empty, so `output/interfaces/` got no `volcanoes_px/` and no
+  `srb_png/`. **Rule: a build with `IFACE_OVERWRITE: false` needs a stage folder that already holds these
+  files.** The page refers to 6,249 volcano SVGs (all present in the Dropbox `volcanoes_px/`, which has
+  6,454) and finds thumbnails as `srb_png/<compound>.png` (all 5,348 present in the Dropbox `srb_png/` and
+  in `SRB_PNG_DIR`). `__VOLCANO_BASE__` and `__THUMB_DIR__` are relative (`volcanoes_px`, `srb_png`).
+  **Next step chosen by the user:** a full rebuild with `IFACE_OVERWRITE: true` (also `CHEMLIB_OVERWRITE`,
+  `UPDATE_PNGS`, `DFRAW_OVERWRITE`), with no delete in S3 or on the box.
+
+- 2026-10-01 — **The CLI now uses `UPDATE_PNGS` and `DFRAW_OVERWRITE`.** (STE.) Before, only the notebook
+  called `download_cdd_pngs`, and no code in this repo acted on `DFRAW_OVERWRITE` (the notebook only printed
+  it). **Changes:** MAIN calls `data.download_cdd_pngs(params)` after `load_chemical_lib_df`, as notebook cell 3
+  does. New `DATA.build_old_df`, called by `load_old_df` when `DFRAW_OVERWRITE` is true: the MS_ML notebook
+  recipe (`MS_cytotox` cell 6) as code. It reads 3 old proteomics exports with `fn.load_proteomics_data`
+  (2026-04-29: RAW + CLEAN; 2026-05-20 and 2026-05-29: `_DB` + `_CDDVAULT` with `mode='cddvault'`; the
+  default `drop_plates` and `collections` equal the values in the notebook), concatenates them, builds MS
+  `[compound, ndown, origin, activity, date]`, and writes `DFRAW_PATH` + `MS_PATH`. **Why this recipe:** the
+  current files (2026-06-30) have no `date` column in `df_raw` (24,604,663 rows) and MS has 2,277 rows =
+  1,617 + 288 + 372, so `MS_cytotox` made them, not `MS_TargetML` (the newer cell also merges FBX, keeps the
+  latest batch per compound, and uses the deleted `load_fbx_tranche`). The CLI loads FBX in `load_new_df`.
+  Left out: the `data/MS/Px_genes.csv` side file (no reader here). **Checks:** on synthetic frames the port
+  gives the same MS and df_raw as the notebook code (`DataFrame.equals`, after a parquet round trip).
+  Tests `TestBuildOldDf` (2, mocked exports). Suite: 64 tests OK. All 6 source paths, the CDD token and the
+  downloader module exist. **Expected on real data,** if the sources did not change: `> rebuilt df_raw
+  (24604663, 11)` and `MS (2277, 5)`. The README lists the four flags and has a CAUTION to back up the two
+  files first.
+
+- 2026-10-01 — **Full rebuild + publish: 11,552 files (452 MB); S3 took 150 s, the EC2 copy 76 s.** (STE.)
+  **Finding 1 — the box kept the old HTML.** By default, `aws s3 sync` from S3 to a disk skips a file of the
+  same size unless the disk copy is newer (the AWS CLI documents this under `--exact-timestamps`). Each new
+  HTML has the same size, because only plotly's random div ID changes. So the box got the new `_data.js`
+  (new size) but kept the old HTML. **Fix:** `publish_interface` adds `--exact-timestamps` to both EC2
+  copies (test assertion in `TestPublish`); the manual README command has it too. A second run of the box
+  step then gave the same md5 on the box as locally for the HTML, `_data.js` and `plotly.min.js`.
+  **Finding 2 — 239 plates on 14 dates, not 252 on 15.** The `20260817` validation tranche (MEASURE +
+  REPORT; 13 plates `Pw###VM{WT,KO,BIND}`) was not in `FBX_DIR`. The user had moved it to
+  `AdvantEidge Platform/tmp/20260817` "because it was causing issues", and will move it back. Without it,
+  `Pw105VMKO`/`Pw105VMWT` take their 2026-06-01 date again, and the compounds go from 5,348 to 5,346. The
+  dates before 2026-06-01 have the same plates as before, so the `df_raw` rebuild kept them. **After the
+  move back:** rebuild with `IFACE_OVERWRITE: true`, because the `IFACE_DIR` checkpoint has no 20260817
+  data now. Expect 252 plates on 15 dates. The cause of the "issues" is not recorded yet.
+  **Finding 3 — the browser cache.** F5 kept the July synthetic `_data.js`. The browser saved it about 77
+  days after its last change, so its guessed lifetime is about a week. Ctrl+Shift+R fixes it.
+
+- 2026-10-01 — **Volcanoes do not render on the box: `X-Frame-Options: DENY` blocks them.** (STE.) After a hard
+  refresh, the genes and compounds show, but the volcanoes stay blank. **Not a sync problem:** the box has all
+  6,254 SVGs (the page needs 6,249, and none are missing) and 5,348 PNGs, and nginx serves SVG as
+  `image/svg+xml`. **Cause:** the page shows each volcano in `<object class="vobj" type="image/svg+xml">`
+  (`functions.py`), and browsers apply `X-Frame-Options` to `<object>`, `<embed>` and `<iframe>`. nginx sends
+  `add_header X-Frame-Options DENY always;` on every response (`/etc/nginx/conf.d/webapp.conf`, from
+  `aws-vpn/user_data.sh.tftpl` line 62), so the browser refuses each volcano, also from the same site.
+  Thumbnails (`<img>`) and `_data.js` (`<script>`) do not use this rule, so they work. Local tests did not show
+  it, because a local server sends no such header. **Fix:** `SAMEORIGIN` instead of `DENY` (other sites still cannot
+  frame the interface). **Status 2026-10-01:** the user applied it on the live box in an SSM session (`sed`,
+  `nginx -t`, reload); the live 401 response shows `X-Frame-Options: SAMEORIGIN`. The template now has
+  `SAMEORIGIN` and also `add_header Cache-Control "no-cache" always;` (revalidate each file, 304 if unchanged),
+  with `terraform validate` OK. On the live box, the `Cache-Control` line waits for the user: the permission
+  system blocks the assistant from remote shell writes, so the user runs that step. The next `terraform apply`
+  replaces the EC2, because `user_data` changed; the new box gets both headers and pulls the build from S3.
+  **Resolved 2026-10-01:** the user also added the `Cache-Control` line on the box (backup
+  `webapp.conf.bak.20261001`), and after a reload the volcanoes show. The live 401 response has all three
+  headers. The nginx access log confirms it: volcano requests 27 × 200, 8 × 206 and 18 × 304 (304 = the
+  browser revalidates under `no-cache`, and nginx answers "not changed"). The only error is a missing
+  `/favicon.ico`, which does no harm.
+
+- 2026-10-02 — **How to change the interface login (Basic-Auth user name and password).** (STE.)
+  **Path:** `~/.serac_aws` (one line `user:$2y$…`) → `ec2.tf` local `webapp_htpasswd_hash` (`trimspace(file(...))`)
+  → SSM parameter `/<project>/webapp/htpasswd` → the box copies it to `/etc/nginx/.htpasswd` **at boot only**.
+  **Steps:** back up the file; `htpasswd -nB <user> > ~/.serac_aws && chmod 600 ~/.serac_aws` (it asks for the
+  password, so the password does not go into the shell history; README and `aws-vpn/instructions.md` now use
+  `-nB`, not `-nbB '<password>'`); `terraform plan` + `apply`; update 1Password. **State on 2026-10-02:**
+  `terraform plan` (read-only) shows only `aws_instance.main must be replaced` (the header change in
+  `user_data.sh.tftpl`; `user_data_replace_on_change = true`), so the next apply also gives the new login at
+  once. The fixed IP (`172.20.2.10`) means destroy-then-create, so the site is down for a few minutes.
+  **CAUTION (applied only to the box before 2026-10-02 05:43 UTC) — do not restart `provision-webapp` on a box
+  whose script is older than the template.** The replacement of 2026-10-02 runs the current template, so a
+  restart is safe now; with `user_data_replace_on_change = true`, each applied template change gives a new box. To change only the password without a
+  replacement, copy the SSM parameter into `/etc/nginx/.htpasswd` by hand. Found: `~/.serac_aws` had mode 644,
+  not 600.
+
+- 2026-10-02 — **Real build restored, and the S3 exposure assessed.** (STE.) **Restored:** the user moved
+  `20260817` back and published again (build 2026-10-01 23:07): 252 plates on 15 dates (2026-08-17: 15),
+  5,348 compounds. S3 `interfaces/` = local build exactly: 11,605 files (3 + 6,254 SVG + 5,348 PNG).
+  **S3 facts (`aws-vpn/s3.tf`):** public access blocked, TLS only, `DenyOutsideAccount`, SSE-S3, versioning
+  on, **no lifecycle rule and no network condition** (the code comment still says the design was for synthetic
+  data). S3 is not in the VPC and not behind the VPN: only the EC2 traffic uses the S3 gateway endpoint, and the
+  publish uploads over the internet. So any principal of this account with S3 read rights can download the
+  data from any network, with no VPN and no Basic-Auth (2 IAM users have `AdministratorAccess` with long-lived
+  keys). Old versions: 1,055 (269 MB), which include the `_data.js` of the first real publish; delete markers:
+  1,039. PNGs: 5,348 (89 MB), the only structures. `_data.js` has no SMILES or InChI, but it has compound IDs
+  (821,066 `SRB-` strings) and per-compound values. **To delete the PNGs after the copy gives little:** the site
+  keeps working, but a new EC2 starts with no thumbnails, each publish sends all PNGs again, versioning keeps
+  hidden copies, and `_data.js` + SVGs stay. **Proposed (not applied):** a lifecycle rule for old versions; a
+  bucket policy that permits object reads only through the S3 gateway endpoint; the move to SSO + MFA.
+
+- 2026-10-02 — **Volcanoes blank again after the EC2 replacement: the browser cache, not the box.** (STE.) The
+  user applied the login change with a full `terraform apply`, so a new EC2 started at 05:43 UTC. That box is
+  correct: `provision-webapp` succeeded on attempt 1; 6,254 SVG + 5,348 PNG; nginx has `SAMEORIGIN` + `no-cache`
+  from the template; the new login works. Its access log shows volcano requests 1 × 200, 2 × 206, 24 × 304, so
+  the browser reused its saved copies. **Cause:** Chromium does not update `X-Frame-Options` on a saved copy
+  from a 304 answer (`kNonUpdatedHeaders` in `net/http/http_response_headers.cc` lists `x-frame-options`). So a
+  volcano that the browser saved while nginx sent `DENY` (2026-10-01) keeps `DENY`. **Fix (client):** delete
+  the browser's "Cached images and files"; an Incognito window confirms it. Only users who opened volcanoes
+  while `DENY` was live see this problem.
+  **S3 hardening (user approved items 1 + 2; APPLIED by the user, checked 2026-10-05: laptop `head-object` → Forbidden, laptop list works, box `head-object` works, lifecycle `expire-old-versions` Enabled, 7 days; `terraform plan` = no changes):** `s3.tf` bucket policy statement
+  `DenyObjectReadOutsideVpc` (deny `s3:GetObject`/`GetObjectVersion` unless `aws:SourceVpce` = the S3 gateway
+  endpoint), and `aws_s3_bucket_lifecycle_configuration.interface` (old versions expire after
+  `interface_noncurrent_days` = 7, a new variable; expired delete markers removed; incomplete multipart uploads
+  aborted after 1 day). `terraform plan`: 1 to add, 1 to change, 0 to destroy (no EC2 change). After the apply,
+  laptop reads of bucket files fail with `AccessDenied` (README updated); the publish still works, because it only
+  lists and writes. The plan warning "dynamodb_table is deprecated" comes from `backend.hcl`, not from this change.
+
+- 2026-10-05 — **Signals agent handoff: SSM and password hardening for Px, claims checked.** (STE.) Source:
+  `../Signals/wiki/wiki.md`, section "HANDOFF — to the Claude agent of `../Px_interface/`" (2026-10-05).
+  **Checked in this repo and in AWS (read-only):**
+  1. **Confirmed, the main risk:** `vpn-project-ec2-role` has `AmazonSSMManagedInstanceCore`, which allows
+     `ssm:GetParameter` on `*`. `iam simulate-principal-policy`: `GetParameter` is **allowed** on
+     `/signals-webapp/api-key`, `/signals-webapp/htpasswd` and any other parameter, through that managed policy.
+     So the Px box can read every SSM parameter of the account. (The user deleted `/signals-webapp/api-key`
+     on 2026-10-05 for this reason.) Fix: an explicit Deny with `NotResource` = the 3 Px parameters +
+     `/aws/service/*`, in `aws_iam_role_policy.ssm_tls`; no EC2 replacement.
+  2. Confirmed: `ec2.tf` takes `trimspace(file("~/.serac_aws"))` with no format check; the fallback default is
+     the `REPLACEME` placeholder. Fix: a `precondition` with a bcrypt-line regex (plan time only).
+  3. Confirmed: `htpasswd -B` uses cost 05 by default (dummy test). Traffic on the box: busiest second 5
+     requests, busiest 10 s 11 requests (467 log lines), 2 vCPU, so cost 10 is affordable. A long random
+     password matters more.
+  4. Confirmed: `fetch_param` writes `webapp.key` and `.htpasswd` with the default mode before `chmod`. Fix:
+     `install -m 0600 /dev/null "$2"` first. Changes `user_data`, so it replaces the EC2.
+  5. Confirmed: no `limit_req`. Optional; size it well above 5 requests per second per user.
+  6. Confirmed: `kms:Decrypt` names `alias/aws/ssm`, which KMS never matches. Fix: the key ARN.
+  **Batch A (user approved 2026-10-05): steps 1, 2, 6 — code done, apply by the user.** `ec2.tf`: Deny statement
+  in `aws_iam_role_policy.ssm_tls` (`NotResource` = the 3 Px parameter ARNs + `arn:aws:ssm:<region>::parameter/aws/
+  service/*`; actions GetParameter(s), GetParametersByPath, GetParameterHistory, DescribeParameters);
+  `kms:Decrypt` now on `data.aws_kms_alias.ssm.target_key_arn`; a `precondition` on `aws_ssm_parameter.htpasswd`
+  (each line must match `^[^:\s]+:\$2[aby]\$[0-9]{2}\$[./A-Za-z0-9]{53}$`). **Checks:** offline test with a
+  scratch `terraform_data` config: 1 line, 2 lines, cost 05/10 and trailing blank lines pass; a plain password,
+  the `REPLACEME` placeholder and an empty file are refused, and a refused plan prints no input value.
+  `terraform plan`: 0 to add, 1 to change (the role policy), 0 to destroy; the check passes on the real file.
+  IAM simulation with the new Deny added (`PolicyInputList`), before the apply: the 3 Px parameters and
+  `/aws/service/*` allowed; `/signals-webapp/api-key`, any other parameter and `DescribeParameters` explicitDeny;
+  `ssm:UpdateInstanceInformation`, `ssmmessages:CreateControlChannel`, `ec2messages:GetMessages` allowed.
+  **After the apply:** run the same simulation without `PolicyInputList`; then tell the Signals agent (user),
+  so it can make `/signals-webapp/api-key` again and close its cross-stack note.
+  **Batch B — TO DO, not started (user decision 2026-10-05: "at some point"):** steps 3, 4, 5 (+ optional 6), in
+  one apply at a quiet time, because steps 4 and 5 change `user_data` and so REPLACE the EC2 (fixed IP, a few
+  minutes down; the new box pulls the build from S3). (3) the user makes a new login at cost 10 with a long
+  random password before the apply: `(umask 077; htpasswd -nBC 10 <user> | head -1 > ~/.serac_aws)`; then
+  switch the README commands from `-nB` to `-nBC 10`. (4) `fetch_param` creates its file at 0600 first
+  (`install -m 0600 /dev/null "$2" || return 1`). (5) optional `limit_req` (size it well above the measured peak
+  of 5 requests per second, or real page loads get HTTP 503). (6) optional one htpasswd line per person (the
+  precondition accepts several lines). Check after: `healthcheck.sh`, the page and the volcanoes.

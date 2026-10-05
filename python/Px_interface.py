@@ -6,7 +6,7 @@ sys.path.insert(0, _REPO_ROOT)
 os.chdir(_REPO_ROOT)
 sys.path.insert(0, os.path.expanduser('~/CDD_Vault_API/python'))  # CDD Vault API (get_df)
 
-import re, gc, ctypes, json, time, importlib, argparse
+import re, gc, ctypes, json, time, importlib, argparse, fnmatch, subprocess
 import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
@@ -16,6 +16,7 @@ from datetime import date
 from rdkit import Chem
 import yaml
 import joblib
+import boto3
 from tqdm import tqdm
 from types import SimpleNamespace
 tqdm.pandas()
@@ -90,6 +91,87 @@ def resolve_plate_defaults(plate2date, show_plate=None):
     return sorted(p for p, d in plate2date.items() if d in dates), sorted(dates)
 
 
+def resolve_output_dir(output_dir, params):
+    """
+    CLI --output_dir -> (local build dir, publish flag). A local path is the build dir, as before.
+    The URL in config PUBLISH_URL builds in PUBLISH_STAGE_DIR, and then the CLI publishes to AWS.
+    param str output_dir: CLI --output_dir (a local path or a URL)
+    param class params: PARAMS instance (PUBLISH_URL, PUBLISH_STAGE_DIR)
+    return tuple: (local build dir, True if the CLI must publish)
+    """
+    if not re.match(r'https?://', output_dir):
+        return output_dir, False
+    if output_dir.rstrip('/') != str(getattr(params, 'PUBLISH_URL', '')).rstrip('/'):
+        sys.exit(f'--output_dir {output_dir} is a URL, but it is not PUBLISH_URL in the config')
+    return params.PUBLISH_STAGE_DIR, True
+
+
+def aws_publish_targets(params):
+    """
+    Find the AWS targets of a publish before the long build, and stop if one is missing. The bucket
+    name holds the account ID and the EC2 ID changes at each replacement, so git holds neither.
+    param class params: PARAMS instance (PUBLISH_PROJECT, PUBLISH_REGION)
+    return tuple: (boto3 session, bucket name, EC2 instance ID)
+    """
+    session = boto3.Session(region_name=params.PUBLISH_REGION)
+    bucket = f"{params.PUBLISH_PROJECT}-interface-{session.client('sts').get_caller_identity()['Account']}"
+    session.client('s3').head_bucket(Bucket=bucket)
+    res = session.client('ec2').describe_instances(Filters=[
+        {'Name': 'tag:Name', 'Values': [f'{params.PUBLISH_PROJECT}-instance']},
+        {'Name': 'instance-state-name', 'Values': ['running']}])
+    ids = [i['InstanceId'] for r in res['Reservations'] for i in r['Instances']]
+    if len(ids) != 1:
+        sys.exit(f'publish: found {len(ids)} running {params.PUBLISH_PROJECT}-instance, expected 1')
+    info = session.client('ssm').describe_instance_information(
+        Filters=[{'Key': 'InstanceIds', 'Values': ids}])['InstanceInformationList']
+    if not info or info[0]['PingStatus'] != 'Online':
+        sys.exit(f'publish: the SSM agent of {ids[0]} is not Online')
+    print(f'> publish target: s3://{bucket}/{params.PUBLISH_S3_PREFIX} -> EC2 {ids[0]} (SSM Online)')
+    return session, bucket, ids[0]
+
+
+def publish_interface(local_dir, params, targets):
+    """
+    Push <local_dir>/interfaces/ to S3, then make the EC2 copy it into the nginx folder. The EC2
+    copies the HTML last, so a page never loads before its data. Prints counts only, because the
+    file names hold compound IDs.
+    param str local_dir: build dir (PUBLISH_STAGE_DIR) that holds interfaces/
+    param class params: PARAMS instance (PUBLISH_* keys)
+    param tuple targets: (boto3 session, bucket name, EC2 instance ID) from aws_publish_targets
+    return None:
+    """
+    session, bucket, iid = targets
+    src, s3_uri, web = os.path.join(local_dir, 'interfaces'), f's3://{bucket}/{params.PUBLISH_S3_PREFIX}', params.PUBLISH_WEBROOT
+    excl = list(getattr(params, 'PUBLISH_EXCLUDE', []))
+    files = [os.path.relpath(os.path.join(d, f), src) for d, _, fs in os.walk(src) for f in fs]
+    files = [f for f in files if not any(fnmatch.fnmatch(f, p) for p in excl)]
+    t0 = time.time()
+    cmd = ['aws', 's3', 'sync', src, s3_uri, '--region', params.PUBLISH_REGION, '--only-show-errors']
+    if subprocess.run(cmd + [a for p in excl for a in ('--exclude', p)]).returncode:
+        sys.exit('publish: aws s3 sync to S3 failed (see the errors above)')
+    print(f'> publish: {len(files)} files ({sum(os.path.getsize(os.path.join(src, f)) for f in files) / 1e6:.0f} MB) '
+          f'in S3 after {time.time() - t0:.0f}s')
+    # --exact-timestamps: else an S3->disk sync skips a same-size file (each new HTML) unless the disk copy is newer
+    sync = f'aws s3 sync {s3_uri} {web} --region {params.PUBLISH_REGION} --only-show-errors --exact-timestamps'
+    ssm = session.client('ssm')
+    cid = ssm.send_command(InstanceIds=[iid], DocumentName='AWS-RunShellScript', Parameters={'commands': [
+        'set -e', f"{sync} --exclude '*.html'", sync, f'chown -R root:nginx {web}',
+        f'find {web} -type f -exec chmod 644 {{}} +', f'find {web} -type d -exec chmod 755 {{}} +',
+        f'echo files=$(find {web} -type f | wc -l)']})['Command']['CommandId']
+    t0 = time.time()
+    while True:   # SSM gives a final status: Success, Failed, Cancelled or TimedOut
+        time.sleep(5)
+        try:
+            inv = ssm.get_command_invocation(CommandId=cid, InstanceId=iid)
+        except ssm.exceptions.InvocationDoesNotExist:
+            continue
+        if inv['Status'] not in ('Pending', 'InProgress', 'Delayed'):
+            break
+    if inv['Status'] != 'Success':
+        sys.exit(f"publish: the EC2 sync ended {inv['Status']}: {inv['StandardErrorContent'][-500:]}")
+    print(f"> publish: EC2 synced after {time.time() - t0:.0f}s ({inv['StandardOutputContent'].strip()}) -> {params.PUBLISH_URL}")
+
+
 class PARAMS():
     def __init__(self, config_path):
         self.config_path = config_path
@@ -156,13 +238,42 @@ class DATA():
             size=600, workers=12, delay=0.0, prefix='SRB-', strip_prefix=False)
         print(f'> CDD PNGs: {n_ok:,} new, {n_skip:,} already present, {n_err:,} errors')
 
+    def build_old_df(self, params):
+        """
+        Rebuild df_raw and MS from the three old proteomics exports (2026-04-29, 2026-05-20, 2026-05-29),
+        then write them to DFRAW_PATH and MS_PATH. This is the MS_ML notebook cell (MS_cytotox) as code.
+        The FBX tranches are not in these files: load_new_df loads them, and combine_datasets merges them.
+        param class params: PARAMS instance (RAW/CLEAN_PROTEOMICS_PATH, PX_20260520/29_DB + _CDDVAULT, DFRAW_PATH, MS_PATH)
+        return None:
+        """
+        parts = {'20260429': fn.load_proteomics_data(params.RAW_PROTEOMICS_PATH, params.CLEAN_PROTEOMICS_PATH),
+                 '20260520': fn.load_proteomics_data(params.PX_20260520_DB, params.PX_20260520_CDDVAULT, mode='cddvault'),
+                 '20260529': fn.load_proteomics_data(params.PX_20260529_DB, params.PX_20260529_CDDVAULT, mode='cddvault')}
+        # the 20260529 Vault export has short column names, and only its batch ID holds the molecule name
+        ms29 = parts['20260529'][1].rename(columns={'Nr. Down': 'MSData - Proteomics activities: Nr. Down',
+                                                    'Cmpd Activity': 'MSData - Proteomics activities: Cmpd Activity'})
+        ids = ms29['Molecule-Batch ID'].str.split('-', n=2, expand=True)
+        ms29['Molecule Name'] = ids[0] + '-' + ids[1]
+        parts['20260529'] = (parts['20260529'][0], ms29)
+        cols = {'Molecule Name': 'compound', 'MSData - Proteomics activities: Nr. Down': 'ndown', 'origin': 'origin',
+                'MSData - Proteomics activities: Cmpd Activity': 'activity'}
+        MS = pd.concat([m.assign(origin=f'MS{k}') for k, (_, m) in parts.items()], ignore_index=True)[list(cols)].rename(columns=cols)
+        MS['date'] = pd.to_datetime(MS['origin'].str.replace('MS', ''))
+        df_raw = pd.concat([d for d, _ in parts.values()], ignore_index=True)
+        MS.to_parquet(params.MS_PATH, index=False)
+        df_raw.to_parquet(params.DFRAW_PATH, index=False)
+        print(f'> rebuilt df_raw {df_raw.shape} -> DFRAW_PATH | MS {MS.shape} -> MS_PATH')
+
     def load_old_df(self, params):
         """
         -Extract df_raw which contains the logfc and p-value associated with each gene and compound
         -Extract MS which contain compound level info e.g. activity -> single...
+        -With DFRAW_OVERWRITE, first rebuild both files from the proteomics exports (build_old_df)
         param class params: the params class
-        return None: 
+        return None:
         """
+        if getattr(params, 'DFRAW_OVERWRITE', False):
+            self.build_old_df(params)
         # load df-raw and process
         self.df_raw = pd.read_parquet(params.DFRAW_PATH)
         self.df_raw = self.df_raw.dropna()
@@ -778,7 +889,9 @@ if __name__ == "__main__":
     
     ap = argparse.ArgumentParser(description="Build/update the Px 3D interface.")
     ap.add_argument('--config', default='config/config.yaml', help="path to the YAML config")
-    ap.add_argument('--output_dir', default='output', help="base dir for the HTML + volcanoes (interfaces/ is created under it)")
+    ap.add_argument('--output_dir', default='output',
+                    help="base dir for the HTML + volcanoes (interfaces/ is created under it), or the config "
+                         "PUBLISH_URL: build in PUBLISH_STAGE_DIR, then publish to AWS (S3, then the EC2)")
     ap.add_argument('--show_plate', default=None,
                     help='comma-separated YYYYMMDD dates to default-tick in the Plates filter, '
                          'overriding config SHOW_PLATE; e.g. "20260812, 20260813". Empty -> latest date only.')
@@ -789,10 +902,13 @@ if __name__ == "__main__":
     params.load_params()
     if args.show_plate is not None:   # CLI overrides config SHOW_PLATE
         params.SHOW_PLATE = [s.strip() for s in args.show_plate.split(',') if s.strip()]
+    local_dir, publish = resolve_output_dir(args.output_dir, params)
+    targets = aws_publish_targets(params) if publish else None   # check AWS access before the long build
 
     ## data:
     data = DATA()
     data.load_chemical_lib_df(params)
+    data.download_cdd_pngs(params)   # refresh SRB_PNG_DIR from CDD when UPDATE_PNGS=true (else no-op)
     data.load_old_df(params)
     data.load_new_df(params)
     data.get_contaminants_and_controls(params)
@@ -803,4 +919,6 @@ if __name__ == "__main__":
     output.combine_datasets(data, params)
     output.get_de_validated(data, params)
     output.get_iface(data, params)
-    output.build_interface(data, params, args.output_dir)
+    output.build_interface(data, params, local_dir)
+    if publish:
+        publish_interface(local_dir, params, targets)

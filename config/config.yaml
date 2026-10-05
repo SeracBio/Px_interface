@@ -72,7 +72,7 @@ VALIDATION_PLATE_SUFFIXES:         # plate-name suffixes forming a validation st
 - BIND
 FBXO31_INDEPENDENT_TICKED: false   # false -> the "FBXO31 independent" target box starts UNticked (those genes
                                    # hidden on load, still toggle-able); true -> both validation boxes ticked
-VALIDATED_TARGET_FILE: /home/gtamo/Px_interface/data/validated.txt            # optional path to a comma/whitespace-delimited gene list that REPLACES the
+VALIDATED_TARGET_FILE: # /home/gtamo/Px_interface/data/validated.txt            # optional path to a comma/whitespace-delimited gene list that REPLACES the
                                    # CDD-derived validated (FBXO31-dependent) targets, e.g. data/validated.txt.
                                    # Empty -> keep the list derived from CDD as before.
 GENE_SIZE_BUCKETS: [6, 8, 10, 12, 15, 20]   # 3D dot px by #compounds the gene is significant in: 1,2,3,4,5,>5
@@ -88,8 +88,8 @@ GENE_RESEARCH: /mnt/c/Users/gtamo/Desktop/GT/SERAC/disease_association/20260623_
 
 CHEMLIB_OVERWRITE: false
 UPDATE_PNGS: false               # true -> fetch new/missing PNGs before building (resume-safe: skips existing)
-DFRAW_OVERWRITE: false
-IFACE_OVERWRITE: false           # true -> rebuild + save the interface inputs; false -> load them from IFACE_DIR + free RAM
+DFRAW_OVERWRITE: false           # true -> rebuild df_raw + MS from the 3 old proteomics exports, overwrite DFRAW_PATH + MS_PATH
+IFACE_OVERWRITE: true           # true -> rebuild + save the interface inputs; false -> load them from IFACE_DIR + free RAM
 
 
 # Parallelism: workers for the volcano render (joblib base render + threaded SVG writes).
@@ -111,15 +111,13 @@ FREE_UPSTREAM: true
 EXPORT_COMBINED: false
 PX_PARQUET_DIR: /mnt/c/Users/gtamo/Serac Biosciences Dropbox/Serac_team/4_Data_Sciences/15_ML/Daniela/Px_parquet_from_GT
 
-# Px RDS (Terraform stack aws-rds/), read by python/px_rds.py. Every command needs a login: RDS_USER (or --user) asks
-# for that user's password; --admin uses the master password from AWS. With RDS_HOST set, a colleague needs no AWS access.
-RDS_HOST: ""                         # endpoint name, from `terraform -chdir=aws-rds output -raw db_address`; empty = AWS lookup
-RDS_USER: ""                         # personal login (asks for its password); empty = pass --user or --admin on each command
-RDS_INSTANCE_ID: px-rds              # RDS instance identifier = project_name in aws-rds/variables.tf
-RDS_REGION: eu-north-1               # region of the VPN VPC and the RDS instance
-RDS_DB_NAME: px                      # database name = db_name in aws-rds/variables.tf
-RDS_SSLROOTCERT: global-bundle.pem   # Amazon RDS CA bundle (repo root) for sslmode=verify-full
-RDS_PULL_DIR: data/rds               # default output folder of `pull` (gitignored under data/)
-RDS_DEMO_TABLE: px_demo              # synthetic table that `create-demo` replaces
-RDS_DEMO_ROWS: 1000                  # rows in the synthetic table
-RDS_DEMO_SEED: 0                     # random seed of the synthetic table
+# Publish to AWS (the Px interface only; user decision 2026-10-01). `--output_dir <PUBLISH_URL>` builds in
+# PUBLISH_STAGE_DIR, pushes its interfaces/ folder to the S3 bucket, then makes the EC2 copy it from S3.
+# The CLI finds the bucket (from the AWS account) and the EC2 (by its Name tag) at run time, so git holds no IDs.
+PUBLISH_URL: https://advantedge.seracbio.com/Px_interface/   # this --output_dir value starts a publish
+PUBLISH_STAGE_DIR: output             # local build folder; keep it the same, so the volcano cache stays
+PUBLISH_PROJECT: vpn-project          # project_name in aws-vpn/: bucket <project>-interface-<account>, EC2 <project>-instance
+PUBLISH_REGION: eu-north-1            # region of the VPN VPC, the bucket and the EC2
+PUBLISH_S3_PREFIX: interfaces/        # must match the boot pull in aws-vpn/user_data.sh.tftpl
+PUBLISH_WEBROOT: /var/www/webapp/Px_interface/   # nginx folder on the EC2 (location /Px_interface/)
+PUBLISH_EXCLUDE: ['*_2dtest.html', 'volcanoes_px/*.json']   # build-only files that the page does not use

@@ -40,9 +40,22 @@ python python/Px_interface.py
 | Flag | Default | Purpose |
 |---|---|---|
 | `--config` | `config/config.yaml` | path to the YAML config |
-| `--output_dir` | `output` | base dir for the HTML + volcanoes (`interfaces/` is created under it) |
+| `--output_dir` | `output` | base dir for the HTML + volcanoes (`interfaces/` is created under it), or the config `PUBLISH_URL` to build and publish to AWS (see "Publish the interface") |
+| `--show_plate` | config `SHOW_PLATE` | dates (`YYYYMMDD`, comma-separated) whose plates start ticked |
 
-Whether it rebuilds or just loads is set by `IFACE_OVERWRITE` in the config (see below), same as the notebook.
+Four config flags set what the CLI rebuilds (the notebook uses the same flags):
+
+- **`CHEMLIB_OVERWRITE`** — get the compound library from CDD Vault again; `false` loads the saved CSV.
+- **`UPDATE_PNGS`** — get new or missing compound PNGs from CDD Vault into `SRB_PNG_DIR`. It does not
+  download a PNG again if the file already exists.
+- **`DFRAW_OVERWRITE`** — rebuild `df_raw` and `MS` from the three old proteomics exports (2026-04-29,
+  2026-05-20, 2026-05-29), and write them over `DFRAW_PATH` and `MS_PATH`. The FBX tranches are not in
+  these files; the build loads them separately.
+- **`IFACE_OVERWRITE`** — rebuild the render inputs, the compound panels, the volcanoes and the thumbnails
+  (see below).
+
+> **CAUTION:** `DFRAW_OVERWRITE: true` replaces the files at `DFRAW_PATH` and `MS_PATH`. Make a copy of
+> them before the first run.
 
 To write the interface into the Dropbox ML folder (quote the path — it contains spaces):
 
@@ -63,9 +76,10 @@ Open `vignettes/MS_Interface.ipynb` and run top to bottom.
 
 - **`IFACE_OVERWRITE = True`** — rebuild the render inputs (`iface_df`, `compounds_df`,
   `meas`, `plate2date`) from the source tables and the FBX tranches, then save them to
-  `IFACE_DIR` and render. Referenced thumbnail/volcano files must exist on disk.
-- **`IFACE_OVERWRITE = False`** — load the saved inputs and render only (near-instant;
-  skips the heavy combine cells).
+  `IFACE_DIR` and render. The build writes the volcanoes and the thumbnails next to the HTML.
+- **`IFACE_OVERWRITE = False`** — load the saved inputs and the saved compound panels, and render
+  only (fast; skips the heavy combine cells). This path does not write volcanoes or thumbnails, so
+  the output folder must already hold `interfaces/volcanoes_px/` and `interfaces/srb_png/`.
 
 All tunable parameters and data paths live in [`config/config.yaml`](config/config.yaml).
 Output paths are switched by the `interface_output` knob (`GTLOCAL` vs `DROPBOX_ML`).
@@ -134,7 +148,33 @@ aws ssm get-command-invocation --region eu-north-1 \
 Useful on-box diagnostics: `systemctl status provision-webapp`,
 `journalctl -u provision-webapp`, `ls /var/www/webapp/Px_interface/`.
 
+### Publish the interface (one command)
+
+Build the interface and push it to the box in one run. Real Px interface data can go on this box
+(see the note under "Browse the interface").
+
+```bash
+python python/Px_interface.py --config config/config.yaml \
+  --output_dir "https://advantedge.seracbio.com/Px_interface/"
+```
+
+When `--output_dir` is the config `PUBLISH_URL`, the CLI:
+
+1. Finds the bucket (from the AWS account) and the EC2 (by its `Name` tag), and checks that SSM is
+   Online. It does this before the build, so a problem stops it in seconds.
+2. Builds in `PUBLISH_STAGE_DIR` (default `output`), as a normal build does.
+3. Runs `aws s3 sync` from `interfaces/` to `s3://<bucket>/interfaces/`. The sync sends only the
+   changed files, and it skips the build-only files in `PUBLISH_EXCLUDE`.
+4. Sends one SSM command. The EC2 copies the files into `/var/www/webapp/Px_interface/`, the HTML
+   last, and then sets the nginx owner and the file modes.
+
+The CLI prints counts only, because the file names hold compound IDs. It needs AWS credentials that
+can write to the bucket and send SSM commands. It does not need the VPN. The `PUBLISH_*` keys in
+`config/config.yaml` hold the settings.
+
 ### Move files to the instance
+
+The publish command above does these two steps for the interface. Use them by hand for other files.
 
 SSM Session Manager has no native file transfer. Stage through the **interface S3 bucket** —
 the instance role already has read access, and traffic stays on the S3 gateway endpoint.
@@ -147,16 +187,23 @@ IID=$(terraform -chdir=aws-vpn output -raw ec2_instance_id)
 aws s3 sync tmp/out/interfaces/ "s3://$BUCKET/interfaces/" --region eu-north-1
 
 # 2. S3 -> box (the boot script does the same sync, so a reboot also works)
+#    --exact-timestamps: else the sync skips a changed file of the same size, for example a new HTML
 aws ssm send-command --region eu-north-1 --instance-ids "$IID" \
   --document-name AWS-RunShellScript \
-  --parameters "commands=[\"aws s3 sync s3://$BUCKET/interfaces/ /var/www/webapp/Px_interface/ --region eu-north-1\",\"chown -R root:nginx /var/www/webapp\"]"
+  --parameters "commands=[\"aws s3 sync s3://$BUCKET/interfaces/ /var/www/webapp/Px_interface/ --region eu-north-1 --exact-timestamps\",\"chown -R root:nginx /var/www/webapp\"]"
 ```
 
 For a **small** file (< ~100 KB) and no S3 round-trip, base64 it into a `send-command`
 instead. Anything larger must go through S3.
 
-To pull a file **off** the box, write it to the bucket from the instance
-(`aws s3 cp /path/file s3://$BUCKET/…`) and `aws s3 cp` it down locally.
+**Bucket rules** (`aws-vpn/s3.tf`): only the EC2 can read files from the bucket, because the bucket
+policy denies `s3:GetObject` unless the request comes through the VPC's S3 gateway endpoint. From your
+laptop you can list and write, but `aws s3 cp s3://…`, `head-object` and console downloads fail with
+`AccessDenied`. S3 deletes an old (replaced or deleted) file version after `interface_noncurrent_days`
+(7) days.
+
+To pull a file **off** the box, use the base64 method above in reverse: print the file as base64 in a
+`send-command`, and decode the output locally. This works only for a small file.
 
 ### Check the stack is healthy
 
@@ -182,9 +229,18 @@ Two files must exist locally before an apply (both gitignored, neither is in the
   `backend.hcl.example` and fill from `terraform -chdir=aws-vpn/bootstrap output`.
   Without it, `init` fails with "file could not be read".
 - **`~/.serac_aws`** — one line, `serac_user:$2y$…`, created with
-  `htpasswd -nbB serac_user 'password' > ~/.serac_aws && chmod 600 ~/.serac_aws` (password from
-  1Password). Without it the placeholder hash is baked in and nginx returns **HTTP 500** after
-  the password prompt.
+  `htpasswd -nB serac_user > ~/.serac_aws && chmod 600 ~/.serac_aws` (it asks for the password from
+  1Password two times, so the password does not go into the shell history). Without it the placeholder
+  hash is baked in and nginx returns **HTTP 500** after the password prompt.
+
+**Change the interface login** (user name and password):
+
+1. `cp -p ~/.serac_aws ~/.serac_aws.bak`, then `htpasswd -nB <user> > ~/.serac_aws && chmod 600 ~/.serac_aws`.
+2. `terraform plan`, then `terraform apply`. The apply writes the new line to the SSM parameter
+   `/<project>/webapp/htpasswd`.
+3. The box reads that parameter only at boot. An apply that also replaces the EC2 gives the new login
+   at once. Else, copy the parameter into `/etc/nginx/.htpasswd` on the box by hand (SSM session).
+4. Put the new password in 1Password, and tell the users.
 
 > **An `apply` that touches `user_data` or the private IP REPLACES the EC2.** The replacement
 > re-provisions itself from S3 at boot, so upload the interface to S3 *before* applying.
@@ -214,18 +270,31 @@ Requires the VPN connected, then Basic Auth (`serac_user` + the shared password)
 self-signed cert warning is expected; install the CA from
 `terraform -chdir=aws-vpn output -raw tls_cert_pem` to silence it.
 
-> **Only synthetic data goes on this box.** Auth is a single shared password with no
-> per-user audit trail — real chemistry data is gated on M365 SSO landing first. See
-> [CLAUDE.md](CLAUDE.md).
+> **You can put real Px interface files on this box** (decision of 2026-10-01). Three controls
+> protect them: the box is reachable only over the VPN (no public IP), nginx asks for the
+> Basic-Auth password (shared through 1Password), and TLS encrypts the traffic. All users share
+> one password, so the logs cannot show which person opened the interface. M365 SSO stays the
+> upgrade for that. This rule applies to the Px interface only. The assistant still never reads
+> real data (see [CLAUDE.md](CLAUDE.md)).
 
 ### PostgreSQL RDS (`aws-rds/`)
 
-A private PostgreSQL 18 instance (`px-rds`, `db.t4g.micro`, 20 GB gp3, encrypted) sits in two
-new subnets of the same VPC (`172.20.6.0/24`, `172.20.7.0/24`). It is a **separate Terraform
-stack**: it reads the VPC and the VPN gateway but does not manage them, so a destroy of
-`aws-rds/` cannot touch `aws-vpn/`. Port 5432 accepts only the office LAN and the FortiClient
-pool. RDS keeps the master password in Secrets Manager (never in Terraform state), and the
-server refuses connections without TLS.
+Two private PostgreSQL 18.3 databases run in the VPN VPC. They share two subnets (`172.20.6.0/24`,
+`172.20.7.0/24`), one security group and one parameter group (`rds.force_ssl=1`). A change to one of
+those three changes both databases.
+
+| | `px-seracbio-prod` | `px-seracbio-dev` |
+|---|---|---|
+| Content | a copy of `seracbio-prod` (real data), restored from a snapshot (`restore.tf`) | empty, made new (`dev.tf`) |
+| Class and storage | `db.m7g.large`, 600 GB gp3, Multi-AZ | `db.t4g.micro`, 20 GB gp3, single-AZ |
+| Deletion protection | on | off, because dev is disposable |
+| Login | user `seracbio`, database `postgres`, port 5432 | the same |
+| Password file | `~/.px_db_password` | `~/.px_db_dev_password` |
+| Test script | `python/20261001_test_prod_connect.py` | `python/20261001_test_dev_connect.py` |
+
+`aws-rds/` is a **separate Terraform stack**. It reads the VPC and the VPN gateway, but it does not
+manage them, so a destroy of `aws-rds/` cannot touch `aws-vpn/`. Port 5432 accepts only the office LAN
+and the FortiClient pool. The server refuses connections without TLS.
 
 ```bash
 cd aws-rds
@@ -233,60 +302,43 @@ cp ../aws-vpn/backend.hcl .                  # same bucket + lock table, own sta
 terraform init -backend-config=backend.hcl
 terraform plan -out=tfplan                   # read the plan first
 terraform apply tfplan
+terraform output                             # restored_endpoint, dev_endpoint, ...
 ```
 
-Use the CLI in the `ML` env, with the VPN connected. **Every command needs a login**, given after
-the command name (the `RDS_*` keys in `config/config.yaml` hold the defaults):
+**Passwords.** Each database has one fixed password, shared through 1Password. RDS does not rotate it.
+The password file holds one line, `user:password`. Terraform and the test scripts read it. Use printable
+ASCII, 8 to 128 characters, and never `/`, `@`, `"` or a space.
 
-- **Personal — `--user NAME`** (or `RDS_USER`): the CLI asks for that user's password. With
-  `--host` (or `RDS_HOST`) too, it needs no AWS access.
-- **Master — `--admin`:** the CLI reads the endpoint and the `px_admin` password from AWS at run
-  time (Secrets Manager), so your AWS keys must allow it. `create-demo` and `create-user` need it.
+> **CAUTION — the passwords are in the Terraform state.** Anyone who can read the state bucket can read
+> them. Keep that access narrow.
 
-Without a login a command stops with a message: the CLI never falls back to the master login.
+**Connect.** You need the VPN, `psycopg2-binary`, `global-bundle.pem` (repo root) and the password.
+You do not need an AWS account, because the test scripts make no AWS call.
 
 ```bash
-python python/px_rds.py check --admin                # endpoint, DNS, TCP 5432, TLS + SQL, one line each
-python python/px_rds.py pull px_demo --user <name>   # -> data/rds/px_demo.parquet (or --out file.csv)
-python python/px_rds.py set-password --user <name>   # change your own password
-python python/px_rds.py create-demo --admin          # replace px_demo with synthetic rows, compare
-python python/px_rds.py create-user <name> --admin   # new login (hidden prompt); again = new password
+conda activate ML                                     # --prompt fails under `conda run` (stdin is closed)
+python python/20261001_test_dev_connect.py            # reads ~/.px_db_dev_password
+python python/20261001_test_dev_connect.py --prompt   # type the password instead
+python python/20261001_test_prod_connect.py --prompt  # runs a query and prints the first 10 rows; --out file.csv
 ```
 
-Every connection uses `sslmode=verify-full` against `global-bundle.pem`. If `check` stops at
-`tcp`, the FortiGate policy does not permit 5432 to `172.20.6.0/23`.
+Each connection uses `sslmode=verify-full` with `global-bundle.pem`. Client settings (DBeaver, pgAdmin,
+psql): host = the endpoint from `terraform -chdir=aws-rds output`, port 5432, database `postgres`, SSL
+mode `verify-full`, root certificate `global-bundle.pem` (from a Windows client:
+`\\wsl$\<distro>\<repo path>\global-bundle.pem`).
 
-**Personal logins (colleagues, DBeaver, pgAdmin, psql).** RDS rotates the master password every
-7 days, so do not save it in a client, and do not share it. Give each person a login:
-
-1. Admin: `create-user <name> --admin` with a temporary password. Send it, and the endpoint name
-   from `terraform -chdir=aws-rds output -raw db_address`, through 1Password.
-2. Colleague: clone the repo, connect the VPN, and install `psycopg2-binary pandas pyarrow pyyaml
-   boto3` (or use the `ML` env). Set `RDS_HOST` and `RDS_USER` in the local `config/config.yaml`,
-   or pass `--host` and `--user` on each command. No AWS account is needed.
-3. Colleague: `python python/px_rds.py set-password` asks for the temporary password, then for the
-   new one twice.
-
-A login can read and write every table and create tables in `public`, but it cannot drop the
-tables that `px_admin` owns. Only a SCRAM hash of a password reaches the server; keep passwords
-in 1Password. Client settings: host = the endpoint name, port 5432, database `px`, SSL mode
-`verify-full`, root certificate `global-bundle.pem` (from a Windows client:
-`\\wsl$\<distro>\<repo path>\global-bundle.pem`). To remove a login that owns no tables, run
-`REVOKE CREATE ON SCHEMA public FROM <name>; DROP ROLE <name>;` as `px_admin`.
-
-> **CAUTION — `create-demo` replaces the table named by `RDS_DEMO_TABLE`.** Never point it at a
-> real table.
+> **CAUTION — `px-seracbio-prod` holds real data.** Never write a query result into `python/` or another
+> tracked folder: `uniquecontrast` holds compound identifiers.
 >
-> **CAUTION — tear down.** Deletion protection is on. To remove the database, run
-> `terraform apply -var deletion_protection=false`, then `terraform destroy`. The destroy keeps a
-> final snapshot `px-rds-final`; delete it by hand when you do not need it. Without that
-> snapshot, all data in the database is lost.
->
-> **Only synthetic data goes into this database** until a decision on real data. See
-> [CLAUDE.md](CLAUDE.md).
+> **CAUTION — tear down.** A `terraform destroy` removes both databases. To remove only dev, set
+> `create_dev = false` and apply. Prod has deletion protection, so apply with
+> `restore_deletion_protection = false` before a destroy. Each destroy keeps a final snapshot
+> (`px-seracbio-prod-final`, `px-seracbio-dev-final`); delete it by hand when you do not need it.
+> Without that snapshot, all data in the database is lost.
 
 ## Data policy
 
 Chemistry data (SMILES, compound IDs, structures, screening results) **stays on this
 machine** — see [CLAUDE.md](CLAUDE.md). `data/`, `output/`, and rendered `interfaces/`
-are gitignored.
+are gitignored. The one exception is the Px interface publish to AWS (see "Publish the
+interface").

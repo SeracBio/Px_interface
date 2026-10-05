@@ -146,12 +146,25 @@ resource "aws_iam_role_policy" "ssm_tls" {
       ]
       },
       {
-        # Allow use of the default SSM KMS key to decrypt SecureString params
+        # Allow use of the default SSM KMS key to decrypt SecureString params (key ARN: KMS never matches an alias here)
         Effect   = "Allow"
         Action   = ["kms:Decrypt"]
-        Resource = ["arn:aws:kms:${var.aws_region}:*:alias/aws/ssm"]
+        Resource = [data.aws_kms_alias.ssm.target_key_arn]
+      },
+      {
+        # AmazonSSMManagedInstanceCore allows ssm:GetParameter on "*"; this Deny keeps the box to its 3 parameters.
+        # DescribeParameters takes no resource, so it is denied outright (no listing of other projects' names).
+        Effect = "Deny"
+        Action = ["ssm:GetParameter", "ssm:GetParameters", "ssm:GetParametersByPath",
+        "ssm:GetParameterHistory", "ssm:DescribeParameters"]
+        NotResource = [aws_ssm_parameter.tls_cert.arn, aws_ssm_parameter.tls_key.arn,
+        aws_ssm_parameter.htpasswd.arn, "arn:aws:ssm:${var.aws_region}::parameter/aws/service/*"]
     }]
   })
+}
+
+data "aws_kms_alias" "ssm" {
+  name = "alias/aws/ssm"
 }
 
 # Attach SSM Session Manager policy so you can shell in without opening port 22
@@ -166,7 +179,7 @@ resource "aws_iam_instance_profile" "ec2" {
 }
 
 # -------------------------------------------------------
-# Basic-Auth hash — prefer a local ~/.serac_aws file (one line: "serac_user:$2y$...") so you
+# Basic-Auth hash — prefer a local ~/.serac_aws file (htpasswd lines "user:$2y$...", one per person) so you
 # don't have to export TF_VAR_webapp_htpasswd_hash on every apply; fall back to the variable
 # if the file is absent. sensitive() keeps it out of plan output.
 # -------------------------------------------------------
@@ -183,6 +196,15 @@ resource "aws_ssm_parameter" "htpasswd" {
   description = "nginx basic-auth hash (serac_user:bcrypt) for the Px interface"
   type        = "SecureString"
   value       = local.webapp_htpasswd_hash
+
+  lifecycle {
+    # a plain password or the placeholder would reach nginx as a line nobody can log in with; refuse it at plan time
+    precondition {
+      condition = alltrue([for line in split("\n", local.webapp_htpasswd_hash) :
+      can(regex("^[^:\\s]+:\\$2[aby]\\$[0-9]{2}\\$[./A-Za-z0-9]{53}$", trimspace(line)))])
+      error_message = "~/.serac_aws must hold htpasswd lines only (user:$2y$10$...), made with htpasswd -nBC 10 <user>. A plain password or the placeholder is refused."
+    }
+  }
 
   tags = {
     Project = var.project_name

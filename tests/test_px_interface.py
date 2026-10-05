@@ -888,5 +888,209 @@ class TestVolcanoDedup(unittest.TestCase):
         self.assertNotIn('<g id="tgt-ring">', svg)
 
 
+class TestBuildOldDf(unittest.TestCase):
+    """DATA.build_old_df (DFRAW_OVERWRITE=true) rebuilds df_raw + MS from the three old proteomics exports.
+    fn.load_proteomics_data is mocked with synthetic frames, so no real file is read."""
+
+    def test_build_old_df(self):
+        """Input: 3 mocked exports (2, 3 and 4 rows); the third has the short Vault column names. Expected:
+        df_raw has 9 rows in export order; MS has [compound, ndown, origin, activity, date], one row per export,
+        and the third compound comes from its batch ID; exports 2 and 3 use mode='cddvault'. Rationale: this is
+        the recipe that made the current DFRAW_PATH and MS_PATH files (MS_ML notebook MS_cytotox)."""
+        import tempfile
+        from unittest import mock
+        from types import SimpleNamespace
+        nd, act = 'MSData - Proteomics activities: Nr. Down', 'MSData - Proteomics activities: Cmpd Activity'
+        def raw(n, c): return pd.DataFrame({'genes': [f'G_{i:03d}' for i in range(n)], 'logfc': -1.0, 'compound': c})
+        rets = [(raw(2, 'SRB-0000001'), pd.DataFrame({'Molecule Name': ['SRB-0000001'], nd: [5], act: ['Single']})),
+                (raw(3, 'SRB-0000002'), pd.DataFrame({'Molecule Name': ['SRB-0000002'], nd: [7], act: ['Low']})),
+                (raw(4, 'SRB-0000003'), pd.DataFrame({'Molecule-Batch ID': ['SRB-0000003-002'], 'Nr. Down': [9],
+                                                      'Cmpd Activity': ['Medium']}))]
+        with tempfile.TemporaryDirectory() as d:
+            p = SimpleNamespace(RAW_PROTEOMICS_PATH='r', CLEAN_PROTEOMICS_PATH='c', PX_20260520_DB='db20',
+                                PX_20260520_CDDVAULT='v20', PX_20260529_DB='db29', PX_20260529_CDDVAULT='v29',
+                                DFRAW_PATH=os.path.join(d, 'df_raw.parquet'), MS_PATH=os.path.join(d, 'MS.parquet'))
+            with mock.patch.object(px.fn, 'load_proteomics_data', side_effect=rets) as lpd:
+                px.DATA().build_old_df(p)
+            df_raw, MS = pd.read_parquet(p.DFRAW_PATH), pd.read_parquet(p.MS_PATH)
+        # df_raw = the three exports, in export order
+        self.assertEqual(df_raw['compound'].tolist(), ['SRB-0000001'] * 2 + ['SRB-0000002'] * 3 + ['SRB-0000003'] * 4)
+        # MS has the schema of the current MS_PATH file
+        self.assertEqual(MS.columns.tolist(), ['compound', 'ndown', 'origin', 'activity', 'date'])
+        # one MS row per export; the third compound comes from its batch ID
+        self.assertEqual(MS['compound'].tolist(), ['SRB-0000001', 'SRB-0000002', 'SRB-0000003'])
+        self.assertEqual(MS['ndown'].tolist(), [5, 7, 9])
+        self.assertEqual(MS['activity'].tolist(), ['Single', 'Low', 'Medium'])
+        # the origin names the export, and the date comes from the origin
+        self.assertEqual(MS['origin'].tolist(), ['MS20260429', 'MS20260520', 'MS20260529'])
+        self.assertEqual(MS['date'].dt.strftime('%Y-%m-%d').tolist(), ['2026-04-29', '2026-05-20', '2026-05-29'])
+        # each export reads its own two files
+        self.assertEqual([c.args for c in lpd.call_args_list], [('r', 'c'), ('db20', 'v20'), ('db29', 'v29')])
+        # the first export uses the default mode; the two Vault exports use mode='cddvault'
+        self.assertEqual([c.kwargs.get('mode') for c in lpd.call_args_list], [None, 'cddvault', 'cddvault'])
+
+    def test_load_old_df_rebuilds_only_when_asked(self):
+        """Input: DFRAW_OVERWRITE false, then true, with build_old_df mocked. Expected: no rebuild, then one
+        rebuild; both runs load the files. Rationale: a normal build must never rewrite DFRAW_PATH."""
+        import tempfile
+        from unittest import mock
+        from types import SimpleNamespace
+        with tempfile.TemporaryDirectory() as d:
+            p = SimpleNamespace(DFRAW_PATH=os.path.join(d, 'df_raw.parquet'), MS_PATH=os.path.join(d, 'MS.parquet'))
+            pd.DataFrame({'genes': ['G_001', 'G_002'], 'MSPlate': ['P1', 'P1'], 'logfc': [-1.0, 0.5],
+                          'pvalue': [0.01, 0.5], 'significant': [1, 0]}).to_parquet(p.DFRAW_PATH)
+            pd.DataFrame({'compound': ['SRB-0000001'], 'ndown': [5]}).to_parquet(p.MS_PATH)
+            for flag, n_calls in ((False, 0), (True, 1)):
+                p.DFRAW_OVERWRITE = flag
+                data = px.DATA()
+                with mock.patch.object(px.DATA, 'build_old_df') as build:
+                    data.load_old_df(p)
+                # build_old_df runs only when DFRAW_OVERWRITE is true
+                self.assertEqual(build.call_count, n_calls, f'DFRAW_OVERWRITE={flag}')
+                # the files are loaded in both cases
+                self.assertEqual((len(data.df_raw), len(data.MS)), (2, 1))
+
+
+class TestResolveOutputDir(unittest.TestCase):
+    """--output_dir: a local path is the build dir; the config PUBLISH_URL builds in PUBLISH_STAGE_DIR
+    and then publishes; any other URL stops the CLI before the build."""
+
+    def test_resolve_output_dir(self):
+        """Input: a local path, the PUBLISH_URL with and without its last slash, another URL.
+        Expected: (path, False), (stage dir, True) twice, then SystemExit. Rationale: a typo in the URL
+        must not start a long build."""
+        from types import SimpleNamespace
+        p = SimpleNamespace(PUBLISH_URL='https://host.example/Px_interface/', PUBLISH_STAGE_DIR='stage')
+        # a local path is the build dir, with no publish
+        self.assertEqual(px.resolve_output_dir('tmp/out', p), ('tmp/out', False))
+        # the PUBLISH_URL, with or without its last slash -> the stage dir, and a publish
+        self.assertEqual(px.resolve_output_dir('https://host.example/Px_interface/', p), ('stage', True))
+        self.assertEqual(px.resolve_output_dir('https://host.example/Px_interface', p), ('stage', True))
+        # another URL stops the CLI
+        with self.assertRaises(SystemExit):
+            px.resolve_output_dir('https://other.example/', p)
+
+
+class TestPublish(unittest.TestCase):
+    """aws_publish_targets + publish_interface with mocked AWS clients (no network): the bucket name
+    comes from the account, the EC2 from its Name tag; the S3 push skips the build-only files and shows
+    errors only; the EC2 copies the HTML last."""
+
+    def _params(self):
+        from types import SimpleNamespace
+        return SimpleNamespace(PUBLISH_PROJECT='proj', PUBLISH_REGION='eu-north-1', PUBLISH_S3_PREFIX='interfaces/',
+                               PUBLISH_WEBROOT='/var/www/webapp/Px_interface/',
+                               PUBLISH_URL='https://host.example/Px_interface/',
+                               PUBLISH_EXCLUDE=['*_2dtest.html', 'volcanoes_px/*.json'])
+
+    def _session(self, n_instances=1, ping='Online', status='Success'):
+        from unittest import mock
+        c = {name: mock.MagicMock() for name in ('sts', 's3', 'ec2', 'ssm')}
+        c['sts'].get_caller_identity.return_value = {'Account': '123456789012'}
+        c['ec2'].describe_instances.return_value = {
+            'Reservations': [{'Instances': [{'InstanceId': f'i-{k}'} for k in range(n_instances)]}]}
+        c['ssm'].describe_instance_information.return_value = {'InstanceInformationList': [{'PingStatus': ping}]}
+        c['ssm'].send_command.return_value = {'Command': {'CommandId': 'c-1'}}
+        c['ssm'].get_command_invocation.return_value = {
+            'Status': status, 'StandardOutputContent': 'files=3\n', 'StandardErrorContent': 'error text'}
+        session = mock.MagicMock()
+        session.client.side_effect = lambda name: c[name]
+        return session, c
+
+    def _publish(self, status):
+        """Run publish_interface on a temp interfaces/ folder; return (aws CLI argv, SSM command lines, dir)."""
+        import tempfile
+        from unittest import mock
+        session, c = self._session(status=status)
+        with tempfile.TemporaryDirectory() as d:
+            for f in ('Serac_Px_interface.html', 'Serac_Px_interface_data.js', 'Serac_Px_interface_2dtest.html',
+                      'volcanoes_px/a.svg', 'volcanoes_px/positions.json'):
+                os.makedirs(os.path.dirname(os.path.join(d, 'interfaces', f)), exist_ok=True)
+                with open(os.path.join(d, 'interfaces', f), 'w') as fh:
+                    fh.write('x')
+            with mock.patch.object(px.subprocess, 'run', return_value=mock.Mock(returncode=0)) as run, \
+                 mock.patch.object(px.time, 'sleep'):
+                px.publish_interface(d, self._params(), (session, 'b', 'i-0'))
+        return run.call_args.args[0], c['ssm'].send_command.call_args.kwargs['Parameters']['commands'], d
+
+    def test_targets(self):
+        """Input: one running EC2, SSM Online. Expected: bucket proj-interface-<account> and that EC2.
+        Rationale: git holds neither ID, so the CLI must find both at run time."""
+        from unittest import mock
+        session, c = self._session()
+        with mock.patch.object(px.boto3, 'Session', return_value=session):
+            _, bucket, iid = px.aws_publish_targets(self._params())
+        # bucket = <project>-interface-<account>, and the one running <project>-instance
+        self.assertEqual((bucket, iid), ('proj-interface-123456789012', 'i-0'))
+        # the EC2 lookup filters on the Name tag
+        self.assertIn({'Name': 'tag:Name', 'Values': ['proj-instance']},
+                      c['ec2'].describe_instances.call_args.kwargs['Filters'])
+
+    def test_targets_stop(self):
+        """Input: no EC2, two EC2s, or an SSM agent that is not Online. Expected: SystemExit each time.
+        Rationale: stop before the long build, not after it."""
+        from unittest import mock
+        for kw in ({'n_instances': 0}, {'n_instances': 2}, {'ping': 'ConnectionLost'}):
+            session, _ = self._session(**kw)
+            with mock.patch.object(px.boto3, 'Session', return_value=session):
+                # each bad target stops the CLI
+                with self.assertRaises(SystemExit, msg=str(kw)):
+                    px.aws_publish_targets(self._params())
+
+    def test_publish_interface(self):
+        """Input: an interfaces/ folder with 2 build-only files. Expected: the S3 push excludes them and
+        shows errors only; the EC2 stops at the first error, copies all but the HTML, then the HTML,
+        then sets the nginx owner. Rationale: no page loads before its data, and no file name shows."""
+        cmd, lines, d = self._publish('Success')
+        # the S3 push: interfaces/ -> s3://b/interfaces/, errors only
+        self.assertEqual(cmd[:5], ['aws', 's3', 'sync', os.path.join(d, 'interfaces'), 's3://b/interfaces/'])
+        self.assertIn('--only-show-errors', cmd)
+        # both build-only patterns are excluded
+        self.assertEqual([cmd[i + 1] for i, a in enumerate(cmd) if a == '--exclude'],
+                         ['*_2dtest.html', 'volcanoes_px/*.json'])
+        # the EC2 stops at the first error
+        self.assertEqual(lines[0], 'set -e')
+        # the first copy skips the HTML, and the second copy (no exclude) brings it last
+        self.assertIn("--exclude '*.html'", lines[1])
+        self.assertTrue(lines[2].startswith('aws s3 sync s3://b/interfaces/ /var/www/webapp/Px_interface/'))
+        self.assertNotIn('--exclude', lines[2])
+        # both EC2 copies compare exact dates: a new HTML of the same size must not be skipped
+        self.assertTrue(all('--exact-timestamps' in l for l in lines[1:3]))
+        # nginx owns the copied files
+        self.assertEqual(lines[3], 'chown -R root:nginx /var/www/webapp/Px_interface/')
+
+    def test_publish_interface_ec2_failure(self):
+        """Input: the SSM command ends Failed. Expected: SystemExit. Rationale: a failed EC2 copy must
+        not look like a success."""
+        # a failed EC2 sync stops the CLI with an error
+        with self.assertRaises(SystemExit):
+            self._publish('Failed')
+
+
+class TestExpatImportOrder(unittest.TestCase):
+    """RDKit's ChemDraw library holds its own copy of expat and exports its XML_* functions. If RDKit
+    Draw loads libexpat before Python's XML parser does, a later ElementTree parse (the volcano SVG)
+    crashes with a segfault. functions.py imports ElementTree at the top, so expat loads first."""
+
+    def test_rdkit_draw_then_volcano_svg(self):
+        """Input: a child process imports python.functions, draws CCO with RDKit, then renders a
+        volcano SVG. Expected: exit code 0. Rationale: before the fix this order crashed in
+        ElementTree.fromstring; a child process keeps a crash from stopping the test runner."""
+        import subprocess
+        code = (
+            "import python.functions as fn, pandas as pd\n"
+            "from rdkit import Chem\n"
+            "from rdkit.Chem import Draw\n"
+            "Draw.MolToImage(Chem.MolFromSmiles('CCO'), size=(100, 100))\n"
+            "df = pd.DataFrame({'compound': ['uc', 'uc'], 'genes': ['G1', 'G2'], 'logfc': [-2.0, 2.0],\n"
+            "                   'pvalue': [1e-2, 1e-2], 'significant': [1, 1]})\n"
+            "svg, geom = fn._volcano_base_svg(df, 'uc', key='compound')\n"
+            "assert svg and geom\n")
+        r = subprocess.run([sys.executable, '-c', code], cwd=_REPO_ROOT, capture_output=True, text=True,
+                           timeout=300)
+        # exit code 0 = no segfault (-11), and the SVG and its geometry exist
+        self.assertEqual(r.returncode, 0, r.stderr[-2000:])
+
+
 if __name__ == '__main__':
     unittest.main(verbosity=2)

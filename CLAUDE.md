@@ -102,6 +102,8 @@ Obey these rules:
 
 **The project's data, SMILES, labels, screening results, and any derived features must never leave this machine.** This is a hard rule, not a preference.
 
+**Exception (user decision, 2026-10-01): the Px interface on AWS.** The Px interface build output (the HTML, `_data.js`, the volcano SVGs and the thumbnails) can go to the private interface S3 bucket and to the EC2 that serves `https://advantedge.seracbio.com/Px_interface/`. The VPN, the Basic-Auth password (in 1Password) and TLS protect it. Only `python python/Px_interface.py --output_dir <PUBLISH_URL>` makes this push. Nothing else leaves the machine, and the rules for the assistant below do not change: the assistant still never reads real data.
+
 ### Do
 
 - **Run all models locally** — RDKit, sklearn, XGBoost, LightGBM, ChemProp, PyTorch (CPU/GPU local), local ONNX, etc.
@@ -113,7 +115,7 @@ Obey these rules:
 - **Don't send project data to any cloud LLM API.** No OpenAI / Anthropic / Gemini / Cohere / Mistral / Together / Replicate calls that include compound IDs, SMILES, predictions, or labels — not even "anonymised" snippets.
 - **Don't import packages that phone home by default** without first checking. If a library has telemetry, opt out (e.g. `WANDB_MODE=offline`, `MLFLOW_TRACKING_URI=file:./mlruns`).
 - **Don't paste data into web tools.** No diagram renderers, no pastebins, no gists, no shared notebooks — even if "just for visualisation".
-- **Don't sync output folders to cloud storage.** Keep `data/`, `output/`, `autoresearch/logs/`, and `tests/files/` out of any auto-syncing path.
+- **Don't sync output folders to cloud storage.** Keep `data/`, `output/`, `autoresearch/logs/`, and `tests/files/` out of any auto-syncing path. The one exception is the Px interface publish above.
 
 ### Claude Code itself is a cloud LLM — the agent's tool outputs cross to Anthropic
 

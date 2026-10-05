@@ -14,7 +14,7 @@ PyYAML==6.0.3
 ipykernel==7.2.0
 requests==2.33.1
 python-pptx==1.0.2   # deliverable-table slide (MS_Prioritization.ipynb); pulls lxml + XlsxWriter
-psycopg2-binary==2.9.12   # Px RDS client (python/px_rds.py); bundles libpq, no telemetry
-boto3==1.43.94            # RDS endpoint + Secrets Manager lookup (python/px_rds.py); calls only this account's AWS APIs
+psycopg2-binary==2.9.12   # Px RDS test scripts (python/20261001_test_*_connect.py); bundles libpq, no telemetry
+boto3==1.43.94            # publish to AWS (python/Px_interface.py: STS, S3, EC2, SSM); calls only this account's AWS APIs
 # get_df (serac_df in the build cell) comes from the sibling CDD_Vault_API repo
 # (~/CDD_Vault_API/python on sys.path) — not a pip package.

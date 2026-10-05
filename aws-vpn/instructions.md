@@ -70,7 +70,7 @@ cp backend.hcl.example backend.hcl
 Run this on your local machine. Store the *password* in 1Password; only the bcrypt hash is written to disk.
 
 ```bash
-htpasswd -nbB serac_user 'your-password-from-1password' > ~/.serac_aws
+htpasswd -nB serac_user > ~/.serac_aws   # asks for the password two times; keeps it out of the shell history
 chmod 600 ~/.serac_aws            # contains the auth hash — keep it private
 # ~/.serac_aws now holds one line: serac_user:$2y$10$...
 ```
