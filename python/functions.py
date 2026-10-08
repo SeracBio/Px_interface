@@ -899,6 +899,24 @@ def plot_activity_area_absolute(
     return ax, summary
 
 
+# Loading screen spliced in right after <body>: it paints before plotly.min.js and the figure load,
+# and hides the raw first render until _INTERFACE_INJECT removes it (interface ready).
+_LOADING_INJECT = '''
+<style>
+  #px-loading { position: fixed; top: 0; right: 0; bottom: 0; left: 0; z-index: 100000;
+                background: white; display: flex; flex-direction: column; align-items: center;
+                justify-content: center; gap: 14px; font: 13px sans-serif; color: #1D3557;
+                transition: opacity .25s; }
+  #px-loading.done { opacity: 0; pointer-events: none; }
+  /* a CSS transform animation runs on the compositor, so it keeps turning while scripts run */
+  #px-loading .px-spin { width: 44px; height: 44px; border-radius: 50%; border: 4px solid #d8dee6;
+                         border-top-color: #1D3557; animation: px-spin .9s linear infinite;
+                         will-change: transform; }
+  @keyframes px-spin { to { transform: rotate(360deg); } }
+</style>
+<div id="px-loading"><div class="px-spin"></div>Loading the Px interface…</div>
+'''
+
 # JS/HTML injected by plot_3d_interface: the live interface's CSS + overlay chrome
 # (filter panel, compound panel with a paginated ◀/▶ walk of a target's compounds,
 # grouped volcanoes, pin/search overlay, range sliders) + a size legend docked above the
@@ -3415,6 +3433,22 @@ _INTERFACE_INJECT = '''
       if (incoming) applySessionHook(incoming);
     })();
   });
+
+  // Loading screen (_LOADING_INJECT): remove it when the page has loaded and Plotly has drawn nothing
+  // for 300 ms (the start-up redraws are done). On "load", so a start-up error cannot keep it shown.
+  window.addEventListener("load", function() {
+    var el = document.getElementById("px-loading");
+    if (!el) return;
+    var gd = document.querySelector(".plotly-graph-div"), t;
+    function done() {
+      if (gd && gd.removeListener) gd.removeListener("plotly_afterplot", wait);
+      el.classList.add("done");
+      setTimeout(function() { el.remove(); }, 300);
+    }
+    function wait() { clearTimeout(t); t = setTimeout(done, 300); }
+    if (gd && gd.on) gd.on("plotly_afterplot", wait);
+    wait();
+  });
 </script>
 '''
 
@@ -4873,7 +4907,8 @@ def plot_3d_interface(
         with open(html_path) as fh:
             html = fh.read()
         with open(html_path, 'w') as fh:
-            fh.write(html.replace('</body>', inject_data + _INTERFACE_INJECT + '</body>'))
+            fh.write(html.replace('<body>', '<body>' + _LOADING_INJECT, 1)
+                         .replace('</body>', inject_data + _INTERFACE_INJECT + '</body>'))
         print(f'wrote {html_path}  ({os.path.getsize(html_path) / 1e6:.1f} MB main doc)'
               f'  +  {_data_name}  ({os.path.getsize(_data_path) / 1e6:.1f} MB, deferred)')
 

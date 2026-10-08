@@ -432,6 +432,18 @@ class TestRender(unittest.TestCase):
         # the 2D labels-off leader-line declutter is emitted
         self.assertIn('declutterLabels', html)
 
+    def test_loading_screen_first(self):
+        """The loading screen comes right after <body>, before plotly.min.js and the figure, so it
+        paints first and covers the raw first render; the client JS removes it on window load."""
+        html = open(os.path.join(self.out_dir, 'interfaces', 'Serac_Px_interface.html')).read()
+        # the loading screen is the first thing in <body>
+        self.assertTrue(html.split('<body>', 1)[1].lstrip().startswith('<style>\n  #px-loading'))
+        # it comes before the plotly.js script and the inline Plotly.newPlot figure
+        self.assertLess(html.index('id="px-loading"'), html.index('src="plotly.min.js"'))
+        self.assertLess(html.index('id="px-loading"'), html.index('Plotly.newPlot('))
+        # the removal hook (window load + Plotly quiet) is emitted once
+        self.assertEqual(html.count('gd.on("plotly_afterplot", wait)'), 1)
+
     def test_volcanoes_written(self):
         """At least one volcano SVG is rendered into volcanoes_px/."""
         vdir = os.path.join(self.out_dir, 'interfaces', 'volcanoes_px')

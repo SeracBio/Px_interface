@@ -65,6 +65,13 @@ server {
     # Revalidate each file before use (304 if unchanged), so a publish shows without Ctrl+Shift+R.
     add_header Cache-Control "no-cache" always;
 
+    # Compress on the fly: the 104 MB _data.js goes as about 22 MB. Level 4 compresses at about
+    # 12 MB/s on this box, faster than the VPN; level 6 is half that speed for only 5% less.
+    gzip on;
+    gzip_comp_level 4;
+    gzip_types application/javascript text/javascript image/svg+xml;   # .js has two MIME names; HTML is always on
+    gzip_vary on;
+
     root /var/www/webapp;
 
     # Interface served under /Px_interface/ ; bare / redirects there.

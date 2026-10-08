@@ -270,6 +270,10 @@ Requires the VPN connected, then Basic Auth (`serac_user` + the shared password)
 self-signed cert warning is expected; install the CA from
 `terraform -chdir=aws-vpn output -raw tls_cert_pem` to silence it.
 
+The page shows a spinner while it loads, and it shows the interface only when the interface is
+ready. nginx compresses the HTML, JS and SVG files (gzip), so a load moves about 25 MB, not the
+112 MB on disk (`Serac_Px_interface_data.js` is 104 MB on disk and about 22 MB on the VPN).
+
 > **You can put real Px interface files on this box** (decision of 2026-10-01). Three controls
 > protect them: the box is reachable only over the VPN (no public IP), nginx asks for the
 > Basic-Auth password (shared through 1Password), and TLS encrypts the traffic. All users share

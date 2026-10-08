@@ -3,6 +3,9 @@ _Durable, aggregate memory of this repo — read at session start. Aggregate onl
 
 ## Where we are now
 - **Focus:** building the per-gene 3D Px interface (`Serac_Px_interface.html`) via `fn.plot_3d_interface`.
+- **OPEN (2026-10-07): apply the gzip change, then publish the spinner build.** `terraform apply` replaces
+  the EC2 (1 add, 1 destroy); then `healthcheck.sh`, then the publish command, then the gzip checks in the
+  2026-10-07 log entry. Remove this line when the checks pass.
 - **OPEN TO-DO (2026-10-05): security batch B on the AWS box** — bcrypt cost 10 + long password, secret
   files at 0600 from the start, optional `limit_req` and per-person logins. It replaces the EC2, so do it at a
   quiet time. Details: log entry "Signals agent handoff: SSM and password hardening for Px" (2026-10-05).
@@ -256,6 +259,11 @@ while FBX plates use `Pw{ti}{p}` (disjoint → `__PLATE_DEFAULTS__` filters to `
 data shares the namespace); no real PNGs so thumbnails are RDKit-rendered from `CCO`.
 
 ## Interface conventions (the render engine)
+- **Loading screen (2026-10-06):** `_LOADING_INJECT` (spinner + "Loading the Px interface…") goes in right
+  after `<body>`, before `plotly.min.js` and the inline `Plotly.newPlot`, so it paints first and covers the raw
+  first render. A `window` "load" listener at the end of `_INTERFACE_INJECT` removes it after Plotly sends no
+  `plotly_afterplot` for 300 ms. Keep start-up redraws finite (a redraw loop keeps the screen up). Test:
+  `test_loading_screen_first`.
 - **Axes:** x = R2 (SAR predictability, full-genome), y = OpenTargets association, z = MS score.
   Dots = one per gene over the mscore universe; missing R2 / association → 0.0 (still plotted).
 - **FBX ingest is auto-discovered:** every date-named subdir (`YYYYMMDD…`) of `FBX_DIR` holding
@@ -690,6 +698,13 @@ Protocol (CDP)** with a tiny stdlib-only client. Exact procedure that worked:
    inject JS, then `Page.captureScreenshot {format:"png"}` → base64 in the JSON result → decode to file.
    **Gotcha:** in chrome 148 `/json/new` needs an **HTTP `PUT`** (a GET returns `405 Method Not Allowed`); open
    the tab with `PUT /json/new?about:blank` then close it with `GET /json/close/<id>`.
+   **Simpler client (2026-10-06):** the `ML` env has `websockets` 17.1, so `websockets.sync.client.connect(url,
+   max_size=None)` replaces the hand-made socket client. **Load timeline over a slow link:**
+   `Network.enable`, `Network.setCacheDisabled {cacheDisabled:true}`, `Network.emulateNetworkConditions
+   {latency:30, downloadThroughput:6e6, uploadThroughput:3e6}` (bytes/s), a probe through
+   `Page.addScriptToEvaluateOnNewDocument` (timestamps of the plot, DOMContentLoaded, load, `plotly_afterplot`),
+   then `Page.captureScreenshot` in a loop. Right after `Page.navigate`, a capture can fail with "Not attached
+   to an active page": wait 50 ms and try again. A capture blocks while the page runs a long script.
 4. **Cleanup:** the harness may report the background chrome task "failed exit 1" yet leave chrome + its child
    procs (zygote/gpu/renderer) running; `pkill -f` is flaky here (WSL2). Reliable: `ps -eo pid,ppid,cmd | grep
    chrome-linux64`, then `kill -9 <pid>`; likewise the `http.server`.
@@ -1480,7 +1495,7 @@ and a *merged* cluster means either a <55px (tight, good) gap or an overlap (loo
      `install -m 0600 /dev/null "$2"` first. Changes `user_data`, so it replaces the EC2.
   5. Confirmed: no `limit_req`. Optional; size it well above 5 requests per second per user.
   6. Confirmed: `kms:Decrypt` names `alias/aws/ssm`, which KMS never matches. Fix: the key ARN.
-  **Batch A (user approved 2026-10-05): steps 1, 2, 6 — code done, apply by the user.** `ec2.tf`: Deny statement
+  **Batch A (user approved 2026-10-05): steps 1, 2, 6 — APPLIED (seen 2026-10-07).** `ec2.tf`: Deny statement
   in `aws_iam_role_policy.ssm_tls` (`NotResource` = the 3 Px parameter ARNs + `arn:aws:ssm:<region>::parameter/aws/
   service/*`; actions GetParameter(s), GetParametersByPath, GetParameterHistory, DescribeParameters);
   `kms:Decrypt` now on `data.aws_kms_alias.ssm.target_key_arn`; a `precondition` on `aws_ssm_parameter.htpasswd`
@@ -1491,8 +1506,9 @@ and a *merged* cluster means either a <55px (tight, good) gap or an overlap (loo
   IAM simulation with the new Deny added (`PolicyInputList`), before the apply: the 3 Px parameters and
   `/aws/service/*` allowed; `/signals-webapp/api-key`, any other parameter and `DescribeParameters` explicitDeny;
   `ssm:UpdateInstanceInformation`, `ssmmessages:CreateControlChannel`, `ec2messages:GetMessages` allowed.
-  **After the apply:** run the same simulation without `PolicyInputList`; then tell the Signals agent (user),
-  so it can make `/signals-webapp/api-key` again and close its cross-stack note.
+  **After the apply (2026-10-07):** `terraform plan` shows no change to the role policy, and the simulation on the
+  live policy (no `PolicyInputList`) gives the same results as above. Still open: the user tells the Signals
+  agent, so it can make `/signals-webapp/api-key` again and close its cross-stack note.
   **Batch B — TO DO, not started (user decision 2026-10-05: "at some point"):** steps 3, 4, 5 (+ optional 6), in
   one apply at a quiet time, because steps 4 and 5 change `user_data` and so REPLACE the EC2 (fixed IP, a few
   minutes down; the new box pulls the build from S3). (3) the user makes a new login at cost 10 with a long
@@ -1501,3 +1517,36 @@ and a *merged* cluster means either a <55px (tight, good) gap or an overlap (loo
   (`install -m 0600 /dev/null "$2" || return 1`). (5) optional `limit_req` (size it well above the measured peak
   of 5 requests per second, or real page loads get HTTP 503). (6) optional one htpasswd line per person (the
   precondition accepts several lines). Check after: `healthcheck.sh`, the page and the volcanoes.
+- 2026-10-06 — **Loading screen: the page no longer shows the raw 3D plot while it loads.** (STE.) Problem
+  (user screenshot): on AWS, the page showed a 3D plot of all genes in disease colours for a long time before
+  the interface came. Cause: the inline `Plotly.newPlot` draws the raw figure as soon as `plotly.min.js`
+  arrives. The interface code starts only at DOMContentLoaded, after the deferred `Serac_Px_interface_data.js`.
+  The real file is **104 MB** (HTML 3.3 MB, `plotly.min.js` 4.8 MB), and nginx sends it without `gzip`.
+  **Reproduced on fake data:** a scratch copy of `make_synthetic` with 3,000 genes (all with MS scores; `tmp/spin`,
+  build 27 s, `_data.js` 9.7 MB, padded with a JS comment to the real 104 MB), loaded in headless Chromium at
+  6 MB/s with no cache: raw plot from 4.4 s, DOMContentLoaded at 20.8 s, interface at 22.3 s (16 s of raw plot).
+  **Fix:** `_LOADING_INJECT` + the "load" listener (see "Interface conventions"). **Check (same load):** spinner
+  from 0.08 s; raw plot drawn under it at 3.9 s; last `plotly_afterplot` 22.58 s; spinner gone 22.91 s; the
+  final frame is the same as before the fix; the arc angle changes in each capture (45 of 45), so it turns.
+  65 tests OK (+`test_loading_screen_first`). README "Browse the interface" has a user note. **To get it on
+  AWS:** a rebuild + publish (the HTML changes). The user approved `gzip` in nginx next: see 2026-10-07.
+- 2026-10-07 — **gzip in nginx: code done, apply by the user.** (STE.) User decision: add compression before the
+  next interface publish, as the long-term fix for the slow load (the spinner only hides the wait). Change in
+  `aws-vpn/user_data.sh.tftpl`, HTTPS server block: `gzip on; gzip_comp_level 4; gzip_types application/javascript
+  text/javascript image/svg+xml; gzip_vary on;` (nginx always compresses HTML when gzip is on). **Measured (sizes and
+  times only):** laptop, `_data.js` 104 MB → `gzip -1` 26.7 MB 1.19 s, `-2` 25.4/1.20, `-3` 24.6/1.46, `-4`
+  22.6/1.52, `-5` 21.6/2.02, `-6` 21.2/2.89, `-9` 20.5/12.58. Box (t3.micro, 2 vCPU Xeon 8259CL 2.5 GHz, read-only
+  SSM): `-1` 26 MB 1.28 s, `-2` 25/1.37, `-4` 22/1.76, `-6` 21/3.42. So level 4 sends about 12.5 MB/s, faster
+  than the VPN; level 6 sends about 6 MB/s and can be slower than the VPN. **Not `gzip_static`** (pre-compressed
+  `.gz` from the publish CLI): only about 1.5 MB less than level 4, but it adds `.gz` copies to make and sync, an
+  order rule in the box sync (HTML `.gz` last) and stale `.gz` files if a file changes outside the CLI. The box
+  nginx has the module (`--with-http_gzip_static_module`), if the file becomes much larger. **Box facts:** nginx
+  1.30.3; `nginx.conf` has no gzip lines (no duplicate directives); `mime.types`: js → `application/javascript`,
+  svg → `image/svg+xml`. Volcano SVGs: 6,254 files, 253 MB, 40 KB mean, 3.0× smaller at level 1 (faster hover);
+  thumbnails: 5,348 PNGs, 89 MB, not compressed again. **Checks:** rendered template `bash -n` OK; nginx block
+  braces 4/4; `terraform validate` OK; `terraform plan`: 1 to add, 0 to change, 1 to destroy (`aws_instance.main`;
+  `user_data` forces the replacement). No local nginx, Docker or Podman, so no local `nginx -t`; the box runs
+  `nginx -t` before it starts nginx, and `healthcheck.sh` shows nginx FAIL if the config is bad. **Expected:** a
+  full load moves about 25 MB, not 112 MB (an estimate from the sizes, not an end-to-end measurement).
+  **After the apply:** `healthcheck.sh`; publish the spinner build; then read-only checks on the box (`nginx -T`
+  gzip lines; the access-log bytes for `_data.js` near 22 MB) and DevTools (`content-encoding: gzip`).
