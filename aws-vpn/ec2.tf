@@ -202,7 +202,7 @@ resource "aws_ssm_parameter" "htpasswd" {
     precondition {
       condition = alltrue([for line in split("\n", local.webapp_htpasswd_hash) :
       can(regex("^[^:\\s]+:\\$2[aby]\\$[0-9]{2}\\$[./A-Za-z0-9]{53}$", trimspace(line)))])
-      error_message = "~/.serac_aws must hold htpasswd lines only (user:$2y$10$...), made with htpasswd -nBC 10 <user>. A plain password or the placeholder is refused."
+      error_message = "~/.serac_aws must hold htpasswd lines only (user:$2y$05$...), made with htpasswd -nB <user>. A plain password or the placeholder is refused."
     }
   }
 

@@ -88,7 +88,7 @@ variable "allowed_cidr" {
 
 variable "webapp_htpasswd_hash" {
   description = <<-EOT
-    bcrypt password hash for HTTP basic auth (generated externally, e.g. via htpasswd -nbB).
+    bcrypt password hash for HTTP basic auth (generated externally, e.g. via htpasswd -nB <user>, which asks for the password).
     Store the real value in 1Password and inject it at apply time:
       TF_VAR_webapp_htpasswd_hash='username:$$2y$$...' terraform apply
     The username is included in the hash string (htpasswd format: "user:hash").
