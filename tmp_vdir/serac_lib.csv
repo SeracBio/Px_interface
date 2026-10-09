@@ -1,0 +1,41 @@
+compound,smiles,Px_repetition(yes/no),Px_validated_WT(yes/no),Px_Ligase_dependent(yes/no),Px_NameLigase_dependent,Px_Target_info,Px_Target_interest
+SRB-0000000,CCO,yes,yes,,CRBN,,G_00000 degrader
+SRB-0000001,CCO,no,no,,CRBN,,
+SRB-0000002,CCO,,no,yes,VHL,,G_00002 degrader
+SRB-0000003,CCO,,,yes,CRBN,,
+SRB-0000004,CCO,,yes,yes,CRBN,,G_00004 degrader
+SRB-0000005,CCO,yes,no,,VHL,,
+SRB-0000006,CCO,,no,yes,CRBN,,G_00006 degrader
+SRB-0000007,CCO,no,yes,no,,,
+SRB-0000008,CCO,,,,VHL,,G_00008 degrader
+SRB-0000009,CCO,yes,yes,,VHL,,
+SRB-0000010,CCO,,no,,,,G_00010 degrader
+SRB-0000011,CCO,no,,no,,,
+SRB-0000012,CCO,no,,,CRBN,,G_00012 degrader
+SRB-0000013,CCO,no,,yes,VHL,,
+SRB-0000014,CCO,,,,VHL,,G_00014 degrader
+SRB-0000015,CCO,no,no,no,VHL,,
+SRB-0000016,CCO,,yes,no,CRBN,,G_00016 degrader
+SRB-0000017,CCO,no,yes,yes,,,
+SRB-0000018,CCO,,no,yes,,,G_00018 degrader
+SRB-0000019,CCO,yes,,no,VHL,,
+SRB-0000020,CCO,yes,,,CRBN,,G_00020 degrader
+SRB-0000021,CCO,,yes,yes,,,
+SRB-0000022,CCO,no,,,VHL,,G_00022 degrader
+SRB-0000023,CCO,,yes,,CRBN,,
+SRB-0000024,CCO,yes,no,,VHL,,G_00024 degrader
+SRB-0000025,CCO,yes,yes,yes,CRBN,,
+SRB-0000026,CCO,no,yes,no,,,G_00026 degrader
+SRB-0000027,CCO,no,no,yes,,,
+SRB-0000028,CCO,,,,CRBN,,G_00028 degrader
+SRB-0000029,CCO,yes,yes,,,,
+SRB-0000030,CCO,,yes,,VHL,,G_00030 degrader
+SRB-0000031,CCO,no,yes,,,,
+SRB-0000032,CCO,,,yes,VHL,,G_00032 degrader
+SRB-0000033,CCO,,no,yes,VHL,,
+SRB-0000034,CCO,,no,,VHL,,G_00034 degrader
+SRB-0000035,CCO,,yes,no,CRBN,,
+SRB-0000036,CCO,no,no,yes,VHL,,G_00036 degrader
+SRB-0000037,CCO,no,no,no,VHL,,
+SRB-0000038,CCO,yes,,no,CRBN,,G_00038 degrader
+SRB-0000039,CCO,no,no,yes,,,

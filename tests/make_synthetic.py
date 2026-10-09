@@ -6,6 +6,7 @@ Writes to <repo>/tmp by default:
   fbx/<date>/<date>_FBX_{MEASURE,MSSCORE,REPORT}.csv   (2 tranches),
   serac_lib.csv, clean_proteomics.csv, px_2026052*_cddvault.csv, px_2026052*_db.csv,
   config.yaml   (minimal, relative paths -> the files above; no real values).
+add_validation_dir(out_rel) adds validation/<date>/ folders shaped like the real VALIDATION_DIR exports.
 
 All IDs are fake (C_/G_/PG_), SMILES are public (CCO); only real *headers* informed
 the schema. Run from the repo root:  python tests/make_synthetic.py [--out tmp]
@@ -206,6 +207,44 @@ def make_sources_config(out, out_rel, rng):
         'SRB_PNG_DIR': rel('srb_png'),                 # no real PNGs -> RDKit-render from CCO smiles
     }
     yaml.safe_dump(cfg, open(os.path.join(out, 'config.yaml'), 'w'), sort_keys=False)
+
+
+def add_validation_dir(out_rel, seed=7):
+    """Add a VALIDATION_DIR to a fixture made by main(out_rel): two date folders shaped like the real
+    JSC_Demo exports — no FBX_ prefix, no plate column (the plate sits in the contrast) and a per-target
+    MSSCORE with no contrast. The later folder re-exports one contrast of the earlier one (logfc 3.0),
+    adds new plates, and holds a contrast with no plate in its name. The earlier folder holds a primary
+    reference on the FBX plate Pw00. Sets VALIDATION_DIR in <out_rel>/config.yaml."""
+    out, rng, rid = os.path.join(REPO_ROOT, out_rel), np.random.RandomState(seed), itertools.count(1)
+    vdir = os.path.join(out, 'validation')
+    dot = lambda c: c.replace('-', '.')
+    cuc = lambda c, tail: f'{dot(c)}.001_vs_{dot(c)}.001_complement_{tail}'
+    c7, c8 = COMPOUNDS[7], COMPOUNDS[8]
+    folders = {('20260620', '20260620'): [(c7, cuc(c7, 'Pw20VD_WT'), 'WT'), (c7, cuc(c7, 'Pw20VD_KO'), 'KO'),
+                                          (c7, cuc(c7, 'Pw00'), '')],
+               ('20260625', '202606025'): [(c7, cuc(c7, 'Pw20VD_WT'), 'WT'),   # re-export: the newer copy wins
+                                           (c8, cuc(c8, 'Pw21VD_WT'), 'WT'), (c8, cuc(c8, 'Pw21VD_KO'), 'KO'),
+                                           (c8, f'{dot(c8)}.001_vs_DMSO_DG37_A01', '')]}
+    for (date, fname), exps in folders.items():
+        d = os.path.join(vdir, date); os.makedirs(d, exist_ok=True)
+        pd.DataFrame([{'id': next(rid), 'uniquecontrast': uc, 'srbnumber': f'{c}-001', 'condition': cond,
+                       'target': f'{GENES[0]};{GENES[1]}'} for c, uc, cond in exps]
+                     ).to_csv(os.path.join(d, f'{fname}_REPORT.csv'), index=False)
+        rows = []
+        for c, uc, cond in exps:
+            for g in GENES[:60]:
+                lf = 3.0 if (date == '20260625' and uc == cuc(c7, 'Pw20VD_WT')) else float(rng.normal(0, 1.5))
+                pv = float(rng.uniform(1e-6, 1))
+                rows.append({'id': next(rid), 'pg': PG_OF[g], 'uniquecontrast': uc, 'logfc': lf, 'pvalue': pv,
+                             'adjpval': min(pv * 2, 1.0), 'significant': int(pv < 0.05 and abs(lf) > 1), 'genes': g})
+        pd.DataFrame(rows).to_csv(os.path.join(d, f'{fname}_MEASURE.csv'), index=False)
+    pd.DataFrame({'id': [1, 2], 'target': GENES[:2], 'msscore': [50.0, 20.0], 'associationscore': [0.5, 0.2]}
+                 ).to_csv(os.path.join(vdir, '20260625', '202606025_MSSCORE.csv'), index=False)
+    cfg_p = os.path.join(out, 'config.yaml')
+    cfg = yaml.safe_load(open(cfg_p))
+    cfg['VALIDATION_DIR'] = os.path.join(out_rel, 'validation')
+    yaml.safe_dump(cfg, open(cfg_p, 'w'), sort_keys=False)
+    return cuc(c7, 'Pw20VD_WT')
 
 
 def main(out_rel='tmp', seed=42):

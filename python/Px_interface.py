@@ -27,10 +27,11 @@ from get_library import get_df   # CDD Vault collection export
 
 
 def _fbx_csv(tranche, kind):
-    """Path to the one *FBX_<kind>*.csv in a tranche folder (tolerates a _02 re-export suffix), or
-    None if the tranche has no file of that kind — a validation-only tranche ships MEASURE + REPORT
-    but no MSSCORE (its MS scores were already computed in an earlier tranche)."""
-    f = next((f for f in os.listdir(tranche) if f'FBX_{kind}' in f and f.endswith('.csv')), None)
+    """Path to the one *_<kind>*.csv in a tranche folder (the FBX_ prefix is optional: the validation
+    exports in VALIDATION_DIR omit it; tolerates a _02 re-export suffix), or None if the tranche has no
+    file of that kind — a validation-only tranche ships MEASURE + REPORT but no MSSCORE (its MS scores
+    were already computed in an earlier tranche)."""
+    f = next((f for f in os.listdir(tranche) if f'_{kind}' in f and f.endswith('.csv')), None)
     return os.path.join(tranche, f) if f else None
 
 
@@ -76,19 +77,29 @@ def resolve_n_jobs(njobs):
     return max(1, (os.cpu_count() or 8) - 2) if n <= 0 else n
 
 
-def resolve_plate_defaults(plate2date, show_plate=None):
+def resolve_plate_defaults(plate2date, show_plate=None, validation_suffixes=()):
     """
-    Which plates to default-tick in the interface's Plates filter. show_plate = a list of YYYYMMDD
-    dates (config SHOW_PLATE / --show_plate); those dates' plates are ticked. Empty/None -> the
-    single latest date only (previous default). YYYYMMDD is normalised to the YYYY-MM-DD form
-    plate2date stores, so it matches regardless of the source (FBX folder name or df_raw export).
+    Which plates to default-tick in the interface's Plates filter. show_plate (config SHOW_PLATE /
+    --show_plate) names blocks of that filter: 'YYYYMMDD' ticks the plates of that date block, and
+    'validation YYYYMMDD' ticks the stems of that validation block. A validation plate (its name ends
+    in a validation suffix) is in the block 'validation <earliest date of its stem>', as the filter
+    shows it, so a date entry never ticks it. Empty/None -> the single latest date block only
+    (previous default). YYYYMMDD is normalised to the YYYY-MM-DD form plate2date stores, so it
+    matches regardless of the source (FBX folder name or df_raw export).
     param dict plate2date: {plate -> 'YYYY-MM-DD'}
-    param list show_plate: YYYYMMDD date strings/ints (or None/[] for latest-only)
-    return tuple: (sorted plate names to tick, sorted 'YYYY-MM-DD' dates selected)
+    param list show_plate: 'YYYYMMDD' / 'validation YYYYMMDD' strings or YYYYMMDD ints (None/[] -> latest)
+    param list validation_suffixes: validation plate-name suffixes (config VALIDATION_PLATE_SUFFIXES)
+    return tuple: (sorted plate names to tick, sorted block labels selected, e.g. 'validation 2026-10-06')
     """
-    show = [str(d).strip() for d in (show_plate or []) if str(d).strip()]
-    dates = {pd.to_datetime(d).strftime('%Y-%m-%d') for d in show} if show else {max(plate2date.values())}
-    return sorted(p for p, d in plate2date.items() if d in dates), sorted(dates)
+    show = [re.fullmatch(r'(validation\s+)?(.+)', str(e).strip(), re.I).groups()
+            for e in (show_plate or []) if str(e).strip()]
+    blocks = ({('validation ' if v else '') + pd.to_datetime(d).strftime('%Y-%m-%d') for v, d in show}
+              if show else {max(plate2date.values())})
+    vre = re.compile('(' + '|'.join(map(str, validation_suffixes)) + ')$', re.I) if validation_suffixes else None
+    stem = pd.Series({p: vre.sub('', p) for p in plate2date if vre and vre.search(p)}, dtype=object)
+    first = pd.Series(plate2date, dtype=object)[stem.index].groupby(stem).transform('min')   # stem -> earliest date
+    block = {**plate2date, **('validation ' + first).to_dict()}
+    return sorted(p for p, b in block.items() if b in blocks), sorted(blocks)
 
 
 def resolve_output_dir(output_dir, params):
@@ -288,31 +299,58 @@ class DATA():
 
     def load_new_df(self, params):
         """
-        -Load + concat every FBX tranche under params.FBX_DIR into the unified FBX tables
-         (FBX_MEASURE / FBX_MSSCORE / FBX_REPORT). Tranche folders are auto-discovered: any
-         date-named subdir holding *FBX_<KIND>*.csv, so a new tranche just needs its folder.
+        -Load + concat every FBX tranche under params.FBX_DIR, plus every validation tranche under the
+         optional params.VALIDATION_DIR, into the unified FBX tables (FBX_MEASURE / FBX_MSSCORE /
+         FBX_REPORT). Tranche folders are auto-discovered: any date-named subdir holding a *_REPORT csv
+         (FBX_ prefix optional), so a new tranche just needs its folder. A contrast that several
+         tranches hold keeps only the newest tranche's rows (a later export re-analyses it).
         -Load the per-gene SAR R2 table and build the uniquecontrast -> compound map.
         param class params: the params class
         return None:
         """
-        # auto-discover tranche folders (date-named, holding an FBX_REPORT csv)
-        self.FBX_TRANCHES = sorted(
-            t for t in (os.path.join(params.FBX_DIR, d) for d in os.listdir(params.FBX_DIR))
-            if os.path.isdir(t) and os.path.basename(t)[:8].isdigit()
-            and any('FBX_REPORT' in f for f in os.listdir(t)))
+        def _tranches(root):   # date-named subdirs holding a REPORT csv
+            return [t for t in (os.path.join(root, d) for d in os.listdir(root))
+                    if os.path.isdir(t) and os.path.basename(t)[:8].isdigit() and _fbx_csv(t, 'REPORT')]
+        _vdir = getattr(params, 'VALIDATION_DIR', None)
+        self.VAL_TRANCHES = _tranches(_vdir) if _vdir else []
+        # oldest -> newest by folder date; on a date tie the validation folder counts as the newer one
+        self.FBX_TRANCHES = sorted(_tranches(params.FBX_DIR) + self.VAL_TRANCHES,
+                                   key=lambda t: (os.path.basename(t), t in self.VAL_TRANCHES))
+        _name = lambda t: os.path.basename(t) + (' (validation)' if t in self.VAL_TRANCHES else '')
 
         def _load_fbx(kind):
-            # a tranche may lack a given kind (validation-only tranches have no MSSCORE) -> skip it,
-            # noting which so a genuinely missing file isn't silently swallowed
-            paths = [(os.path.basename(t), _fbx_csv(t, kind)) for t in self.FBX_TRANCHES]
-            _missing = [b for b, p in paths if not p]
-            if _missing:
-                print(f'> note: no FBX_{kind} in {len(_missing)} tranche(s), skipped: {", ".join(_missing)}')
-            return pd.concat([pd.read_csv(p) for _b, p in paths if p], ignore_index=True)
+            # newest tranche first, so a contrast in several tranches keeps only its newest rows. A tranche
+            # may lack a kind (validation-only: no MSSCORE) or hold a per-target MSSCORE with no contrast
+            # to join on -> skipped, and noted so a genuinely missing file isn't silently swallowed
+            frames, seen, skipped, n_old = [], set(), [], 0
+            for t in reversed(self.FBX_TRANCHES):
+                p = _fbx_csv(t, kind)
+                df = pd.read_csv(p) if p else None
+                if df is None or 'uniquecontrast' not in df.columns:
+                    skipped.append(_name(t)); continue
+                old = df['uniquecontrast'].isin(seen)
+                n_old += int(old.sum())
+                seen.update(df['uniquecontrast'].unique())
+                frames.append(df[~old])
+            if skipped:
+                print(f'> note: no FBX_{kind} with contrasts in {len(skipped)} tranche(s), skipped: {", ".join(skipped[::-1])}')
+            if n_old:
+                print(f'> FBX_{kind}: dropped {n_old:,} rows whose contrast a newer tranche also holds')
+            return pd.concat(frames[::-1], ignore_index=True)
 
-        self.FBX_MEASURE  = _ensure_plate(_load_fbx('MEASURE'))   # validation-only tranches omit `plate`;
-        self.FBX_MSSCORE  = _load_fbx('MSSCORE')                  # reconstruct it from the uniquecontrast
-        self.FBX_REPORT   = _ensure_plate(_load_fbx('REPORT'))
+        def _with_plate(df, kind):
+            # validation-only tranches omit `plate`: rebuild it from the uniquecontrast. A contrast with no
+            # plate there either (e.g. ..._vs_DMSO_DG37_A01) cannot show in the plate-filtered interface
+            df = _ensure_plate(df)
+            _no = df['plate'].isna()
+            if _no.any():
+                print(f'> note: FBX_{kind}: dropped {int(_no.sum()):,} rows of '
+                      f'{df.loc[_no, "uniquecontrast"].nunique()} contrast(s) with no plate in the file or the name')
+            return df[~_no].reset_index(drop=True)
+
+        self.FBX_MEASURE  = _with_plate(_load_fbx('MEASURE'), 'MEASURE')
+        self.FBX_MSSCORE  = _load_fbx('MSSCORE')
+        self.FBX_REPORT   = _with_plate(_load_fbx('REPORT'), 'REPORT')
         self.target2R2_df = pd.read_csv(params.GENE_SAR_OUT).rename(columns={'gene': 'genes'})
 
         # uniquecontrast -> compound (SRB-XXXXXXX, batch stripped); reused by every combine
@@ -320,7 +358,8 @@ class DATA():
         self.uc2compound = (self.FBX_REPORT.assign(compound=_p[0] + '-' + _p[1])
                             .drop_duplicates('uniquecontrast').set_index('uniquecontrast')['compound'])
 
-        print(f'> FBX: {len(self.FBX_TRANCHES)} tranches | MEASURE {len(self.FBX_MEASURE):,} rows | '
+        print(f'> FBX: {len(self.FBX_TRANCHES) - len(self.VAL_TRANCHES)} tranches + '
+              f'{len(self.VAL_TRANCHES)} validation | MEASURE {len(self.FBX_MEASURE):,} rows | '
               f'MSSCORE {len(self.FBX_MSSCORE):,} | REPORT {len(self.FBX_REPORT):,} '
               f'({self.FBX_REPORT["uniquecontrast"].nunique():,} experiments)')
         
@@ -358,7 +397,7 @@ class OUTPUT():
         per-(compound,gene,experiment) MEASURE, per-(gene,plate) MS-SCORE, and per-experiment
         REPORT tables, then attach a tranche-derived plate date. FBX is the source of truth on
         shared experiments / (gene,plate) / uniquecontrasts.
-        param class data: DATA instance (df_raw, df_ms, MS, FBX_*, uc2compound, FBX_TRANCHES)
+        param class data: DATA instance (df_raw, df_ms, MS, FBX_*, uc2compound, FBX_TRANCHES, VAL_TRANCHES)
         param class params: PARAMS instance (source proteomics paths, PLATE_DATE_OVERRIDES)
         return None:
         """
@@ -449,8 +488,10 @@ class OUTPUT():
             _d = pd.to_datetime(os.path.basename(_t)[:8]).strftime('%Y-%m-%d')
             # read the whole REPORT (small) so _ensure_plate can rebuild `plate` from the uniquecontrast
             # for validation-only tranches whose export omits the column (else usecols=['plate'] crashes)
-            _plates = _ensure_plate(pd.read_csv(_fbx_csv(_t, 'REPORT')))['plate']
-            self.plate2date.update({pl: _d for pl in _plates.dropna().astype(str).unique()})
+            _plates = _ensure_plate(pd.read_csv(_fbx_csv(_t, 'REPORT')))['plate'].dropna().astype(str).unique()
+            if _t in data.VAL_TRANCHES:   # a validation export dates only new plates: re-runs and
+                _plates = [pl for pl in _plates if pl not in self.plate2date]   # primary refs keep their date
+            self.plate2date.update({pl: _d for pl in _plates})
         self.plate2date.update(params.PLATE_DATE_OVERRIDES)
         for _df in (self.measure, self.mscore, self.report):
             _df['date'] = pd.to_datetime(_df['plate'].astype(str).map(self.plate2date))
@@ -817,10 +858,11 @@ class OUTPUT():
             'background': '#CFE3F0',
         }
         MUST_INCLUDE = sorted(self.iface_df.loc[self.iface_df['disease_area'].isin(['pharma', 'BMS']), 'gene'])
-        # Plates filter starts ticked on SHOW_PLATE's dates (config/--show_plate), else the latest
-        # tranche only; untick to widen. resolve_plate_defaults normalises YYYYMMDD -> YYYY-MM-DD.
-        PLATE_DEFAULTS, _show_dates = resolve_plate_defaults(self.plate2date, getattr(params, 'SHOW_PLATE', None))
-        print(f'> Plates default-ticked: {len(PLATE_DEFAULTS)} plate(s) on {", ".join(_show_dates)}')
+        # Plates filter starts ticked on SHOW_PLATE's blocks (config/--show_plate: dates or 'validation <date>'),
+        # else the latest date only; untick to widen. resolve_plate_defaults normalises YYYYMMDD -> YYYY-MM-DD.
+        _vsuf = getattr(params, 'VALIDATION_PLATE_SUFFIXES', ('WT', 'MLN', 'KO'))
+        PLATE_DEFAULTS, _show_blocks = resolve_plate_defaults(self.plate2date, getattr(params, 'SHOW_PLATE', None), _vsuf)
+        print(f'> Plates default-ticked: {len(PLATE_DEFAULTS)} plate(s) in {", ".join(_show_blocks)}')
         # Target-validation filter: untick the FBXO31-independent box on load when configured
         # (FBXO31_INDEPENDENT_TICKED=false -> only the dependent box ticked); default keeps both ticked.
         _val_defaults = None if getattr(params, 'FBXO31_INDEPENDENT_TICKED', True) else ['FBXO31 dependent']
@@ -849,13 +891,13 @@ class OUTPUT():
             x_label='SAR predictability', y_label='association score', z_label='MS score',
             must_include=MUST_INCLUDE, top_n_highlight=40,
             compounds_df=self.compounds_df, plate_dates=self.plate2date, plate_defaults=PLATE_DEFAULTS,  # nested-by-date Plates filter; default-tick latest date only
-            plate_validation_suffixes=getattr(params, 'VALIDATION_PLATE_SUFFIXES', ('WT', 'MLN', 'KO')),  # …WT/MLN/KO stems, shown side by side
+            plate_validation_suffixes=_vsuf,  # …WT/MLN/KO stems, shown side by side
             panels=_panels_in, return_panels=True,  # skip/cache the compound-panel build
             volcano_source=self.meas, volcano_key='uniquecontrast', page_size=5,
             png_dir=params.SRB_PNG_DIR,   # real compound PNGs from config; RDKit-render fallback when absent
             thumb_external=True,   # reference srb_png/<compound>.png next to the HTML (not inline base64)
             range_sliders=True, range_defaults={'x': 0.0, 'y': 0.0, 'z': 0.0}, # {SAR, OT, MS} sliders open fully; alt presets: {'x':0,'y':0,'z':30} or {'x':0.1,'y':0.5,'z':10}
-            activity_defaults=['Single', 'Low'],   # open with only Single/Low activity compounds ticked
+            activity_defaults=getattr(params, 'ACTIVITY_DEFAULTS', ['Single', 'Low']),   # Activity boxes ticked on load; empty -> all
             control_compounds=data.control_compounds, control_default_on=False,  # hide controls by default
             contaminant_compounds=data.contaminants, contaminant_default_on=False,  # hide contaminants by default
             gene_research=gene_research,
@@ -863,13 +905,17 @@ class OUTPUT():
             validated_label='FBXO31 dependent', devalidated_label='FBXO31 independent',
             validated_compounds=self.validated_compounds, devalidated_compounds=self.devalidated_compounds,  # Compound validation tickboxes
             compound_validated_label='FBXO31 dependent', compound_devalidated_label='FBXO31 independent',
-            depmap_defaults=['Selective', 'Non-essential'], conf_defaults=['High', 'Med'],
-            lof_defaults=['Yes'], validation_defaults=_val_defaults,  # None -> all ticked; FBXO31_INDEPENDENT_TICKED=false -> only dependent
+            # target-filter boxes ticked on load (config); empty -> None -> all ticked
+            depmap_defaults=getattr(params, 'DEPMAP_DEFAULTS', ['Selective', 'Non-essential']) or None,
+            conf_defaults=getattr(params, 'CONF_DEFAULTS', ['High', 'Med']) or None,
+            lof_defaults=getattr(params, 'LOF_DEFAULTS', ['Yes']) or None,
+            validation_defaults=_val_defaults,  # None -> all ticked; FBXO31_INDEPENDENT_TICKED=false -> only dependent
             volcano_significant=True, volcano_dir=os.path.join(output_dir, 'interfaces', 'volcanoes_px'),
             volcano_n_jobs=resolve_n_jobs(getattr(params, 'NJOBS', 0)),  # config NJOBS (0 -> CPUs-2) for the volcano render
             volcano_xlim=(-8, 8), volcano_size_px=350,
             disease_area_colors=DISEASE_AREA_COLORS, nb_display=False,
             validation_colors=VALIDATION_COLORS, color_mode_default='V',  # V/D colour toggle; open in validation colouring
+            labels_default_on=getattr(params, 'LABELS_ON', True),  # Labels eye toggle on load (config LABELS_ON)
             size_buckets=getattr(params, 'GENE_SIZE_BUCKETS', [6, 8, 10, 12, 15, 20]),  # dot px by #significant-compounds (1,2,3,4,5,>5)
             ring_px=getattr(params, 'GENE_RING_PX', 4),   # thickness (px) of the dark ring drawn around each gene dot
             html_path=os.path.join(output_dir, 'interfaces', 'Serac_Px_interface.html'), # 20260612_3d_interface_PX_R2_assoc_ms.html
@@ -893,8 +939,9 @@ if __name__ == "__main__":
                     help="base dir for the HTML + volcanoes (interfaces/ is created under it), or the config "
                          "PUBLISH_URL: build in PUBLISH_STAGE_DIR, then publish to AWS (S3, then the EC2)")
     ap.add_argument('--show_plate', default=None,
-                    help='comma-separated YYYYMMDD dates to default-tick in the Plates filter, '
-                         'overriding config SHOW_PLATE; e.g. "20260812, 20260813". Empty -> latest date only.')
+                    help='comma-separated Plates-filter blocks to default-tick: YYYYMMDD dates or '
+                         '"validation YYYYMMDD", overriding config SHOW_PLATE; e.g. "20260812, validation 20261006". '
+                         'Empty -> latest date only.')
     args = ap.parse_args()
 
     ## params:

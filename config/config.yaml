@@ -43,11 +43,16 @@ PX_SCREEN_LIB: data/MS/20260513_CDD_FBXO31_PxScreen_Source.csv
 FBX_DIR: /mnt/c/Users/gtamo/Serac Biosciences Dropbox/Serac_team/4_Data_Sciences/15_ML/Daniela/AdvantEidge Platform/Data_Prototype # data/advanteidge
 # tranches are auto-discovered: every date-named subdir (YYYYMMDD…) of FBX_DIR holding *FBX_<KIND>*.csv
 # is loaded + concatenated, and its plate date comes from the folder name — drop in a new folder, nothing to edit.
+VALIDATION_DIR: /mnt/c/Users/gtamo/Serac Biosciences Dropbox/Serac_team/4_Data_Sciences/15_ML/Daniela/AdvantEidge Platform/JSC_Demo
+# validation exports: every date-named subdir holding *_REPORT.csv / *_MEASURE.csv (FBX_ prefix optional) is
+# loaded like a tranche. Its folder date goes only to NEW plates (re-runs and primary refs keep their date).
+# A contrast in several tranches keeps the newest copy. A per-target MSSCORE (no contrast) is skipped.
 PLATE_DATE_OVERRIDES: {}              # plate -> 'YYYY-MM-DD' for plates absent from source exports
                                       # (Pw58/60/61/62 now resolve via the 0520 DB export -> 2026-05-20)
-SHOW_PLATE: [20260812,20260813,20260814]                        # dates (YYYYMMDD) whose plates open default-ticked in the Plates
-                                      # filter, e.g. [20260812, 20260813]. Empty -> latest date only.
-                                      # Override at the CLI: --show_plate "20260812, 20260813"
+SHOW_PLATE: [validation 20261006, 20261006]     # Plates-filter blocks that open ticked: a date (YYYYMMDD) ticks that date's plates;
+                                      # "validation YYYYMMDD" ticks the stems of that validation block (validation plates
+                                      # stay unticked unless named). Empty -> latest date only. 2026-08 builds: [20260812,
+                                      # 20260813, 20260814]. Override at the CLI: --show_plate "20260812, validation 20261006"
 
 
 OT_ROOT: data/external/opentarget
@@ -72,6 +77,13 @@ VALIDATION_PLATE_SUFFIXES:         # plate-name suffixes forming a validation st
 - BIND
 FBXO31_INDEPENDENT_TICKED: false   # false -> the "FBXO31 independent" target box starts UNticked (those genes
                                    # hidden on load, still toggle-able); true -> both validation boxes ticked
+ACTIVITY_DEFAULTS: [Single, Low]   # Activity boxes (compound filters) ticked on load; empty -> all ticked
+DEPMAP_DEFAULTS: []                # DepMap-dependency boxes (target filters) ticked on load, e.g. [Selective, Non-essential];
+                                   # empty -> all (Pan-essential, Selective, Non-essential, Other, (no data))
+CONF_DEFAULTS: []                  # Confidence boxes ticked on load, e.g. [High, Med]; empty -> all ticked
+LOF_DEFAULTS: []                   # LoF-benefit boxes ticked on load, e.g. [Yes]; empty -> all ticked
+LABELS_ON: true                    # Labels eye toggle on load: true -> all gene labels; false -> only FBXO31-dependent
+                                   # and pinned genes keep their labels (the toggle still works in the page)
 VALIDATED_TARGET_FILE: # /home/gtamo/Px_interface/data/validated.txt            # optional path to a comma/whitespace-delimited gene list that REPLACES the
                                    # CDD-derived validated (FBXO31-dependent) targets, e.g. data/validated.txt.
                                    # Empty -> keep the list derived from CDD as before.

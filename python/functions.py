@@ -1391,7 +1391,7 @@ _INTERFACE_INJECT = '''
     var ticked = {};
     var plateDefaults = window.__PLATE_DEFAULTS__ || null;   // plates to start ticked; null/absent = all
     // Validation plates — names ending in a configured suffix (e.g. WT / MLN / KO) — get a
-    // dedicated "validation" sub-block in the Plates filter and start UNticked.
+    // dedicated "validation" sub-block in the Plates filter and start unticked unless plate_defaults lists them.
     var _valSuffixes = window.__VALIDATION_SUFFIXES__ || [];
     var _valRe = _valSuffixes.length ? new RegExp('(' + _valSuffixes.join('|') + ')$', 'i') : null;
     function isValidationPlate(p) { return !!_valRe && _valRe.test(p); }
@@ -1416,9 +1416,9 @@ _INTERFACE_INJECT = '''
         return {stem: st, plates: groups[st].sort(function(a, b) { return valRank(a) - valRank(b); })};
       });
     }
+    // a listed plate starts ticked (SHOW_PLATE 'validation <date>' lists validation plates); no list -> all but validation
     plates.forEach(function(p) {
-      ticked[p] = isValidationPlate(p) ? false
-                : (plateDefaults ? (plateDefaults.indexOf(p) !== -1) : true);
+      ticked[p] = plateDefaults ? plateDefaults.indexOf(p) !== -1 : !isValidationPlate(p);
     });
     var activities = window.__ACTIVITIES__ || [];
     // Optional focus set: if __ACTIVITY_DEFAULTS__ is given, only those levels
@@ -1513,7 +1513,7 @@ _INTERFACE_INJECT = '''
     var CLICK_RING = "#2ca02c";   // ring colour marking the currently clicked (panel-pinned) gene
     // FBXO31 category → dark ring + light fill (like the reference volcano circles).
     function valCatOf(g) { return validatedSet[g] ? "dependent" : (devalidatedSet[g] ? "independent" : "rest"); }
-    var hideOtherLabels = false;   // Labels eye toggle: true -> only FBXO31-dependent (+ pinned) genes keep labels
+    var hideOtherLabels = (window.__LABELS_DEFAULT_ON__ === false);   // Labels eye toggle: true -> only FBXO31-dependent (+ pinned) genes keep labels
     function valFillOf(g) { return (VCOL[valCatOf(g)] || {}).fill || "#cccccc"; }
     function valRingOf(g) { return (VCOL[valCatOf(g)] || {}).ring || "#333333"; }
     var VAL_CATS = ["dependent", "independent", "rest"];   // same order as VAL_LEGEND_TRACES
@@ -1726,6 +1726,7 @@ _INTERFACE_INJECT = '''
       tg.addEventListener("keydown", function (e) {
         if (e.key === "Enter" || e.key === " ") { e.preventDefault(); hideOtherLabels = !hideOtherLabels; apply(); }
       });
+      tg.classList.toggle("off", hideOtherLabels);   // icon follows labels_default_on; the first applyRanges draws the labels
     })();
 
     var pinned = false;
@@ -2391,7 +2392,7 @@ _INTERFACE_INJECT = '''
       if (!items.length) { if (boxesEl.parentNode) boxesEl.parentNode.style.display = "none"; return false; }
       if (!dates || !Object.keys(dates).length)
         return buildGroup(items, tickedMap, boxesEl, allId, noneId);  // flat fallback
-      // Validation plates are pulled out of their date groups into one dedicated block.
+      // Validation plates are pulled out of their date groups into dedicated validation blocks.
       var valItems = items.filter(isValidationPlate);
       var byDate = {}, order = [];
       items.filter(function(p) { return !isValidationPlate(p); }).forEach(function(p) {
@@ -2399,11 +2400,12 @@ _INTERFACE_INJECT = '''
         if (!byDate[d]) { byDate[d] = []; order.push(d); }
         byDate[d].push(p);
       });
-      order.sort(function(a, b) {                       // real dates ascending, "(no date)" last
+      function dateOrder(a, b) {                        // real dates ascending, "(no date)" last
         if (a === "(no date)") return 1;
         if (b === "(no date)") return -1;
         return a < b ? -1 : (a > b ? 1 : 0);
-      });
+      }
+      order.sort(dateOrder);
       boxesEl.classList.remove("pf-2col");              // each date sub-block owns its 2-col grid
       function dateBlock(label, list, n, cls) {
         var h = '<div class="pf-date collapsed' + (cls ? ' ' + cls : '') + '"><div class="pf-date-head">'
@@ -2417,13 +2419,13 @@ _INTERFACE_INJECT = '''
         });
         return h + '</div></div>';
       }
-      // Validation block: ONE checkbox per plate stem (name minus the WT/MLN/KO suffix). Ticking a
-      // stem toggles all its member plates (its data-plates, ordered WT, MLN, KO). The per-condition
-      // side-by-side view lives in the volcano panel, not here.
-      function validationBlock(list) {
-        var groups = validationGroups(list);   // {stems: [{stem, plates:[ordered]}], ...}
-        var rows = "";
+      // Validation block of one date: ONE checkbox per plate stem (name minus the WT/MLN/KO suffix).
+      // Ticking a stem toggles all its member plates (its data-plates, ordered WT, MLN, KO). The
+      // per-condition side-by-side view lives in the volcano panel, not here.
+      function validationBlock(label, groups) {   // groups = [{stem, plates:[ordered]}, ...]
+        var rows = "", n = 0;
         groups.forEach(function(g) {
+          n += g.plates.length;
           var allOn = g.plates.every(function(p) { return tickedMap[p]; });
           var conds = g.plates.map(valSufOf).filter(Boolean).join("/");
           rows += '<label class="pf-stem-row" title="' + g.plates.join(", ") + '">'
@@ -2434,14 +2436,20 @@ _INTERFACE_INJECT = '''
         });
         return '<div class="pf-date pf-validation collapsed"><div class="pf-date-head">'
              + '<span class="fp-caret">&#9662;</span>'
-             + '<input type="checkbox" class="pf-date-all">validation'
-             + ' <span class="pf-date-n">(' + list.length + ')</span></div>'
+             + '<input type="checkbox" class="pf-date-all">validation ' + label
+             + ' <span class="pf-date-n">(' + n + ')</span></div>'
              + '<div class="pf-date-boxes pf-val-boxes">' + rows + '</div></div>';
       }
       var html = "";
-      // Dedicated "validation" sub-block at the TOP (WT/MLN/KO plates, unticked by default),
-      // set off from the dated plates by a separator (see .pf-validation CSS).
-      if (valItems.length) html += validationBlock(valItems);
+      // Validation blocks at the TOP, one per date (a stem sits under its earliest plate date; plates
+      // unticked unless plate_defaults lists them), set off from the dated plates by a separator (see .pf-validation CSS).
+      var valByDate = {}, valOrder = [];
+      validationGroups(valItems).forEach(function(g) {
+        var d = g.plates.map(function(p) { return dates[p]; }).filter(Boolean).sort()[0] || "(no date)";
+        if (!valByDate[d]) { valByDate[d] = []; valOrder.push(d); }
+        valByDate[d].push(g);
+      });
+      valOrder.sort(dateOrder).forEach(function(d) { html += validationBlock(d, valByDate[d]); });
       order.forEach(function(d) { html += dateBlock(d, byDate[d], byDate[d].length); });
       boxesEl.innerHTML = html;
       // A checkbox maps to one or more plates: a normal box → its own value; a validation
@@ -3476,7 +3484,7 @@ def plot_3d_interface(
     compounds_df=None,
     plate_dates=None,
     plate_defaults=None,
-    plate_validation_suffixes=('WT', 'MLN', 'KO'),  # plates ending in these go to a "validation" sub-block, unticked by default
+    plate_validation_suffixes=('WT', 'MLN', 'KO'),  # plates ending in these go to a "validation" sub-block, unticked unless plate_defaults lists them
     panels=None,
     return_panels=False,
     volcano_source=None,
@@ -3494,6 +3502,7 @@ def plot_3d_interface(
     na_area_color='#bbbbbb',
     validation_colors=None,
     color_mode_default='V',
+    labels_default_on=True,   # Labels eye toggle starts on; False -> only FBXO31-dependent + pinned genes keep labels
     size_buckets=(6, 8, 10, 12, 15, 20),   # dot px by #compounds a gene is significant in: 1,2,3,4,5,>5
     ring_px=4,   # thickness (px) of the dark ring around each dot (drawn as a larger dot under the fill; gl3d caps marker outlines)
     title='',
@@ -4898,7 +4907,8 @@ def plot_3d_interface(
             'window.__CMP_VAL_LABEL_NO__ = ' + _json.dumps(str(compound_devalidated_label)) + ';\n'
             'window.__VALIDATION_COLORS__ = ' + _jsp(validation_colors) + ';\n'
             'window.__VAL_LEGEND_TRACES__ = ' + _jsp(val_legend_trace_indices) + ';\n'
-            'window.__COLOR_MODE_DEFAULT__ = ' + _json.dumps('D' if str(color_mode_default).upper() == 'D' else 'V') + ';\n')
+            'window.__COLOR_MODE_DEFAULT__ = ' + _json.dumps('D' if str(color_mode_default).upper() == 'D' else 'V') + ';\n'
+            'window.__LABELS_DEFAULT_ON__ = ' + _json.dumps(bool(labels_default_on)) + ';\n')
         _data_name = os.path.splitext(os.path.basename(html_path))[0] + '_data.js'
         _data_path = os.path.join(os.path.dirname(html_path), _data_name)
         with open(_data_path, 'w') as fh:

@@ -3,10 +3,7 @@ _Durable, aggregate memory of this repo — read at session start. Aggregate onl
 
 ## Where we are now
 - **Focus:** building the per-gene 3D Px interface (`Serac_Px_interface.html`) via `fn.plot_3d_interface`.
-- **OPEN (2026-10-07): apply the gzip change, then publish the spinner build.** `terraform apply` replaces
-  the EC2 (1 add, 1 destroy); then `healthcheck.sh`, then the publish command, then the gzip checks in the
-  2026-10-07 log entry. Remove this line when the checks pass.
-- **OPEN TO-DO (2026-10-05): security batch B on the AWS box** — bcrypt cost 10 + long password, secret
+- **OPEN TO-DO (2026-10-05): security batch B on the AWS box** — a long random password (keep bcrypt cost 05: see 2026-10-09), secret
   files at 0600 from the start, optional `limit_req` and per-person logins. It replaces the EC2, so do it at a
   quiet time. Details: log entry "Signals agent handoff: SSM and password hardening for Px" (2026-10-05).
 - **Architecture doc:** [`docs/INTERFACE.md`](../docs/INTERFACE.md) — full map of how the build fits together
@@ -297,6 +294,21 @@ data shares the namespace); no real PNGs so thumbnails are RDKit-rendered from `
     (mostly absorbed by the mscore/compounds de-dups, but wasted RAM). **Fix is at the data layer** —
     don't keep two date folders with the same plates. (User removed the duplicate folder manually.)
     Now guarded by `TestDuplicateTrancheDate` (last-tranche-wins on shared plate names).
+  - **`VALIDATION_DIR` (2026-10-09, user decisions):** validation exports live outside `FBX_DIR`, in
+    `.../AdvantEidge Platform/JSC_Demo/<YYYYMMDD>/` (files `*_REPORT.csv`, `*_MEASURE.csv`, optional per-target
+    `*_MSSCORE.csv`; no `FBX_` prefix, a 9-digit typo date in the names, no `plate` column). `load_new_df` reads
+    them as tranches (`VAL_TRANCHES`, merged into `FBX_TRANCHES` by folder date; a validation folder sorts after an
+    FBX folder of the same date). `_fbx_csv` now matches `_<KIND>` (FBX_ prefix optional). **Rules:** (1) a
+    validation folder dates only plates with NO date yet (`combine_datasets`), so re-runs and primary-screen
+    references keep their first date; FBX tranches keep last-wins. A global first-wins was rejected: it moves 5
+    current plates (Pw50/63/64 to 2026-04-29, Pw105VM WT/KO to 2026-06-01) and splits the Pw105VM stem. (2) A
+    contrast in several tranches keeps only the NEWEST tranche's rows (all three FBX tables; read newest-first
+    with a seen-set). (3) An MSSCORE without `uniquecontrast` is skipped with a note. (4) A row with no plate
+    in the file or the name is dropped at load with a note (it crashed `_stem_shared_ymax`: float plate).
+    (5) The Plates filter shows one "validation <date>" block per date; a stem sits under its earliest plate
+    date. Keep `Data_Prototype/20260817` in place: it gives the …VM plates 2026-08-17 (FBX last-wins over the
+    2026-06-01 Pw105VM WT/KO); without it they keep 2026-06-01. Tests: `TestValidationDir` (7) +
+    `test_validation_blocks_by_date_wired`; fixture `make_synthetic.add_validation_dir`.
 - **`plate_dates=` →** Plates filter renders **nested-by-date** (collapsible per-date sub-blocks,
   tri-state parents). **`plate_defaults=`** (list of plates) starts only those ticked; the driver
   passes whatever `resolve_plate_defaults(plate2date, SHOW_PLATE)` selects so the default view opens
@@ -307,6 +319,11 @@ data shares the namespace); no real PNGs so thumbnails are RDKit-rendered from `
   single **latest** date only (previous behaviour). `resolve_plate_defaults()` (in `Px_interface.py`,
   beside `resolve_n_jobs`) normalises YYYYMMDD → the `YYYY-MM-DD` form `plate2date` stores and returns
   `(plates_to_tick, dates_selected)`. Unit-tested by `TestResolvePlateDefaults`.
+  **2026-10-09 (STE):** an entry names a block of the Plates filter. `YYYYMMDD` ticks the date block only, so it
+  never ticks a validation plate. `validation YYYYMMDD` ticks every stem of that validation block (a stem is in
+  the block of its earliest plate date, as the JS groups it). `resolve_plate_defaults` takes
+  `VALIDATION_PLATE_SUFFIXES` and returns the block labels. Tests: 2 more in `TestResolvePlateDefaults`, and
+  `TestFilterDefaults` (4).
 - **`FBXO31_INDEPENDENT_TICKED` config (2026-08-14):** default tick state of the target-validation
   filter's "FBXO31 independent" box. `false` → interface opens with only "FBXO31 dependent" ticked
   (independent genes hidden on load, still toggle-able); `true`/absent → both ticked (previous
@@ -314,6 +331,15 @@ data shares the namespace); no real PNGs so thumbnails are RDKit-rendered from `
   (`None` when true, `['FBXO31 dependent']` when false) → injected `__VALIDATION_DEFAULTS__` (`null`
   vs the dependent-only list). Only the **target** filter; the compound-validation filter is untouched.
   Unit-tested by `TestFbxo31IndependentTicked`.
+- **`ACTIVITY_DEFAULTS` / `DEPMAP_DEFAULTS` / `CONF_DEFAULTS` / `LOF_DEFAULTS` config (2026-10-09, STE):** the
+  boxes that start ticked in the Activity, DepMap dependency, Confidence and LoF benefit filters. Before, the
+  build had them as fixed values; an absent key still gives those values (`[Single, Low]`,
+  `[Selective, Non-essential]`, `[High, Med]`, `[Yes]`). An empty list ticks all boxes: `build_interface` passes
+  `[] or None`, because an injected `[]` is truthy in JS and unticks every box.
+- **`LABELS_ON` config (2026-10-09, STE):** the Labels eye toggle state on load. `true`/absent → all labels (as
+  before); `false` → only FBXO31-dependent and pinned genes keep labels. Path: `plot_3d_interface(labels_default_on=)`
+  → `__LABELS_DEFAULT_ON__` → JS `hideOtherLabels` + the `.off` icon class at init. Test:
+  `TestFilterDefaults.test_labels_toggle_off_from_config`.
 - **`VALIDATED_TARGET_FILE` config (2026-08-14):** optional override for the validated
   (FBXO31-dependent) target list. A path to a comma/whitespace-delimited gene file (e.g.
   `data/validated.txt`) **replaces** `self.validated_targets` at the end of `get_de_validated`
@@ -333,7 +359,8 @@ data shares the namespace); no real PNGs so thumbnails are RDKit-rendered from `
   - **Labels toggle** (`#label-toggle`, open/closed-eye SVG): flips a `hideOtherLabels` flag; when on,
     `refreshLabels()` skips every gene whose `valCatOf` ≠ `"dependent"` (pinned genes always keep
     labels), so only FBXO31-dependent labels remain. Just a `scene.annotations` rebuild, no data
-    re-layout.
+    re-layout. **2026-10-09 (STE):** config `LABELS_ON` sets the state on load (`false` → eye shut,
+    `hideOtherLabels` true). Absent → on, as before.
   - **Leader-line declutter (2D + labels-off, added 2026-08-14):** `declutterLabels()` spreads the
     dependent labels so they don't overlap and draws a short arrow from each moved label to its dot.
     Key facts established via CDP: **gl3d scene annotations are real DOM** (`text.annotation-text`, in
@@ -364,8 +391,9 @@ data shares the namespace); no real PNGs so thumbnails are RDKit-rendered from `
   `Pw10  WT/MLN/KO`; its `data-plates` lists the member plates ordered WT→MLN→KO. Ticking a stem
   toggles ALL its member plates in `ticked` (change handler resolves a box to plates via `platesOf`;
   `syncStems()` derives each stem box's checked/indeterminate from members; `syncPlateUIHook` re-syncs
-  on session load since stem boxes have no `value=`). They **start UNticked** regardless of
-  `plate_defaults` (JS `isValidationPlate` forces `ticked[p]=false` at init). Shared helpers
+  on session load since stem boxes have no `value=`). They **start UNticked** unless `plate_defaults` lists
+  them (2026-10-09: JS init is `ticked[p] = plateDefaults ? listed : !isValidationPlate(p)`; Python lists them
+  only for a `SHOW_PLATE` entry `validation <date>`). Shared helpers
   `valStemOf`/`valSufOf`/`valRank`/`validationGroups` (defined once near `isValidationPlate`) are used
   by both the filter and the volcano panel.
 - **Grouped WT/MLN/KO volcanoes on gene hover (2026-07-20).** The per-condition "side by side" now
@@ -1182,7 +1210,8 @@ and a *merged* cluster means either a <55px (tight, good) gap or an overlap (loo
   plate `Pw73` for one compound and gene `BNIP3`. The data was correct. A **filter tickbox in the browser**
   hid the row. Check the client filters **before** you doubt the pipeline.
   **Order of checks:**
-  1. **Plate date.** `SHOW_PLATE` ticks only the listed dates. Every other plate starts **unticked**.
+  1. **Plate date.** `SHOW_PLATE` ticks only the listed blocks. Every other plate starts **unticked**. A date
+     entry never ticks a validation plate; only a `validation <date>` entry does (2026-10-09).
      `Pw73` has the date `2026-04-29`, but `SHOW_PLATE` held three August dates. This alone hides a plate.
   2. **Target validation.** `FBXO31_INDEPENDENT_TICKED: false` starts the "FBXO31 independent" box
      unticked, so those genes are hidden on load. `VALIDATED_TARGET_FILE` (`data/validated.txt`, 16 genes)
@@ -1511,9 +1540,10 @@ and a *merged* cluster means either a <55px (tight, good) gap or an overlap (loo
   agent, so it can make `/signals-webapp/api-key` again and close its cross-stack note.
   **Batch B — TO DO, not started (user decision 2026-10-05: "at some point"):** steps 3, 4, 5 (+ optional 6), in
   one apply at a quiet time, because steps 4 and 5 change `user_data` and so REPLACE the EC2 (fixed IP, a few
-  minutes down; the new box pulls the build from S3). (3) the user makes a new login at cost 10 with a long
-  random password before the apply: `(umask 077; htpasswd -nBC 10 <user> | head -1 > ~/.serac_aws)`; then
-  switch the README commands from `-nB` to `-nBC 10`. (4) `fetch_param` creates its file at 0600 first
+  minutes down; the new box pulls the build from S3). (3) the user makes a new login with a long
+  random password (20+ characters from 1Password). **Revised 2026-10-09:** keep cost 05 (`htpasswd -nB`), not
+  cost 10: nginx checks the hash on each request (304 checks too), and on the box cost 10 takes 61 ms a check
+  (cost 05: 2 ms); a long random password already defeats offline guessing. The README keeps `-nB`. (4) `fetch_param` creates its file at 0600 first
   (`install -m 0600 /dev/null "$2" || return 1`). (5) optional `limit_req` (size it well above the measured peak
   of 5 requests per second, or real page loads get HTTP 503). (6) optional one htpasswd line per person (the
   precondition accepts several lines). Check after: `healthcheck.sh`, the page and the volcanoes.
@@ -1548,5 +1578,72 @@ and a *merged* cluster means either a <55px (tight, good) gap or an overlap (loo
   `user_data` forces the replacement). No local nginx, Docker or Podman, so no local `nginx -t`; the box runs
   `nginx -t` before it starts nginx, and `healthcheck.sh` shows nginx FAIL if the config is bad. **Expected:** a
   full load moves about 25 MB, not 112 MB (an estimate from the sizes, not an end-to-end measurement).
-  **After the apply:** `healthcheck.sh`; publish the spinner build; then read-only checks on the box (`nginx -T`
-  gzip lines; the access-log bytes for `_data.js` near 22 MB) and DevTools (`content-encoding: gzip`).
+  **APPLIED and VERIFIED (2026-10-09, read-only SSM):** the box launched 2026-10-08 04:59 UTC; `nginx -T` shows the
+  4 gzip lines; the spinner build is live (`id="px-loading"` in the served HTML); access log for `_data.js`:
+  2 × 200 with 22.63 MB sent (not 104 MB) and 3 × 304 (0 bytes), so browsers keep their copy between visits.
+- 2026-10-09 — **Interface password: the user does not have the plain text.** (STE.) `~/.serac_aws` holds only
+  the bcrypt hash (one-way), so it cannot go into the login window. Metadata only (no secret read): the SSM
+  parameter `/vpn-project/webapp/htpasswd` is at version 2, last changed 2026-10-02 07:43 +02:00 (the user's own
+  login change); `terraform plan` = no changes, so the local file is the same hash. The 2026-10-08 gzip apply did
+  NOT change the login; successful `_data.js` loads after it confirm that the login works. So the box accepts
+  the password typed on 2026-10-02. If 1Password does not have it, the user sets a new one (README "Change the
+  interface login", now with the exact `systemctl restart provision-webapp` command through `aws ssm
+  send-command`, because the box reads the parameter only at boot). bcrypt on the box (Python `crypt`, dummy
+  password): cost 05 = 2 ms, cost 10 = 61 ms a check → recommendation: cost 05 + a random password of 20+
+  characters (batch B step 3 revised). Hints aligned to `htpasswd -nB <user>`: `variables.tf` description (was
+  `-nbB`, which puts the password on the command line) and the `ec2.tf` precondition message (was `-nBC 10`).
+  `terraform validate` OK; `terraform plan` = no changes.
+  **Resolved:** the user set a new login (SSM parameter version 3, 2026-10-09 10:00 +02:00) and confirmed it works.
+- 2026-10-09 — **New validation data wired in (`VALIDATION_DIR` = `JSC_Demo`), code done; Dropbox build by the
+  user.** (STE.) Request: update the interface (local / Dropbox first) with the new validation data in
+  `JSC_Demo/20261006`; "we now have different dates for the validation". **Findings (aggregates only):** the files
+  have NO date column, so the folder date is the only date. The validation REPORT has 151 contrasts, 68 compounds,
+  WT 68 / KO 67 / BIND 16, `target` can list several genes (`STAT2;PDCD2L`; not used by the build). It holds all 48
+  contrasts of `20260817` again, RE-ANALYSED (13,873 MEASURE rows with other logfc/pvalue, 27 change
+  significance), plus 7 contrasts already in older tranches. 61 plates: 15 …VM (dated 2026-08-17), 7 primary
+  references (Pw50, Pw82KO 06-01; Pw83 05-20; Pw108 06-17; Pw163/166 07-24; Pw226 08-14), 39 new (37 `Pw…VD` /
+  `DG…VD_<well>` validation plates, Pw44KO, Pw42WTNOFAIMS); 2 contrasts have no plate in the name. Its MSSCORE is
+  per target (40 rows: target, msscore, associationscore). `JSC_Demo/20260817` = `Data_Prototype/20260817` minus a
+  bad header row. **Also found:** `Data_Prototype/20261006` is a NEW primary screen (928 contrasts, 816 compounds,
+  20 plates such as `DG30_A02_Pw292`, WildType HepG2; MEASURE 1.98 GB vs 10 GB for all older tranches; MSSCORE
+  renames `association_score` → `associationscore` and drops genetic/literature scores, harmless: the y-axis comes
+  from OpenTargets). The user chose to include it (its plates → 2026-10-06). **User decisions:** new plates only get
+  the validation folder date; one validation block per date; read JSC_Demo through `VALIDATION_DIR`. **Old rule
+  would have** moved the 15 …VM plates and the 7 primary plates (with all their compounds) to 2026-10-06. **Checks:**
+  73 tests OK; synthetic build with a validation dir renders; headless Chromium: blocks "validation 2026-05-20 (5)",
+  "2026-06-20 (2)", "2026-06-25 (2)", then the dated blocks; ticking one block parent ticks only its stem; no JS
+  errors. **To build (user):** `IFACE_OVERWRITE: true` (new tranches), `UPDATE_PNGS: true` (new compounds), then the
+  Dropbox command in the README. Expected notes in the log: per-target MSSCORE skipped; about 0.8–0.9 M MEASURE rows dropped as
+  older copies (the 48 contrasts in BOTH 20260817 folders, 398,523 rows each, plus 7 older contrasts); 2
+  no-plate contrasts dropped.
+- 2026-10-09 — **Why the `UPDATE_PNGS` step is slow (diagnosed, no code change).** (STE.) `download_cdd_pngs`
+  walks the WHOLE CDD saved search (`CDD_SEARCH`, 17,400 molecules), not only the interface compounds. A PNG on
+  disk is a local skip (fast). A new PNG is a CDD async render job (`~/CDD_Vault_API/python/download_cdd_structures.py`
+  `fetch_one`: submit, then poll `/exports/<job>` with 0.3 → 2 s backoff): 12 workers give about 2–4 new PNGs per
+  second (measured from the progress lines). The printed ETA uses the average rate, fast skips included, so it is
+  too low while a run of new molecules is in progress. HTTP 429 = the CDD rate limit; `fetch_one` does not retry,
+  so those PNGs wait for the next run. HTTP 400 = CDD refused the job (often a molecule with no structure).
+  `data/srb_png` held 14,840 PNGs before this run (written 2026-05-12: 10,097; 06-25: 1,836; 06-30: 329; 08-10:
+  2,316; 08-13: 10), so about 2,500–3,500 library molecules were new since August: a one-time catch-up. Only about
+  140 of them are interface compounds (730 of the 870 new-set compounds had a PNG); the build draws a missing
+  thumbnail with RDKit. Possible change (not approved): download only the interface compounds, and retry a 429.
+- 2026-10-09 — **Filter defaults for the Dropbox build with the 2026-10-06 data.** (STE.) Request: open the
+  interface with only the "validation 2026-10-06" plates ticked, Activity Single + Low (no change), all DepMap
+  dependency, confidence and LoF benefit boxes, and target validation "FBXO31 dependent" only. **Code change:**
+  the JS forced every validation plate off, and the target-filter defaults were fixed in `build_interface`.
+  Now `SHOW_PLATE` takes `validation YYYYMMDD`, and four new config keys hold the Activity / DepMap / Confidence /
+  LoF defaults (see Interface conventions). **Config set:** `SHOW_PLATE: [validation 20261006]` (2026-08 builds
+  used `[20260812, 20260813, 20260814]`), `ACTIVITY_DEFAULTS: [Single, Low]`, `DEPMAP_DEFAULTS` /
+  `CONF_DEFAULTS` / `LOF_DEFAULTS: []`; `FBXO31_INDEPENDENT_TICKED: false` was already set. **Real plate2date
+  (build of 2026-10-09 14:54, plate IDs and dates only):** 325 plates, latest 2026-10-06. That date has 59 plates:
+  38 validation plates (KO 21, WT 17) in 21 stems, all new, so the block ticks 38 plates; and 21 plates with no
+  suffix: the 20 primary-screen plates plus `Pw42WTNOFAIMS`. That plate stays in the "2026-10-06" date block,
+  unticked. Adding `WTNOFAIMS` to `VALIDATION_PLATE_SUFFIXES` would move it to a stem `Pw42`, but the suffixes
+  also set compounds_df `is_primary` / `is_completion` and the cached panels, so that change needs
+  `IFACE_OVERWRITE: true`. Decision open (user). **Checks:** 79 tests OK; headless Chromium on a synthetic build
+  with the real filter keys: only the validation block ticked, Activity Low + Single, all DepMap / Confidence /
+  LoF boxes, target validation "FBXO31 dependent" only. **Follow-up the same day:** config `LABELS_ON` for the
+  Labels eye toggle (set to `true`, no change). Synthetic check: `false` opens with the eye shut and 5 labels
+  (dependent only), and one click gives 264; `true` is the reverse. 80 tests OK. **Then the user set**
+  `SHOW_PLATE: [validation 20261006, 20261006]` to tick the new primary screen too: 59 plates on the real
+  plate2date (38 validation + 20 primary + `Pw42WTNOFAIMS`, which is in the date block, so it is ticked either way).

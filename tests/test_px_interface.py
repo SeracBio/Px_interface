@@ -334,6 +334,84 @@ class TestDuplicateTrancheDate(unittest.TestCase):
             self.assertEqual(out.plate2date.get(p), _later)
 
 
+class TestValidationDir(unittest.TestCase):
+    """VALIDATION_DIR (2026-10-09): validation exports shaped like the real JSC_Demo folders load as
+    tranches. Their folder date goes only to plates with no date yet (re-runs and primary-screen
+    references keep their first date); a contrast in several tranches keeps only the newest copy; a
+    per-target MSSCORE (no contrast column) is skipped; the full build completes."""
+
+    @classmethod
+    def setUpClass(cls):
+        make_synthetic.main('tmp_vdir')
+        cls.reexported = make_synthetic.add_validation_dir('tmp_vdir')
+        params = px.PARAMS('tmp_vdir/config.yaml').load_params()
+        data = px.DATA()
+        data.load_chemical_lib_df(params); data.load_old_df(params)
+        data.load_new_df(params)
+        data.get_contaminants_and_controls(params); data.get_gene_research(params)
+        out = px.OUTPUT()
+        out.combine_datasets(data, params)
+        out.get_de_validated(data, params)
+        out.get_iface(data, params)                       # full build must complete
+        out.build_interface(data, params, 'tmp_vdir/out_test')   # and the render (a no-plate row crashed it)
+        cls.data, cls.out = data, out
+
+    def test_render_completes(self):
+        """The interface HTML is written for the fixture with validation folders."""
+        # build_interface reached the end and wrote the page
+        self.assertTrue(os.path.exists('tmp_vdir/out_test/interfaces/Serac_Px_interface.html'))
+
+    def test_contrast_without_plate_dropped(self):
+        """A contrast with no plate in the file or in its name is dropped at load (it cannot show)."""
+        for t in (self.data.FBX_MEASURE, self.data.FBX_REPORT):
+            # no row of the vs_DMSO contrast remains, and no row has a missing plate
+            self.assertFalse(t['uniquecontrast'].str.contains('_vs_DMSO_DG37_A01').any())
+            self.assertFalse(t['plate'].isna().any())
+
+    def test_validation_tranches_found(self):
+        """Both validation folders join the 2 FBX tranches; files without the FBX_ prefix resolve."""
+        # 2 validation folders, 4 tranches in all
+        self.assertEqual(len(self.data.VAL_TRANCHES), 2)
+        self.assertEqual(len(self.data.FBX_TRANCHES), 4)
+        # REPORT and MEASURE resolve in each validation folder (names like 202606025_REPORT.csv)
+        self.assertTrue(all(px._fbx_csv(t, k) for t in self.data.VAL_TRANCHES for k in ('REPORT', 'MEASURE')))
+
+    def test_new_plates_get_folder_date(self):
+        """A plate first seen in a validation folder takes that folder's date."""
+        p2d = self.out.plate2date
+        # Pw20VD is new in the 0620 folder, Pw21VD in the 0625 folder
+        self.assertEqual(p2d['Pw20VDKO'], '2026-06-20')
+        self.assertEqual(p2d['Pw21VDWT'], '2026-06-25')
+
+    def test_existing_plates_keep_first_date(self):
+        """A re-run keeps its first validation date; a primary reference keeps its FBX date; a contrast
+        with no plate in its name adds no plate."""
+        p2d = self.out.plate2date
+        # Pw20VDWT is in both folders: the earlier (first) date stays
+        self.assertEqual(p2d['Pw20VDWT'], '2026-06-20')
+        # Pw00 is the primary-screen reference: the 20260601 FBX tranche date stays
+        self.assertEqual(p2d['Pw00'], '2026-06-01')
+        # the vs_DMSO contrast has no plate in its name -> no 'nan' plate
+        self.assertNotIn('nan', p2d)
+
+    def test_newest_copy_wins(self):
+        """The contrast re-exported by the later folder keeps only the later copy (logfc 3.0)."""
+        rows = self.data.FBX_MEASURE[self.data.FBX_MEASURE['uniquecontrast'] == self.reexported]
+        # the later folder's 60 gene rows only, not 60 + 60
+        self.assertEqual(len(rows), 60)
+        # with the later folder's values
+        self.assertTrue((rows['logfc'] == 3.0).all())
+        # one REPORT row for the contrast
+        self.assertEqual(int((self.data.FBX_REPORT['uniquecontrast'] == self.reexported).sum()), 1)
+
+    def test_per_target_msscore_skipped(self):
+        """The per-target MSSCORE (target/msscore, no contrast) does not reach FBX_MSSCORE."""
+        # no column of the per-target file leaks in
+        self.assertNotIn('msscore', self.data.FBX_MSSCORE.columns)
+        # every MSSCORE row still has a contrast
+        self.assertFalse(self.data.FBX_MSSCORE['uniquecontrast'].isna().any())
+
+
 class TestPlateReconstruction(unittest.TestCase):
     """Validation-only tranches omit the `plate` column; it's embedded in the uniquecontrast
     (…_complement_Pw144VM_BIND -> Pw144VMBIND). _plate_from_uc parses it and _ensure_plate fills a
@@ -443,6 +521,14 @@ class TestRender(unittest.TestCase):
         self.assertLess(html.index('id="px-loading"'), html.index('Plotly.newPlot('))
         # the removal hook (window load + Plotly quiet) is emitted once
         self.assertEqual(html.count('gd.on("plotly_afterplot", wait)'), 1)
+
+    def test_validation_blocks_by_date_wired(self):
+        """The Plates filter builds one validation block per date (a stem under its earliest plate date)."""
+        html = open(os.path.join(self.out_dir, 'interfaces', 'Serac_Px_interface.html')).read()
+        # the per-date grouping and its block builder are emitted
+        self.assertIn('validationBlock(d, valByDate[d])', html)
+        # the block label carries the date
+        self.assertIn('class="pf-date-all">validation \' + label', html)
 
     def test_volcanoes_written(self):
         """At least one volcano SVG is rendered into volcanoes_px/."""
@@ -677,6 +763,72 @@ class TestFbxo31IndependentTicked(unittest.TestCase):
         self.assertEqual(self._defaults_line('tmp/out_indep_on'), 'null')
 
 
+class TestFilterDefaults(unittest.TestCase):
+    """The config filter defaults reach the page: SHOW_PLATE 'validation <date>' ticks that validation
+    block (the JS no longer forces validation plates off), ACTIVITY_DEFAULTS picks the Activity boxes,
+    an empty DEPMAP/CONF/LOF_DEFAULTS ticks every box (injected null, not []), and LABELS_ON false
+    starts the Labels eye toggle off."""
+
+    @classmethod
+    def setUpClass(cls):
+        import copy
+        params, data, output = _pipeline()
+        params = copy.copy(params)                      # the cached params keep the fixture values
+        cls.stem = ['Pw10KO', 'Pw10MLN', 'Pw10WT']
+        params.SHOW_PLATE = ['validation ' + min(output.plate2date[p] for p in cls.stem).replace('-', '')]
+        params.ACTIVITY_DEFAULTS = ['Single', 'Low']
+        params.DEPMAP_DEFAULTS, params.CONF_DEFAULTS, params.LOF_DEFAULTS = [], [], []
+        params.LABELS_ON = False
+        output.build_interface(data, params, 'tmp/out_filter_defaults')
+        with open('tmp/out_filter_defaults/interfaces/Serac_Px_interface_data.js') as f:
+            cls.js = f.read()
+        with open('tmp/out_filter_defaults/interfaces/Serac_Px_interface.html') as f:
+            cls.html = f.read()
+
+    def _inj(self, name):
+        """window.__<name>__ in the data file: None for null, else the JSON.parse("...") payload."""
+        import re
+        v = re.search(rf'window\.__{name}__ = (.*?);\n', self.js).group(1)
+        return None if v == 'null' else json.loads(json.loads(v[len('JSON.parse('):-1]))
+
+    def test_validation_block_ticked(self):
+        """SHOW_PLATE ['validation <first date of the Pw10 stem>'] -> __PLATE_DEFAULTS__ holds the whole
+        Pw10 stem and validation plates only (no date block is named, so no primary plate ticks)."""
+        plates = self._inj('PLATE_DEFAULTS')
+        # every member of the Pw10 stem starts ticked
+        self.assertLessEqual(set(self.stem), set(plates))
+        # no primary plate starts ticked
+        self.assertTrue(all(p.endswith(('WT', 'MLN', 'KO')) for p in plates), plates)
+
+    def test_js_ticks_listed_validation_plates(self):
+        """The Plates init ticks exactly the listed plates, so a listed validation plate starts ticked;
+        with no list, every plate except the validation plates starts ticked (as before)."""
+        # the init rule that lets plate_defaults tick a validation plate
+        self.assertIn('ticked[p] = plateDefaults ? plateDefaults.indexOf(p) !== -1 : !isValidationPlate(p);', self.html)
+
+    def test_activity_defaults_from_config(self):
+        """ACTIVITY_DEFAULTS ['Single', 'Low'] -> only the matching Activity levels start ticked."""
+        # the bare names resolve to the real level labels
+        self.assertEqual(sorted(self._inj('ACTIVITY_DEFAULTS')), ['Low (2-10)', 'Single (1)'])
+
+    def test_empty_target_defaults_tick_all(self):
+        """Empty DEPMAP/CONF/LOF_DEFAULTS -> null, so every box starts ticked. An injected [] is truthy
+        in JS and would untick every box, which hides all genes."""
+        for name in ('DEPMAP_DEFAULTS', 'CONF_DEFAULTS', 'LOF_DEFAULTS'):
+            # null = all boxes ticked
+            self.assertIsNone(self._inj(name), name)
+
+    def test_labels_toggle_off_from_config(self):
+        """LABELS_ON false -> __LABELS_DEFAULT_ON__ = false, and the JS starts hideOtherLabels and the eye
+        icon from it: only FBXO31-dependent (+ pinned) genes keep labels on load; a click still flips it."""
+        # the config value reaches the page
+        self.assertIn('window.__LABELS_DEFAULT_ON__ = false;', self.js)
+        # the label rule starts from it
+        self.assertIn('var hideOtherLabels = (window.__LABELS_DEFAULT_ON__ === false);', self.html)
+        # the eye icon starts from it
+        self.assertIn('tg.classList.toggle("off", hideOtherLabels);   // icon follows labels_default_on', self.html)
+
+
 class TestMemoryFreeing(unittest.TestCase):
     """FREE_UPSTREAM frees the combined measure/mscore/report inside get_iface (measure right after
     `meas` is built, mscore/report after their derivations) so the ~65M-row frame doesn't linger
@@ -740,9 +892,10 @@ class TestResolveNJobs(unittest.TestCase):
 
 
 class TestResolvePlateDefaults(unittest.TestCase):
-    """SHOW_PLATE (config/--show_plate) picks which plate dates open default-ticked:
+    """SHOW_PLATE (config/--show_plate) picks which Plates-filter blocks open default-ticked:
     empty/None -> the single latest date; a list of YYYYMMDD dates -> exactly those dates'
-    plates, with YYYYMMDD normalised to the YYYY-MM-DD form plate2date stores."""
+    plates, with YYYYMMDD normalised to the YYYY-MM-DD form plate2date stores;
+    'validation YYYYMMDD' -> the stems of that validation block (a date never ticks them)."""
 
     def setUp(self):
         self.p2d = {'Pa': '2026-08-11', 'Pb': '2026-08-12', 'Pc': '2026-08-12', 'Pd': '2026-08-13'}
@@ -763,6 +916,24 @@ class TestResolvePlateDefaults(unittest.TestCase):
         # YAML ints and stray blank/empty entries are coerced/dropped, not errors
         plates, _ = px.resolve_plate_defaults(self.p2d, [20260811, '', ' '])
         self.assertEqual(plates, ['Pa'])
+
+    def test_validation_block_ticks_whole_stem(self):
+        """'validation 20260812' with suffixes (WT, KO) -> both plates of stem Pv (first dated 08-12,
+        KO re-run 08-13), and no primary plate or other stem. This is the block the filter shows."""
+        p2d = {**self.p2d, 'PvWT': '2026-08-12', 'PvKO': '2026-08-13', 'PwWT': '2026-08-13'}
+        plates, blocks = px.resolve_plate_defaults(p2d, ['validation 20260812'], ('WT', 'KO'))
+        # the whole Pv stem, nothing else
+        self.assertEqual(plates, ['PvKO', 'PvWT'])
+        # the label is the Plates-filter block head
+        self.assertEqual(blocks, ['validation 2026-08-12'])
+
+    def test_date_skips_validation_plates(self):
+        """'20260813' with suffixes (WT, KO) -> only the primary plate Pd. PvKO and PwWT have that date,
+        but they sit in validation blocks, so a date entry does not tick them."""
+        p2d = {**self.p2d, 'PvWT': '2026-08-12', 'PvKO': '2026-08-13', 'PwWT': '2026-08-13'}
+        plates, _ = px.resolve_plate_defaults(p2d, ['20260813'], ('WT', 'KO'))
+        # the date block only
+        self.assertEqual(plates, ['Pd'])
 
 
 class TestDownloadCddPngs(unittest.TestCase):

@@ -41,7 +41,7 @@ python python/Px_interface.py
 |---|---|---|
 | `--config` | `config/config.yaml` | path to the YAML config |
 | `--output_dir` | `output` | base dir for the HTML + volcanoes (`interfaces/` is created under it), or the config `PUBLISH_URL` to build and publish to AWS (see "Publish the interface") |
-| `--show_plate` | config `SHOW_PLATE` | dates (`YYYYMMDD`, comma-separated) whose plates start ticked |
+| `--show_plate` | config `SHOW_PLATE` | Plates-filter blocks that start ticked, comma-separated: a date (`YYYYMMDD`) or `validation YYYYMMDD` |
 
 Four config flags set what the CLI rebuilds (the notebook uses the same flags):
 
@@ -56,6 +56,17 @@ Four config flags set what the CLI rebuilds (the notebook uses the same flags):
 
 > **CAUTION:** `DFRAW_OVERWRITE: true` replaces the files at `DFRAW_PATH` and `MS_PATH`. Make a copy of
 > them before the first run.
+
+The build reads two kinds of tranche folders (date-named subfolders, `YYYYMMDD…`):
+
+- **`FBX_DIR`** — screen tranches (`*_FBX_REPORT.csv`, `*_FBX_MEASURE.csv`, `*_FBX_MSSCORE.csv`). A plate
+  gets the date of its folder. If two folders hold the same plate, the later folder gives the date.
+- **`VALIDATION_DIR`** — validation exports (`*_REPORT.csv`, `*_MEASURE.csv`, with the plate in the
+  contrast name). A folder date goes only to plates that have no date yet, so re-runs and primary-screen
+  references keep their first date. The Plates filter shows one validation block per date.
+
+If a contrast is in more than one folder, the build keeps the rows of the newest folder. It skips a
+per-target MSSCORE (no contrast column) and drops a contrast with no plate in the file or in its name.
 
 To write the interface into the Dropbox ML folder (quote the path — it contains spaces):
 
@@ -233,14 +244,25 @@ Two files must exist locally before an apply (both gitignored, neither is in the
   1Password two times, so the password does not go into the shell history). Without it the placeholder
   hash is baked in and nginx returns **HTTP 500** after the password prompt.
 
-**Change the interface login** (user name and password):
+**Change the interface login** (user name and password). `~/.serac_aws` holds only a bcrypt hash
+of the password. Nobody can get the password back from it, so keep the password in 1Password.
 
-1. `cp -p ~/.serac_aws ~/.serac_aws.bak`, then `htpasswd -nB <user> > ~/.serac_aws && chmod 600 ~/.serac_aws`.
-2. `terraform plan`, then `terraform apply`. The apply writes the new line to the SSM parameter
-   `/<project>/webapp/htpasswd`.
-3. The box reads that parameter only at boot. An apply that also replaces the EC2 gives the new login
-   at once. Else, copy the parameter into `/etc/nginx/.htpasswd` on the box by hand (SSM session).
-4. Put the new password in 1Password, and tell the users.
+1. In 1Password, make a random password of 20 or more characters, and save it.
+2. `cp -p ~/.serac_aws ~/.serac_aws.bak`, then `htpasswd -nB <user> > ~/.serac_aws && chmod 600 ~/.serac_aws`.
+   It asks for the password two times: paste it from 1Password. Keep the default cost (`-B` = 05):
+   nginx checks the hash on each file request, and on the box cost 10 takes 61 ms a file (cost 05: 2 ms).
+3. `terraform plan` (expect `aws_ssm_parameter.htpasswd` to change in place), then `terraform apply`.
+   The apply writes the new line to the SSM parameter `/<project>/webapp/htpasswd`.
+4. The box reads that parameter only at boot. If the apply did not replace the EC2, run the boot
+   steps again (they read the parameters, sync from S3 and restart nginx; about one minute):
+   ```bash
+   IID=$(terraform output -raw ec2_instance_id)
+   CID=$(aws ssm send-command --region eu-north-1 --instance-ids "$IID" --document-name AWS-RunShellScript \
+     --parameters 'commands=["systemctl restart provision-webapp"]' --query Command.CommandId --output text)
+   sleep 90; aws ssm get-command-invocation --region eu-north-1 --instance-id "$IID" --command-id "$CID" \
+     --query Status --output text    # Success
+   ```
+5. Log in from a private browser window, then tell the users.
 
 > **An `apply` that touches `user_data` or the private IP REPLACES the EC2.** The replacement
 > re-provisions itself from S3 at boot, so upload the interface to S3 *before* applying.

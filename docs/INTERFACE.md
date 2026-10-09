@@ -247,7 +247,8 @@ rounded to step multiples, so round handle values land **exactly** — MS step =
   (`rest`/"other" has no box, always shown). Runs on tick change, V/D switch, session load, and init.
 - **Labels eye toggle** — `#label-toggle` (open/closed-eye SVG) flips `hideOtherLabels`; when on,
   `refreshLabels()` keeps only FBXO31-dependent (and pinned) gene labels — every "other"/independent
-  label is skipped. No re-layout of data, just a `scene.annotations` rebuild.
+  label is skipped. No re-layout of data, just a `scene.annotations` rebuild. Config `LABELS_ON` sets the
+  state on load (see the config list below).
 - **Leader-line label declutter (2D + labels-off)** — with the labels toggle off in the 2D view,
   `declutterLabels()` spreads the (few) dependent labels so they don't overlap and draws a short arrow
   from each moved label back to its dot. It measures the *rendered* label boxes (gl3d annotations are
@@ -366,11 +367,15 @@ Hash keys: `p=` (exact plate list), `pg`/`pc` (pinned), `hg`/`hc` (hidden), `sp=
 - `config.yaml`: `ACTIVE_C` (pharma dot), `BMS_C` (BMS dot), `VALIDATION_PLATE_SUFFIXES`
   (`[WT, MLN, KO]`), `GENE_SIZE_BUCKETS` (6 dot px for #significant-compounds = 1,2,3,4,5,>5),
   `GENE_RING_PX` (ring rim thickness in px; underlay dot = fill + 2×this).
-- **`SHOW_PLATE` / `--show_plate`** — which plate **date(s)** open default-ticked in the Plates filter.
-  Config `SHOW_PLATE: [20260812, 20260813]` (list of YYYYMMDD), or CLI `--show_plate "20260812, 20260813"`
-  (overrides the config). Empty/absent → the single **latest** date only (previous default). `build_interface`
-  resolves it via `resolve_plate_defaults(plate2date, SHOW_PLATE)` (normalises YYYYMMDD → the `YYYY-MM-DD`
-  form `plate2date` stores) and passes the result as `plot_3d_interface(plate_defaults=)`.
+- **`SHOW_PLATE` / `--show_plate`** — which blocks of the Plates filter open default-ticked.
+  Config `SHOW_PLATE: [20260812, validation 20261006]`, or CLI `--show_plate "20260812, validation 20261006"`
+  (overrides the config). A date (`YYYYMMDD`) ticks the plates of that date block. `validation YYYYMMDD` ticks
+  all stems of that validation block. A validation stem is in the block of its earliest plate date, as the filter
+  shows it. A date entry never ticks a validation plate. Empty/absent → the single **latest** date only.
+  `build_interface` resolves it via `resolve_plate_defaults(plate2date, SHOW_PLATE, VALIDATION_PLATE_SUFFIXES)`
+  (normalises YYYYMMDD → the `YYYY-MM-DD` form `plate2date` stores) and passes the result as
+  `plot_3d_interface(plate_defaults=)`. The JS ticks a plate when `plate_defaults` lists it. With no list, all
+  plates except the validation plates start ticked.
 - **`VALIDATED_TARGET_FILE`** — optional path to a comma/whitespace-delimited gene list (e.g.
   `data/validated.txt`) that **replaces** the CDD-derived validated (FBXO31-dependent) targets at the
   end of `get_de_validated` (genes upper-cased + deduped). Empty/absent keeps the CDD list. Drives the
@@ -380,6 +385,16 @@ Hash keys: `p=` (exact plate list), `pg`/`pc` (pinned), `hg`/`hc` (hidden), `sp=
   hidden on load, still toggle-able via the box/legend); `true`/absent ticks both. `build_interface`
   passes it through as `plot_3d_interface(validation_defaults=None or ['FBXO31 dependent'])`. Target
   filter only — the compound-validation filter is unaffected.
+- **`ACTIVITY_DEFAULTS`, `DEPMAP_DEFAULTS`, `CONF_DEFAULTS`, `LOF_DEFAULTS`** — the boxes that start ticked in the
+  Activity filter (compound filters) and in the DepMap dependency, Confidence and LoF benefit filters (target
+  filters). Give a list of box names, e.g. `[Single, Low]` or `[Selective, Non-essential]`. In a target filter, a
+  name matches a box that is equal to it or starts with it. In Activity, a name matches a box that contains it
+  (`Single` → `Single (1)`). Case is ignored. An empty list ticks all boxes. When a key is absent,
+  the build uses the earlier fixed values: `[Single, Low]`, `[Selective, Non-essential]`, `[High, Med]`, `[Yes]`.
+- **`LABELS_ON`** — the state of the Labels eye toggle when the page opens. `true`/absent shows all gene labels.
+  `false` shows only the labels of FBXO31-dependent and pinned genes. The toggle still works in the page.
+  `build_interface` passes it as `plot_3d_interface(labels_default_on=)`, which injects `__LABELS_DEFAULT_ON__`.
+  The JS starts `hideOtherLabels` and the eye icon from it.
 - **`NJOBS`** — parallel workers for the volcano render (the only multiprocessing in the build:
   joblib base render + threaded SVG writes). `0`/blank/`<0` → auto `max(1, CPU-2)`; a positive int →
   exactly that many. `build_interface` passes `resolve_n_jobs(params.NJOBS)` to

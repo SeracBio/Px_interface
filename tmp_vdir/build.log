@@ -1,0 +1,42 @@
+> Chemical lib dim: (40, 8)
+> df_raw (107700, 13) | MS (120, 5)
+> FBX_MEASURE: dropped 60 rows whose contrast a newer tranche also holds
+> note: FBX_MEASURE: dropped 60 rows of 1 contrast(s) with no plate in the file or the name
+> note: no FBX_MSSCORE with contrasts in 2 tranche(s), skipped: 20260620 (validation), 20260625 (validation)
+> FBX_REPORT: dropped 1 rows whose contrast a newer tranche also holds
+> note: FBX_REPORT: dropped 1 rows of 1 contrast(s) with no plate in the file or the name
+> FBX: 2 tranches + 2 validation | MEASURE 3,180 rows | MSSCORE 2,880 | REPORT 53 (53 experiments)
+> loaded degradation research for 300 genes
+> combined MEASURE: 110,880 rows | 412 experiments | 64 compounds | 300 genes
+> combined MS-SCORE: 5,493 (gene,compound) rows | 1,837 (gene,plate) | FBX 2,880, df_raw 2,613
+> combined REPORT: 412 uniquecontrasts | compounds 64 | plates 15
+> plate dates: 15 plates mapped | report spans 2026-05-20 .. 2026-06-25
+> categorized string columns | MEASURE now 0.0 GB
+> target: 6 validated - 3 devalidated targets
+> compound: 6 validated - 3 devalidated compounds
+> iface_df: 300 gene dots (whole Px) | disease_area set for 300
+> 40/61 compounds present in serac_df (rest excluded)
+> molecule_batch_id reconstructed from uniquecontrast for 3 rows; 0 still missing
+> dropped 123 Silent-activity rows -> 1,180 remain
+> validation-stem completion: added 1,160 ride-along condition rows across 728 (gene,compound) pairs
+> primary-screen attach: 24 existing + 711 ride-along primary volcanoes flagged across 735 validation (gene,compound) pairs
+> compounds_df: 3,051 (gene,compound,plate) rows across 291 genes, 364 volcanoes to render
+> saved interface inputs -> tmp_vdir/interface/ (iface_df, compounds_df, meas, plate2date)
+> Plates default-ticked: 2 plate(s) on 2026-06-25
+> gene_research: 300 genes
+> 300 / 300 genes after filtering (x=R2, y=association_score, z=ms_score)
+  [highlight] corner-top-40=40, association_score>None: 0, must=17, union=49
+  [range_sliders] panels built for all 300 plotted genes
+compound panels:   0%|                                | 0/291 [00:00<?, ?gene/s]compound panels:  67%|██████████████▏      | 196/291 [00:00<00:00, 391.02gene/s]compound panels: 100%|█████████████████████| 291/291 [00:00<00:00, 436.00gene/s]
+> long-format panel: 1,135 compound entries across 291 genes with compounds (page_size=5, 13 plates)
+> built 1,135 structure thumbnails across 300 genes (png=0, rdkit=1135, missing=0)
+> shared y-max on 315 validation-stem volcano(es)
+> rendering 364 base volcanoes (one per experiment) for 3,051 (gene,plate) cells on 30 workers (0 cached) [significant SVG]...
+volcano bases:   0%|                                   | 0/364 [00:00<?, ?vol/s]volcano bases:   0%|                           | 1/364 [00:01<06:53,  1.14s/vol]volcano bases:  38%|█████████▏              | 140/364 [00:01<00:02, 107.34vol/s]volcano bases:  82%|███████████████████▋    | 298/364 [00:02<00:00, 181.04vol/s]volcano bases: 100%|████████████████████████| 364/364 [00:02<00:00, 158.70vol/s]
+> volcanoes: 0 cached, 364 base(s) rendered -> tmp_vdir/out/interfaces/volcanoes_px  (3,051 cells share 364 bases)
+> stem trace: 2,643 gene positions across 361 validation contrasts
+  [range_sliders] default box ≈ 300 genes; gene labels shown while ≤ 800 in range (drag handles to widen/narrow)
+  [activity_defaults] focus view starts on ['Low (2-10)', 'Single (1)']
+  [gene_research] 300/300 records kept (plotted genes only) — 0.1 MB injected
+wrote tmp_vdir/out/interfaces/Serac_Px_interface.html  (0.3 MB main doc)  +  Serac_Px_interface_data.js  (0.9 MB, deferred)
+> saved compound panels -> tmp_vdir/interface/panels.json
