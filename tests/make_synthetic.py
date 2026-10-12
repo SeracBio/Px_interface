@@ -214,20 +214,23 @@ def add_validation_dir(out_rel, seed=7):
     JSC_Demo exports — no FBX_ prefix, no plate column (the plate sits in the contrast) and a per-target
     MSSCORE with no contrast. The later folder re-exports one contrast of the earlier one (logfc 3.0),
     adds new plates, and holds a contrast with no plate in its name. The earlier folder holds a primary
-    reference on the FBX plate Pw00. Sets VALIDATION_DIR in <out_rel>/config.yaml."""
+    reference on the FBX plate Pw00. Every contrast has the target 'G_00000;G_00001'. The later folder
+    also holds a second batch (002) of one compound on a new plate (Pw22VD), where both target genes are
+    not significant (a negative validation result). Sets VALIDATION_DIR in <out_rel>/config.yaml."""
     out, rng, rid = os.path.join(REPO_ROOT, out_rel), np.random.RandomState(seed), itertools.count(1)
     vdir = os.path.join(out, 'validation')
     dot = lambda c: c.replace('-', '.')
-    cuc = lambda c, tail: f'{dot(c)}.001_vs_{dot(c)}.001_complement_{tail}'
+    cuc = lambda c, tail, b='001': f'{dot(c)}.{b}_vs_{dot(c)}.{b}_complement_{tail}'
     c7, c8 = COMPOUNDS[7], COMPOUNDS[8]
     folders = {('20260620', '20260620'): [(c7, cuc(c7, 'Pw20VD_WT'), 'WT'), (c7, cuc(c7, 'Pw20VD_KO'), 'KO'),
                                           (c7, cuc(c7, 'Pw00'), '')],
                ('20260625', '202606025'): [(c7, cuc(c7, 'Pw20VD_WT'), 'WT'),   # re-export: the newer copy wins
                                            (c8, cuc(c8, 'Pw21VD_WT'), 'WT'), (c8, cuc(c8, 'Pw21VD_KO'), 'KO'),
+                                           (c8, cuc(c8, 'Pw22VD_WT', '002'), 'WT'), (c8, cuc(c8, 'Pw22VD_KO', '002'), 'KO'),
                                            (c8, f'{dot(c8)}.001_vs_DMSO_DG37_A01', '')]}
     for (date, fname), exps in folders.items():
         d = os.path.join(vdir, date); os.makedirs(d, exist_ok=True)
-        pd.DataFrame([{'id': next(rid), 'uniquecontrast': uc, 'srbnumber': f'{c}-001', 'condition': cond,
+        pd.DataFrame([{'id': next(rid), 'uniquecontrast': uc, 'srbnumber': uc.split('_vs_')[0].replace('.', '-'), 'condition': cond,
                        'target': f'{GENES[0]};{GENES[1]}'} for c, uc, cond in exps]
                      ).to_csv(os.path.join(d, f'{fname}_REPORT.csv'), index=False)
         rows = []
@@ -235,6 +238,8 @@ def add_validation_dir(out_rel, seed=7):
             for g in GENES[:60]:
                 lf = 3.0 if (date == '20260625' and uc == cuc(c7, 'Pw20VD_WT')) else float(rng.normal(0, 1.5))
                 pv = float(rng.uniform(1e-6, 1))
+                if '.002_' in uc and g in GENES[:2]:
+                    lf, pv = 0.2, 0.5                      # batch 002: both targets not significant
                 rows.append({'id': next(rid), 'pg': PG_OF[g], 'uniquecontrast': uc, 'logfc': lf, 'pvalue': pv,
                              'adjpval': min(pv * 2, 1.0), 'significant': int(pv < 0.05 and abs(lf) > 1), 'genes': g})
         pd.DataFrame(rows).to_csv(os.path.join(d, f'{fname}_MEASURE.csv'), index=False)

@@ -57,6 +57,30 @@ def _ensure_plate(df):
         df.loc[_m, 'plate'] = df.loc[_m, 'uniquecontrast'].map(_plate_from_uc)
     return df
 
+def validation_target_rows(report, compounds_df, meas):
+    """
+    Panel rows for the genes that validation experiments test. A validation REPORT names them in
+    `target` (';'-separated, e.g. 'STAT2;PDCD2L'). Each (target gene, contrast) that compounds_df does
+    not hold yet, and that the contrast measured, becomes a row at the gene's mean logfc there. Thus the
+    gene's panel shows every tested compound, also a negative result. The key is the contrast, so each
+    batch of a compound (e.g. -001 and -002) gives its own rows.
+    param df report: per-contrast REPORT (uniquecontrast, compound, plate, target)
+    param df compounds_df: panel rows so far (gene, uniquecontrast)
+    param df meas: volcano source (genes, uniquecontrast, logfc)
+    return df: uniquecontrast, compound, plate, gene, logfc (one row per new (gene, contrast))
+    """
+    t = (report.loc[report['target'].notna(), ['uniquecontrast', 'compound', 'plate', 'target']].astype(str)
+         .assign(gene=lambda d: d['target'].str.split(';')).explode('gene'))
+    t['gene'] = t['gene'].str.strip()
+    have = set(zip(compounds_df['gene'].astype(str), compounds_df['uniquecontrast'].astype(str)))
+    t = t[t['gene'].ne('') & pd.Series([(g, u) not in have for g, u in zip(t['gene'], t['uniquecontrast'])], index=t.index)]
+    t = t.drop_duplicates(['gene', 'uniquecontrast'])
+    m = meas.loc[meas['uniquecontrast'].isin(set(t['uniquecontrast'])) & meas['genes'].isin(set(t['gene'])),
+                 ['genes', 'uniquecontrast', 'logfc']].dropna(subset=['logfc'])
+    lf = m.groupby(['genes', 'uniquecontrast'])['logfc'].mean()
+    t['logfc'] = [lf.get((g, u)) for g, u in zip(t['gene'], t['uniquecontrast'])]
+    return t.dropna(subset=['logfc']).drop(columns='target').reset_index(drop=True)   # unmeasured gene -> no row
+
 # OpenTargets therapeutic areas in display/priority order; a gene's disease_area is its
 # highest-ranked area here. Single source of truth: get_iface ranks by it, build_interface's
 # DISEASE_AREA_COLORS must cover it (asserted there).
@@ -459,7 +483,7 @@ class OUTPUT():
         SRC = (SRC.dropna(subset=['batch', 'plate']).drop_duplicates(['batch', 'plate'])
                .rename(columns={'batch': 'MoleculeBatchID', 'plate': 'MSPlate'}))
         _cols = ['uniquecontrast', 'compound', 'plate', 'concentration', 'activity',
-                 'nr_down', 'cell_line', 'condition']
+                 'nr_down', 'cell_line', 'condition', 'target']   # target: validation exports only
         rep_dr = (data.df_raw[['uniquecontrast', 'MoleculeBatchID', 'MSPlate', 'compound']]
                   .drop_duplicates('uniquecontrast')
                   .merge(SRC, on=['MoleculeBatchID', 'MSPlate'], how='left')
@@ -627,7 +651,7 @@ class OUTPUT():
             # --- compounds_df: significant-down hits from measure + report metadata + smiles ---
             chemlib = data.serac_df[['compound', 'smiles']].drop_duplicates('compound')
             n_genes = meas.dropna(subset=['logfc', 'pvalue']).groupby('uniquecontrast')['genes'].nunique().rename('n_genes')
-            rep = self.report[['uniquecontrast', 'compound', 'plate', 'concentration', 'activity']].drop_duplicates('uniquecontrast')
+            rep = self.report[['uniquecontrast', 'compound', 'plate', 'concentration', 'activity', 'target']].drop_duplicates('uniquecontrast')
             _hit = meas.loc[(meas['significant'] == 1) & (meas['logfc'] < 0), ['genes', 'uniquecontrast', 'logfc', 'pvalue']]
             hits = _hit.merge(rep, on='uniquecontrast', how='left').rename(columns={'genes': 'gene'})
             hits = hits[hits['compound'].notna() & hits['compound'].str.startswith('SRB-')]
@@ -669,6 +693,17 @@ class OUTPUT():
             _n0 = len(compounds_df)
             compounds_df = compounds_df[compounds_df['activity'] != 'Silent']
             print(f'> dropped {_n0 - len(compounds_df):,} Silent-activity rows -> {len(compounds_df):,} remain')
+
+            def _ride_along(df):   # (gene, compound, plate, uniquecontrast, logfc) -> a not-significant context row
+                df = (df.merge(rep[['uniquecontrast', 'activity']], on='uniquecontrast', how='left')
+                        .merge(n_genes, on='uniquecontrast', how='left')
+                        .merge(chemlib, on='compound', how='left'))
+                df['molecule_batch_id'] = df['uniquecontrast'].map(_uc2mbid)
+                _m = df['molecule_batch_id'].isna()   # not in df_raw: the batch id sits in the contrast
+                _p = df.loc[_m, 'uniquecontrast'].str.split('_vs_').str[0].str.replace('.', '-', regex=False)
+                _ok = [p.startswith(c) for p, c in zip(_p, df.loc[_m, 'compound'].astype(str))]
+                df.loc[_m, 'molecule_batch_id'] = _p.where(pd.Series(_ok, index=_p.index))
+                return df.assign(is_completion=True, ms_score=float('nan'))   # bypasses MS filtering
 
             # --- complete validation stems ---------------------------------------------
             # A (gene, compound) is a hit only where it is significant-down, so a gene
@@ -716,19 +751,24 @@ class OUTPUT():
                                         ['genes', 'uniquecontrast', 'logfc']]
                                .dropna(subset=['logfc']).groupby(['genes', 'uniquecontrast'])['logfc'].mean())
                 add_df['logfc'] = [_mean_logfc.get((g, u)) for g, u in zip(add_df['gene'], add_df['uniquecontrast'])]
-                add_df = (add_df.merge(rep[['uniquecontrast', 'activity']].drop_duplicates('uniquecontrast'), on='uniquecontrast', how='left')
-                                .merge(n_genes, on='uniquecontrast', how='left')
-                                .merge(chemlib, on='compound', how='left'))
-                add_df['molecule_batch_id'] = add_df['uniquecontrast'].map(_uc2mbid)
-                _cm = add_df['molecule_batch_id'].isna()
-                _cp = add_df.loc[_cm, 'uniquecontrast'].str.split('_vs_').str[0].str.replace('.', '-', regex=False)
-                _cv = [p.startswith(c) for p, c in zip(_cp, add_df.loc[_cm, 'compound'].astype(str))]
-                add_df.loc[_cm, 'molecule_batch_id'] = _cp.where(pd.Series(_cv, index=_cp.index))
-                add_df['is_completion'] = True
-                add_df['ms_score'] = float('nan')   # completion rows (gene not significant here) bypass MS filtering
-                compounds_df = pd.concat([compounds_df, add_df[compounds_df.columns]], ignore_index=True)
+                compounds_df = pd.concat([compounds_df, _ride_along(add_df)[compounds_df.columns]], ignore_index=True)
             print(f'> validation-stem completion: added {len(_add):,} ride-along condition rows '
                   f'across {len({(a["gene"], a["compound"]) for a in _add}):,} (gene,compound) pairs')
+
+            # --- validation targets ----------------------------------------------------
+            # A validation REPORT names the gene(s) each experiment tests (`target`, ';'-separated). The
+            # gene's panel shows each such contrast, also where the gene is not significant (a negative
+            # result). The key is the contrast, so every batch of a compound shows. is_target lets the row
+            # open its validation stem client-side (a plain completion row needs a real hit in its stem).
+            compounds_df['is_target'] = False
+            _tgt = validation_target_rows(rep, compounds_df, meas)
+            _tgt = _tgt[_tgt['compound'].isin(chemlib['compound'])]   # library compounds only, as for the hits
+            if len(_tgt):
+                compounds_df = pd.concat([compounds_df, _ride_along(_tgt).assign(is_target=True)[compounds_df.columns]],
+                                         ignore_index=True)
+            _seen.update(zip(_tgt['gene'], _tgt['compound'], _tgt['plate']))
+            print(f'> validation targets: added {len(_tgt):,} tested-target rows (gene not a hit there) '
+                  f'across {len(set(zip(_tgt["gene"], _tgt["compound"]))):,} (gene,compound) pairs')
 
             # --- attach the primary-screen volcano to each validation stem -------------
             # For a (gene, compound) that has a validation-plate hit, also surface the
@@ -773,18 +813,8 @@ class OUTPUT():
             if _padd:
                 padd_df = pd.DataFrame(_padd)
                 padd_df['logfc'] = [_prim_logfc.get((g, u)) for g, u in zip(padd_df['gene'], padd_df['uniquecontrast'])]
-                padd_df = (padd_df.merge(rep[['uniquecontrast', 'activity']].drop_duplicates('uniquecontrast'), on='uniquecontrast', how='left')
-                                  .merge(n_genes, on='uniquecontrast', how='left')
-                                  .merge(chemlib, on='compound', how='left'))
-                padd_df['molecule_batch_id'] = padd_df['uniquecontrast'].map(_uc2mbid)
-                _pm2 = padd_df['molecule_batch_id'].isna()
-                _pp = padd_df.loc[_pm2, 'uniquecontrast'].str.split('_vs_').str[0].str.replace('.', '-', regex=False)
-                _pv = [p.startswith(c) for p, c in zip(_pp, padd_df.loc[_pm2, 'compound'].astype(str))]
-                padd_df.loc[_pm2, 'molecule_batch_id'] = _pp.where(pd.Series(_pv, index=_pp.index))
-                padd_df['is_completion'] = True     # a ride-along (gene not a hit here) -> bypasses MS filtering
-                padd_df['is_primary'] = True
-                padd_df['ms_score'] = float('nan')
-                compounds_df = pd.concat([compounds_df, padd_df[compounds_df.columns]], ignore_index=True)
+                compounds_df = pd.concat([compounds_df, _ride_along(padd_df).assign(is_primary=True, is_target=False)
+                                          [compounds_df.columns]], ignore_index=True)
             print(f'> primary-screen attach: {len(_mark):,} existing + {len(_padd):,} ride-along '
                   f'primary volcanoes flagged across {len(_val_pairs):,} validation (gene,compound) pairs')
 

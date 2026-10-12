@@ -1793,7 +1793,7 @@ _INTERFACE_INJECT = '''
         if (Array.isArray(t[3])) {
           for (var j = 0; j < t[3].length; j++) {
             var pl = t[3][j];
-            if (pl[6]) continue;   // completion (context) rows don't make a gene "have a compound"
+            if (pl[6] && !pl[11]) continue;   // completion (context) rows don't make a gene "have a compound"; a tested target does
             var plateOk = (!plates.length) || ticked[pl[0]];
             var actOk = (!activities.length) || !pl[3] || tickedAct[pl[3]];
             if (plateOk && actOk && msOk(pl)) return true;
@@ -1863,6 +1863,8 @@ _INTERFACE_INJECT = '''
     // Real (hit) rows obey the plate + activity ticks; completion rows ride along whenever
     // their plate is ticked AND their stem has a visible real hit for this compound (they
     // bypass the activity filter so an off-activity KO still appears next to its WT hit).
+    // pl[11] flags a validation-target row (the REPORT names this gene as a target of the
+    // experiment): on a ticked plate it opens its stem like a hit, so a negative result shows.
     function visPlates(t) {
       var real = t[3].filter(function(pl) {
         return !pl[6] && ticked[pl[0]] && (!activities.length || !pl[3] || tickedAct[pl[3]]) && msOk(pl);
@@ -1870,6 +1872,7 @@ _INTERFACE_INJECT = '''
       if (real.length === t[3].length) return real;   // all rows plainly visible -> fast path
       var okStems = {};
       real.forEach(function(pl) { if (isValidationPlate(pl[0])) okStems[valStemOf(pl[0])] = 1; });
+      t[3].forEach(function(pl) { if (pl[11] && ticked[pl[0]]) okStems[valStemOf(pl[0])] = 1; });   // tested target
       var hasStem = Object.keys(okStems).length > 0;
       var out = real.slice(), inOut = new Set(real);
       // completion rows ride along a visible stem (bypass activity filter); primary handled below
@@ -3869,6 +3872,7 @@ def plot_3d_interface(
                 has_comp = 'is_completion' in compounds_df.columns  # ride-along validation-stem condition (gene not significant here)
                 has_ms = 'ms_score' in compounds_df.columns  # per-(gene,compound,plate) MS score for the slider
                 has_primary = 'is_primary' in compounds_df.columns  # broad primary-screen volcano attached to a validation stem
+                has_tgt = 'is_target' in compounds_df.columns  # validation-target row: a tested gene, not a hit there
                 import re as _re_v   # validation-plate matcher: only these rows carry a contrast id (vk) for the trace
                 _vp_suf = [str(s).upper() for s in (plate_validation_suffixes or [])]
                 _vp_re = _re_v.compile('(' + '|'.join(_vp_suf) + ')$', _re_v.I) if _vp_suf else None
@@ -3893,7 +3897,7 @@ def plot_3d_interface(
                         smi = (cg['smiles'].dropna().iloc[0]
                                if cg['smiles'].notna().any() else None)
                         ei = len(entries)
-                        plate_rows = []   # per plate: [plate, logfc, volcano, activity, n_genes, mbid, is_completion, vk, ms_score, [fx,fy], is_primary]
+                        plate_rows = []   # per plate: [plate, logfc, volcano, activity, n_genes, mbid, is_completion, vk, ms_score, [fx,fy], is_primary, is_target]
                         # column arrays once per group (avoids a per-row Series from iterrows)
                         _plate = cg['plate'].to_numpy()
                         _logfc = cg['logfc'].to_numpy()
@@ -3903,6 +3907,7 @@ def plot_3d_interface(
                         _comp = cg['is_completion'].to_numpy() if has_comp else None
                         _ms = cg['ms_score'].to_numpy() if has_ms else None
                         _prim = cg['is_primary'].to_numpy() if has_primary else None
+                        _tgt = cg['is_target'].to_numpy() if has_tgt else None
                         _vk = cg[vkey_col].to_numpy()
                         for pi in range(len(cg)):
                             lf = _logfc[pi]
@@ -3918,6 +3923,7 @@ def plot_3d_interface(
                                 (round(float(_ms[pi]), 3) if (has_ms and pd.notna(_ms[pi])) else None),  # per-compound MS score (pl[8]); null on completion rows
                                 None,   # pl[9] = [fx, fy] focal-gene ring position on the shared base (filled in the render pass)
                                 (1 if has_primary and bool(_prim[pi]) else 0),   # pl[10] = primary-screen row -> leading cell of the stem client-side
+                                (1 if has_tgt and bool(_tgt[pi]) else 0),   # pl[11] = validation-target row -> opens its stem client-side
                             ])
                             vk = _vk[pi]
                             if pd.notna(vk):

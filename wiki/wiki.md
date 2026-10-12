@@ -450,6 +450,18 @@ data shares the namespace); no real PNGs so thumbnails are RDKit-rendered from `
   interface plates = the **MSPlate** namespace, NOT the FBX `plate` column —
   disjoint in the fixture, so `__PLATE_DEFAULTS__` filters to `[]` there (known gap; real data shares
   the namespace). Fixture `df_raw.uniquecontrast` is plate-specific so a compound's plates all survive.
+- **Validation-target rows (2026-10-12, STE).** The panel lists a compound for a gene only where the gene is
+  a significant-down hit (plus the stem completion and the primary attach below). Thus a validation
+  experiment whose target gene was not significant in any condition did not show (STAT2: 4 of its 10 target
+  contrasts showed). Now `combine_datasets` keeps the REPORT `target` column (only validation exports have it:
+  JSC_Demo and `Data_Prototype/20260817`), and `get_iface` adds `validation_target_rows`: one row per (target
+  gene, contrast) with no row yet and the gene measured, at its mean logfc, `is_target=True` +
+  `is_completion=True`. `target` is split on `;` (up to 3 genes), so one compound shows for each gene. The key
+  is the contrast, so both batches of a compound show (the build never drops a batch:
+  `keep_latest_batch_per_compound` in functions.py is not used by the interface). Client: plate-row `pl[11]`;
+  `visPlates` lets a target row on a ticked plate open its stem; `geneHasVisibleCompound` counts it. Shared
+  `_ride_along()` in `get_iface` now enriches the completion, target and primary-attach rows. Tests:
+  `TestValidationTargetRows` (2), 4 more in `TestValidationDir`; fixture batch 002 on `Pw22VD`.
 - **Validation-stem completion (2026-07-20).** A `(gene,compound)` is a hit only where it is
   significant-down, so a gene significant in one condition of a stem (e.g. WT) but not another (KO)
   would have no KO volcano — breaking the side-by-side comparison. `get_iface` now **completes stems**:
@@ -1647,3 +1659,16 @@ and a *merged* cluster means either a <55px (tight, good) gap or an overlap (loo
   (dependent only), and one click gives 264; `true` is the reverse. 80 tests OK. **Then the user set**
   `SHOW_PLATE: [validation 20261006, 20261006]` to tick the new primary screen too: 59 plates on the real
   plate2date (38 validation + 20 primary + `Pw42WTNOFAIMS`, which is in the date block, so it is ticked either way).
+- 2026-10-12 — **Validation: show every tested target, both batches (code done; Dropbox build by the user).**
+  (STE.) Report: for the 2026-10-06 validation, the STAT2 panel showed 2 of the 4 compounds that the REPORT
+  targets at STAT2. Asks: a `target` can name 2 genes (`;`); show both batches of a compound (001 and 002).
+  **Cause (aggregate check on the 2026-10-09 checkpoint):** 10 STAT2-target contrasts; 4 in the panel (2 hits +
+  their stem partners); the 6 others had STAT2 measured but not significant-down (6 of 6), and all compounds
+  are in the library. The panel listed hits only, and the build did not read `target`. Batches were not the
+  cause: the only compound with 2 batches has them on different plates. **Fix:** validation-target rows (see
+  Interface conventions). **Real-data preview (same checkpoint):** 177 target (gene, contrast) pairs, 40 genes,
+  149 contrasts; +71 rows, 36 (gene, compound) pairs, 25 genes. STAT2 4 → 10 contrasts (2 → 4 compounds);
+  PDCD2L 25 → 29 (11 → 13). **Checks:** 86 tests OK; headless Chromium on the synthetic build: gene 0's panel
+  shows compound 8 in two stems, batch -001 (Pw21VD) and -002 (Pw22VD), each primary + WT + KO, "not
+  significant". **To build:** `IFACE_OVERWRITE: true` (compounds_df and the panels change); the log line
+  `> validation targets: added N tested-target rows` should show about 71.

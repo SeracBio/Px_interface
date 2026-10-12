@@ -411,6 +411,83 @@ class TestValidationDir(unittest.TestCase):
         # every MSSCORE row still has a contrast
         self.assertFalse(self.data.FBX_MSSCORE['uniquecontrast'].isna().any())
 
+    def test_every_tested_target_in_panel(self):
+        """Every (target gene, contrast) of the validation REPORTs, with the gene measured, has a panel row
+        (a hit, a stem completion or a target row). Before 2026-10-12 a gene that was not significant in
+        any condition of a stem had none, so its negative result did not show."""
+        rep = self.data.FBX_REPORT.dropna(subset=['target'])
+        pairs = {(g, u) for u, t in zip(rep['uniquecontrast'], rep['target']) for g in t.split(';')}
+        measured = set(zip(self.data.FBX_MEASURE['genes'], self.data.FBX_MEASURE['uniquecontrast']))
+        cdf = self.out.compounds_df
+        # all tested and measured pairs are in the panel data
+        self.assertLessEqual(pairs & measured, set(zip(cdf['gene'], cdf['uniquecontrast'])))
+
+    def test_negative_target_rows_flagged(self):
+        """Batch 002 (plate Pw22VD) has both target genes not significant -> 4 target rows (2 genes x WT/KO)
+        with is_target and is_completion set (not a hit: no export, no dot size) and no MS score."""
+        cdf = self.out.compounds_df
+        r = cdf[cdf['uniquecontrast'].astype(str).str.contains('.002_', regex=False)
+                & cdf['gene'].isin(make_synthetic.GENES[:2])]
+        # both genes of the ';' target, in both conditions
+        self.assertEqual(sorted(zip(r['gene'], r['plate'].astype(str))),
+                         sorted((g, p) for g in make_synthetic.GENES[:2] for p in ('Pw22VDKO', 'Pw22VDWT')))
+        # tested-target context rows, not hits
+        self.assertTrue(r['is_target'].all() and r['is_completion'].all())
+        # no MS score, so the MS slider does not hide them
+        self.assertTrue(r['ms_score'].isna().all())
+
+    def test_both_batches_in_panel(self):
+        """Compound 8 has batch 001 (plate Pw21VD) and batch 002 (plate Pw22VD). The target gene's panel
+        holds both, each with its own molecule_batch_id; the page flags the 002 rows as target rows."""
+        import re
+        c8, g0 = make_synthetic.COMPOUNDS[8], make_synthetic.GENES[0]
+        cdf = self.out.compounds_df
+        r = cdf[(cdf['gene'] == g0) & (cdf['compound'] == c8) & cdf['plate'].astype(str).str.startswith(('Pw21VD', 'Pw22VD'))]
+        # one batch id per stem, both present
+        self.assertEqual(sorted(set(r['molecule_batch_id'])), [f'{c8}-001', f'{c8}-002'])
+        with open('tmp_vdir/out_test/interfaces/Serac_Px_interface_data.js') as f:
+            v = re.search(r'window\.__GENE_COMPOUNDS__ = (.*?);\n', f.read()).group(1)
+        rows = [pl for e in json.loads(json.loads(v[len('JSON.parse('):-1]))[g0][1:] if e[0] == c8 for pl in e[3]]
+        # the batch-002 plate rows carry the target flag (pl[11]) to the page
+        self.assertLessEqual({'Pw22VDKO', 'Pw22VDWT'}, {pl[0] for pl in rows if pl[11] == 1})
+
+    def test_target_rows_open_stem_js(self):
+        """Client side: a target row (pl[11]) on a ticked plate opens its stem like a hit, and it keeps its
+        gene in the 3D view; other completion rows still need a real hit."""
+        with open('tmp_vdir/out_test/interfaces/Serac_Px_interface.html') as f:
+            html = f.read()
+        # the stem rule
+        self.assertIn('if (pl[11] && ticked[pl[0]]) okStems[valStemOf(pl[0])] = 1;', html)
+        # the gene-visibility rule
+        self.assertIn('if (pl[6] && !pl[11]) continue;', html)
+
+
+class TestValidationTargetRows(unittest.TestCase):
+    """validation_target_rows: the REPORT `target` (';'-separated) gives one panel row per (target gene,
+    contrast) that compounds_df does not hold yet and that the contrast measured. The key is the contrast,
+    so each batch of a compound gets its own row."""
+
+    def setUp(self):
+        self.rep = pd.DataFrame({'uniquecontrast': ['u1', 'u2', 'u3', 'u4'], 'compound': ['C1', 'C1', 'C2', 'C3'],
+                                 'plate': ['P1WT', 'P2WT', 'P1WT', 'P0'], 'target': ['G1; G2', 'G1', 'G1', None]})
+        self.meas = pd.DataFrame({'genes': ['G1', 'G2', 'G1', 'G1', 'G1'], 'uniquecontrast': ['u1', 'u1', 'u2', 'u3', 'u4'],
+                                  'logfc': [-0.5, 0.3, 0.1, -2.0, -1.0]})
+        self.cdf = pd.DataFrame({'gene': ['G1'], 'uniquecontrast': ['u3']})   # G1 is already a hit in u3
+
+    def test_rows(self):
+        """u1 targets 'G1; G2' (split + strip), u2 is a second batch of C1 (its own contrast), u3 is already
+        in the panel, u4 has no target -> rows (G1,u1), (G1,u2), (G2,u1) at their logfc."""
+        out = px.validation_target_rows(self.rep, self.cdf, self.meas)
+        # both genes of the ';' target, both batches of C1, nothing for u3 / u4
+        self.assertEqual(sorted(zip(out['gene'], out['uniquecontrast'], out['logfc'])),
+                         [('G1', 'u1', -0.5), ('G1', 'u2', 0.1), ('G2', 'u1', 0.3)])
+
+    def test_unmeasured_gene_skipped(self):
+        """A target gene that the contrast did not measure gives no row (it has no volcano point)."""
+        out = px.validation_target_rows(self.rep.assign(target=['G1;G9', None, None, None]), self.cdf.iloc[:0], self.meas)
+        # only G1 of 'G1;G9'
+        self.assertEqual(out['gene'].tolist(), ['G1'])
+
 
 class TestPlateReconstruction(unittest.TestCase):
     """Validation-only tranches omit the `plate` column; it's embedded in the uniquecontrast

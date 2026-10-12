@@ -67,6 +67,9 @@ The build reads two kinds of tranche folders (date-named subfolders, `YYYYMMDDâ€
 
 If a contrast is in more than one folder, the build keeps the rows of the newest folder. It skips a
 per-target MSSCORE (no contrast column) and drops a contrast with no plate in the file or in its name.
+The REPORT `target` column names the gene(s) that each experiment tests (`;` between genes). Each target
+gene's panel shows that experiment, also when the gene is not significant ("not significant" tag), and
+it shows every batch of a compound. A change to this data needs a build with `IFACE_OVERWRITE: true`.
 
 To write the interface into the Dropbox ML folder (quote the path â€” it contains spaces):
 

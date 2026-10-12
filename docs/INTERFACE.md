@@ -68,6 +68,12 @@ Three classes: **`PARAMS`** (reads `config.yaml`), **`DATA`** (loads raw inputs)
   primary-screen volcano — the non-validation contrast where the gene has the highest MS score (else
   its strongest-logfc measurement) — is flagged (an existing hit row in place, else a ride-along
   added), so the client can render it as the stem's leading cell and link it into the hover-trace.
+  **Validation-target rows** (`is_target=True`, 2026-10-12): a validation REPORT names the gene(s) that
+  each experiment tests in its `target` column (`;`-separated, e.g. `STAT2;PDCD2L`). Each (target gene,
+  contrast) that has no row yet, and that the contrast measured, gets a not-significant row at the
+  gene's mean logfc (`validation_target_rows`). Thus the gene's panel shows every tested compound, also a
+  negative result. The key is the contrast, so each batch of a compound (e.g. `-001` and `-002`) shows.
+  These rows also have `is_completion=True` (not a hit: no export, no dot size, no MS-slider filter).
 - **`meas`** — the volcano source (unified `measure`, noisy plates dropped, 0.0 p-values floored).
 - **`plate2date`** — `{plate: date}` for the date-nested Plates filter.
 
@@ -299,6 +305,10 @@ reads them. Every active global is both set and read (no orphans). Heavy per-gen
   | 5 | molecule_batch_id | export / volcano-label id |
   | **6** | **is_completion** 0/1 | ride-along non-significant validation-stem row; bypasses the activity filter; **excluded** from counts/export/gene-active test |
   | **7** | **vk** (contrast id) | set **only** on validation-suffix plates; used as `.vcell data-vk` and the `__STEM_TRACE__` key |
+  | 8 | ms_score | per-compound MS score; `null` on completion rows |
+  | 9 | [fx, fy] | focal-gene ring position on the shared base volcano |
+  | 10 | is_primary 0/1 | primary-screen row: the leading cell of its stem |
+  | **11** | **is_target** 0/1 | validation-target row: on a ticked plate it opens its stem like a hit (so a negative result shows), and it keeps its gene in the 3D view; still shown as "not significant" |
 
 - **`area_data[]`** → `__AREA_DATA__`. One `{x,y,z,gene,hover,color}` per colour trace, index-aligned
   with `ranges_cfg.areaTraces`.
