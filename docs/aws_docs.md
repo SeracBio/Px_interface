@@ -238,7 +238,7 @@ runbook is in git history if ever needed.
    `python python/Px_interface.py --config tmp/config.yaml --output_dir tmp/out`), then via SSM copy
    `tmp/out/interfaces/` to `/var/www/webapp/` on the box (SSM Session Manager, no SSH).
 7. **Verify** — on VPN, browse `https://<ec2_private_ip>/` → basic-auth → interface (off VPN:
-   unreachable, by design). Deep-link: `…/Serac_Px_interface.html#p=Pw01` (no trailing slash).
+   unreachable, by design). Deep-link: `…/Px_interface/#Plate=20261006` (a date block; see README "Link to plates").
 
 ### Live progress (2026-07-03)
 - [x] **Step 1** — Terraform v1.15.7 installed; AWS CLI on `eu-north-1` (account ID via `aws sts get-caller-identity`).

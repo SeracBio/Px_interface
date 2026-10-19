@@ -607,6 +607,35 @@ class TestRender(unittest.TestCase):
         # the block label carries the date
         self.assertIn('class="pf-date-all">validation \' + label', html)
 
+    def test_plate_link_wired(self):
+        """A link #Plate=20261006 / #Plate=validation20261006 selects plates by the SHOW_PLATE rule
+        (2026-10-12). Checks that the page carries: the Plate= alias of p=, the entry rule (date block,
+        validation block, plate name), the hashchange listener, and a Link button that does not re-apply."""
+        html = open(os.path.join(self.out_dir, 'interfaces', 'Serac_Px_interface.html')).read()
+        # Plate= / Plates= (any case) map to p=
+        self.assertIn(".toLowerCase().replace(/^plates?$/, 'p')", html)
+        # the entry rule: an optional validation prefix + a YYYYMMDD or YYYY-MM-DD date (single backslashes in the page)
+        self.assertIn(r"match(/^(validation[-_]?)?(\d{4})-?(\d{2})-?(\d{2})$/i)", html)
+        # a link pasted into an open tab applies
+        self.assertIn('window.addEventListener("hashchange"', html)
+        # the Link button writes the hash without firing hashchange
+        self.assertIn('history.replaceState(null, "", "#" + buildHash())', html)
+
+    def test_labels_link_wired(self):
+        """A link #Labels=false (also off / 0 / no) starts the Labels eye shut; #Labels=true opens it
+        (2026-10-12). The link goes through the session apply(), and the Link button writes labels= when
+        the eye differs from the config default (LABELS_ON)."""
+        html = open(os.path.join(self.out_dir, 'interfaces', 'Serac_Px_interface.html')).read()
+        # the hash key and its false values
+        self.assertIn("if ('labels' in q) sess.labels = !/^(false|0|off|no)$/i.test(q.labels);", html)
+        # the session apply sets the eye through the hook
+        self.assertIn('if (typeof s.labels === "boolean") setLabelsHook(s.labels);', html)
+        # the hook is declared before the Labels block assigns it (a later var would reset it)
+        self.assertLess(html.index('var setLabelsHook = function() {};'),
+                        html.index('setLabelsHook = function(on) { hideOtherLabels = !on; apply(); };'))
+        # the Link button keeps a non-default eye state
+        self.assertIn("parts.push('labels=' + !hideOtherLabels)", html)
+
     def test_volcanoes_written(self):
         """At least one volcano SVG is rendered into volcanoes_px/."""
         vdir = os.path.join(self.out_dir, 'interfaces', 'volcanoes_px')

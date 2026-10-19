@@ -1514,6 +1514,7 @@ _INTERFACE_INJECT = '''
     // FBXO31 category → dark ring + light fill (like the reference volcano circles).
     function valCatOf(g) { return validatedSet[g] ? "dependent" : (devalidatedSet[g] ? "independent" : "rest"); }
     var hideOtherLabels = (window.__LABELS_DEFAULT_ON__ === false);   // Labels eye toggle: true -> only FBXO31-dependent (+ pinned) genes keep labels
+    var setLabelsHook = function() {};   // set in the Labels block; puts the eye on (true) / off (false) for a session or link
     function valFillOf(g) { return (VCOL[valCatOf(g)] || {}).fill || "#cccccc"; }
     function valRingOf(g) { return (VCOL[valCatOf(g)] || {}).ring || "#333333"; }
     var VAL_CATS = ["dependent", "independent", "rest"];   // same order as VAL_LEGEND_TRACES
@@ -1727,6 +1728,7 @@ _INTERFACE_INJECT = '''
         if (e.key === "Enter" || e.key === " ") { e.preventDefault(); hideOtherLabels = !hideOtherLabels; apply(); }
       });
       tg.classList.toggle("off", hideOtherLabels);   // icon follows labels_default_on; the first applyRanges draws the labels
+      setLabelsHook = function(on) { hideOtherLabels = !on; apply(); };
     })();
 
     var pinned = false;
@@ -3349,6 +3351,7 @@ _INTERFACE_INJECT = '''
           contaminantOn = f.contaminant; var cb2 = document.getElementById("contaminant-toggle"); if (cb2) cb2.checked = contaminantOn;
         }
         if (s.colorMode === "V" || s.colorMode === "D") setColorModeHook(s.colorMode);
+        if (typeof s.labels === "boolean") setLabelsHook(s.labels);
         syncValLegendFromTicks();                 // restored ticks -> matching V-mode legend keys
         recolor3d();                              // re-run the mask (filters+hidden+ranges) + labels + count
         if (typeof s.mode2d === "boolean") setMode2DHook(s.mode2d);
@@ -3387,8 +3390,9 @@ _INTERFACE_INJECT = '''
     })();
 
     // --- shareable deep-link via URL hash: plates + pinned/hidden genes & compounds -------
-    // Reuses the session apply(): a hash is just a partial session in the URL. On load an
-    // incoming hash reproduces the view; the Link button copies the current state as a hash.
+    // Reuses the session apply(): a hash is just a partial session in the URL. On load (and on a
+    // hash change in an open tab) an incoming hash reproduces the view; the Link button copies the
+    // current state as a hash. Plates: #p=… or #Plate=…, entries as in SHOW_PLATE (see linkPlates).
     (function() {
       var linkBtn = document.getElementById("sess-link-btn");
       var note = document.getElementById("sess-note");
@@ -3406,32 +3410,59 @@ _INTERFACE_INJECT = '''
         if (!showPins)              parts.push('sp=0');   // pins-hidden state (default is shown)
         if (soloPins)               parts.push('so=1');   // solo (only-pinned) view
         if (COLOR_MODE === 'D')     parts.push('cm=D');   // colour by disease area (default is V)
+        if (hideOtherLabels !== (window.__LABELS_DEFAULT_ON__ === false)) parts.push('labels=' + !hideOtherLabels);   // eye differs from the config default
         return parts.join('&');
+      }
+
+      // Plates that one link entry names, by the SHOW_PLATE rule: YYYYMMDD (or YYYY-MM-DD) = the date block
+      // (its non-validation plates); validationYYYYMMDD = the validation block (the stems whose earliest
+      // plate date it is, as the Plates filter groups them); any other entry = that plate name.
+      function linkPlates(entry) {
+        var dates = window.__PLATE_DATES__ || {}, all = Object.keys(ticked);
+        var m = entry.replace(/[\\s+]/g, '').match(/^(validation[-_]?)?(\\d{4})-?(\\d{2})-?(\\d{2})$/i);
+        if (!m) return Object.prototype.hasOwnProperty.call(ticked, entry) ? [entry] : [];
+        var d = m[2] + '-' + m[3] + '-' + m[4], first = {};
+        if (!m[1]) return all.filter(function(p) { return !isValidationPlate(p) && dates[p] === d; });
+        all.filter(isValidationPlate).forEach(function(p) {   // validation stem -> its earliest plate date
+          var st = valStemOf(p);
+          if (dates[p] && (!first[st] || dates[p] < first[st])) first[st] = dates[p];
+        });
+        return all.filter(function(p) { return isValidationPlate(p) && first[valStemOf(p)] === d; });
       }
 
       function parseHash() {
         var h = (location.hash || '').replace(/^#/, '');
         if (!h) return null;
         var q = {};
-        h.split('&').forEach(function(kv) {
-          var i = kv.indexOf('='); if (i > 0) q[kv.slice(0, i)] = kv.slice(i + 1);
+        h.split('&').forEach(function(kv) {   // keys ignore case; Plate= / Plates= = p=
+          var i = kv.indexOf('='); if (i > 0) q[kv.slice(0, i).toLowerCase().replace(/^plates?$/, 'p')] = kv.slice(i + 1);
         });
-        if (!('p' in q || 'pg' in q || 'pc' in q || 'hg' in q || 'hc' in q || 'sp' in q || 'so' in q || 'cm' in q)) return null;  // unrecognised -> keep default view
-        var sess = {pinnedGenes: dec(q.pg), pinnedCompounds: dec(q.pc),
-                    hiddenGenes: dec(q.hg), hiddenCompounds: dec(q.hc)};
+        if (!['p', 'pg', 'pc', 'hg', 'hc', 'sp', 'so', 'cm', 'labels'].some(function(k) { return k in q; })) return null;  // unrecognised -> keep default view
+        var keep = function(k, cur) { return k in q ? dec(q[k]) : cur.slice(); };   // a key the link omits keeps its state
+        var sess = {pinnedGenes: keep('pg', pinnedGenes), pinnedCompounds: keep('pc', pinnedCompounds),
+                    hiddenGenes: keep('hg', hiddenGenes), hiddenCompounds: keep('hc', hiddenCompounds)};
         if ('sp' in q) sess.showPins = q.sp !== '0';
         if ('so' in q) sess.soloPins = q.so === '1';
         if ('cm' in q) sess.colorMode = (q.cm === 'D') ? 'D' : 'V';
-        if ('p' in q) {   // exact plate view: only the listed plates ticked on
-          var want = {}; dec(q.p).forEach(function(p) { want[p] = 1; });
-          var plates = {}; Object.keys(ticked).forEach(function(p) { plates[p] = !!want[p]; });
-          sess.filters = {plates: plates};
+        if ('labels' in q) sess.labels = !/^(false|0|off|no)$/i.test(q.labels);   // Labels=false -> eye shut
+        if ('p' in q) {   // exact plate view: only the plates the entries name are ticked on
+          var want = {}, miss = [];
+          dec(q.p).forEach(function(e) {
+            var ps = linkPlates(e);
+            if (!ps.length) miss.push(e);
+            ps.forEach(function(p) { want[p] = 1; });
+          });
+          if (Object.keys(want).length) {   // nothing matched -> keep the default plates, not an empty view
+            var plates = {}; Object.keys(ticked).forEach(function(p) { plates[p] = !!want[p]; });
+            sess.filters = {plates: plates};
+          }
+          if (note) note.textContent = miss.length ? "link: no plate for " + miss.join(", ") : "";
         }
         return sess;
       }
 
       if (linkBtn) linkBtn.addEventListener("click", function() {
-        location.hash = buildHash();   // reflect current state in the address bar
+        history.replaceState(null, "", "#" + buildHash());   // reflect current state in the address bar (no hashchange)
         var url = location.href;
         if (navigator.clipboard && navigator.clipboard.writeText) {
           navigator.clipboard.writeText(url).then(
@@ -3442,6 +3473,9 @@ _INTERFACE_INJECT = '''
 
       var incoming = parseHash();   // reproduce an incoming deep-link on first load
       if (incoming) applySessionHook(incoming);
+      window.addEventListener("hashchange", function() {   // a new link pasted into an open tab
+        var s = parseHash(); if (s) applySessionHook(s);
+      });
     })();
   });
 

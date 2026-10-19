@@ -341,8 +341,16 @@ reads them. Every active global is both set and read (no orphans). Heavy per-gen
 
 `.iface` = `{version, showPins, soloPins, pinnedGenes, pinnedCompounds, hiddenGenes,
 hiddenCompounds, filters:{…}, ranges:{x/y/z:[lo,hi]}, mode2d, colorMode, camera}`.
-Hash keys: `p=` (exact plate list), `pg`/`pc` (pinned), `hg`/`hc` (hidden), `sp=0` (pins hidden),
-`so=1` (solo), `cm=D` (disease colour).
+Hash keys: `p=` (exact plate view), `pg`/`pc` (pinned), `hg`/`hc` (hidden), `sp=0` (pins hidden),
+`so=1` (solo), `cm=D` (disease colour), `labels=false|true` (Labels eye shut/open; `off`/`0`/`no` also
+shut; applied through `setLabelsHook`). Keys ignore case, and `Plate=` / `Plates=` = `p=` (2026-10-12).
+The Link button writes `labels=` only when the eye differs from the config default (`LABELS_ON`).
+A `p=` entry follows the `SHOW_PLATE` rule (`linkPlates`): `YYYYMMDD` or `YYYY-MM-DD` = the date block
+(its non-validation plates); `validationYYYYMMDD` (also with a space, `-` or `_`) = the validation
+block (the stems whose earliest plate date it is); any other entry = a plate name. If no entry matches,
+the default plates stay and `#sess-note` names the misses. A key that the hash does not name keeps its
+state (pins stay when only `Plate=` changes). A `hashchange` listener applies a new hash in an open
+tab; the Link button writes the hash with `history.replaceState`, so it does not re-apply.
 
 ---
 

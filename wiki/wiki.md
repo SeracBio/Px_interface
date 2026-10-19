@@ -3,9 +3,13 @@ _Durable, aggregate memory of this repo — read at session start. Aggregate onl
 
 ## Where we are now
 - **Focus:** building the per-gene 3D Px interface (`Serac_Px_interface.html`) via `fn.plot_3d_interface`.
-- **OPEN TO-DO (2026-10-05): security batch B on the AWS box** — a long random password (keep bcrypt cost 05: see 2026-10-09), secret
-  files at 0600 from the start, optional `limit_req` and per-person logins. It replaces the EC2, so do it at a
-  quiet time. Details: log entry "Signals agent handoff: SSM and password hardening for Px" (2026-10-05).
+- **OPEN TO-DO (2026-10-05): security batch B on the AWS box** — step 3 (new login, bcrypt cost 05) done 2026-10-09;
+  left: secret files at 0600 from the start (step 4), optional `limit_req` (5) and per-person logins (6). Step 4
+  replaces the EC2, so do it at a quiet time. Details: log entry "Signals agent handoff: SSM and password
+  hardening for Px" (2026-10-05).
+- **OPEN (2026-10-02): S3 item 3, the move to SSO + MFA** (plan: 2026-09-23 entry). Items 1 + 2 (old versions
+  expire after 7 days; object reads only through the S3 gateway endpoint) are live (checked 2026-10-12). The
+  CLI still uses the IAM user's long-lived key (checked 2026-10-12). Status summary: log entry 2026-10-12.
 - **Architecture doc:** [`docs/INTERFACE.md`](../docs/INTERFACE.md) — full map of how the build fits together
 - **Data-transform doc:** [`docs/data_transform.md`](../docs/data_transform.md) — how `measure`/`mscore`/`report` (+ `df_raw`/`MS`/FBX) are derived from the raw files
   (pipeline → `plot_3d_interface` → volcano cache → `_INTERFACE_INJECT` JS → the JS↔Python `__X__` contract +
@@ -528,6 +532,14 @@ data shares the namespace); no real PNGs so thumbnails are RDKit-rendered from `
   (only listed plates ticked). Hash chosen over query/path so it never hits the server (no round-trip,
   stays out of access logs). Clipboard needs a secure context (HTTPS/localhost); else the URL is shown
   in the note. Aimed at the planned FastAPI/EC2 webapp so `seracbio.com/…#p=…` links share a view.
+  **Plate links (2026-10-12, STE):** `#Plate=20261006` (keys ignore case; `Plate=`/`Plates=` = `p=`). An entry
+  follows the `SHOW_PLATE` rule (JS `linkPlates`): a date = the date block, `validation<date>` = the validation
+  block, other = a plate name. No match → the default plates stay, and `#sess-note` names the misses. A key the
+  hash omits keeps its state. `hashchange` applies a new hash in an open tab; Link uses `history.replaceState`.
+  **Labels link (2026-10-12, STE):** `#Labels=false` (also `off`/`0`/`no`) starts the eye shut, `true` opens it;
+  it wins over `LABELS_ON`. Session `apply()` → `setLabelsHook` (declared beside `hideOtherLabels`, BEFORE the
+  Labels block assigns it: a later `var … = function(){}` would reset it). Link writes `labels=` only when the
+  eye differs from the config default.
 - **Download selection** → CSV (`Batch Molecule-Batch ID, genes, Plate, Activity`); batch id from
   `molecule_batch_id`, reconstructed from `uniquecontrast` (`split('_vs_')[0]`, dots→dashes) for
   experiments absent from `df_raw` (the `…WT/KO/Eval` plates).
@@ -1659,7 +1671,7 @@ and a *merged* cluster means either a <55px (tight, good) gap or an overlap (loo
   (dependent only), and one click gives 264; `true` is the reverse. 80 tests OK. **Then the user set**
   `SHOW_PLATE: [validation 20261006, 20261006]` to tick the new primary screen too: 59 plates on the real
   plate2date (38 validation + 20 primary + `Pw42WTNOFAIMS`, which is in the date block, so it is ticked either way).
-- 2026-10-12 — **Validation: show every tested target, both batches (code done; Dropbox build by the user).**
+- 2026-10-12 — **Validation: show every tested target, both batches (done; the user confirmed the Dropbox build: "It works like a charm").**
   (STE.) Report: for the 2026-10-06 validation, the STAT2 panel showed 2 of the 4 compounds that the REPORT
   targets at STAT2. Asks: a `target` can name 2 genes (`;`); show both batches of a compound (001 and 002).
   **Cause (aggregate check on the 2026-10-09 checkpoint):** 10 STAT2-target contrasts; 4 in the panel (2 hits +
@@ -1672,3 +1684,33 @@ and a *merged* cluster means either a <55px (tight, good) gap or an overlap (loo
   shows compound 8 in two stems, batch -001 (Pw21VD) and -002 (Pw22VD), each primary + WT + KO, "not
   significant". **To build:** `IFACE_OVERWRITE: true` (compounds_df and the panels change); the log line
   `> validation targets: added N tested-target rows` should show about 71.
+- 2026-10-12 — **AWS security: what is decided and what is left (status check, read-only).** (STE.) **S3** (entry
+  2026-10-02 "S3 exposure assessed"): items 1 + 2 applied 2026-10-05 and live today: bucket policy statements
+  `DenyNonTLS`, `DenyOutsideAccount`, `DenyObjectReadOutsideVpc`; lifecycle `expire-old-versions` Enabled, 7 days;
+  versioning Enabled; public access block 4/4; 1 old version of `_data.js` (younger than 7 days, as designed).
+  Item 3 (SSO + MFA, plan 2026-09-23) is NOT done: `sts get-caller-identity` gives an IAM user, so the CLI still
+  uses a long-lived admin key. That key can still list and write the bucket and change its policy from any
+  network; a write is a supply-chain path, because the box copies the bucket into its web root at boot.
+  **Box, batch B:** step 3 done 2026-10-09 (new login, cost 05); steps 4 (0600 secret files, replaces the EC2),
+  5 (`limit_req`, optional) and 6 (per-person logins, optional) open. **Batch A:** applied; the user still has to
+  tell the Signals agent. **Older deferred items (2026-07-16 review, no decision):** state bucket MFA-delete,
+  access logging, dedicated CMK; HSTS only after a trusted certificate (M3).
+- 2026-10-12 — **Plate links: `…/Px_interface/#Plate=20261006` (code done; publish by the user).** (STE.) Request:
+  select plates through the URL, e.g. `…/Px_interface/Plate=20261006`. The wiki strategy (2026-07-01 deep link)
+  is the URL hash; the path form gives a 404 (nginx `try_files $uri $uri/ =404`) and would need a `user_data`
+  change (EC2 replacement). **User decisions:** the hash form; a date follows the `SHOW_PLATE` rule
+  (`20261006` = date block, `validation20261006` = validation block, a plate name = that plate). **Change (JS
+  only, `functions.py` hash module):** `Plate=` alias, `linkPlates`, no-match note, keep omitted keys,
+  `hashchange` listener, Link via `history.replaceState`. **Checks:** 87 tests OK (escape warnings as
+  errors: the template is a normal string, so a JS regex needs `\\d` in the source); headless Chromium on the
+  synthetic build: date block, validation block, both, plate name, no match (default kept + note), a mixed
+  list, a hash change in an open tab (no reload, pin kept) and the Link button all behave. **To use:** render
+  again (no `IFACE_OVERWRITE` needed: the HTML only), then publish to AWS and/or Dropbox.
+- 2026-10-12 — **`#Labels=false` link (code done; render + publish by the user).** (STE.) The user confirmed the plate
+  links work, then asked for `#Labels=false` = the Labels eye shut. Change in the hash module and the session
+  `apply()` (see Interface conventions, deep link). **Checks:** 88 tests OK; headless Chromium on the synthetic
+  build (validation 2026-05-20 block): eye open 267 labels; `Labels=false` / `labels=OFF` eye shut, 5 labels
+  (FBXO31 dependent only); `Labels=true` 267; a hash change in an open tab 267 → 5 without reload; Link writes
+  `&labels=false`. **Test-setup note:** a synthetic build whose config has no `LOF_DEFAULTS` gets the old
+  default `[Yes]`; no synthetic gene has `Yes`, so `_resolve_defaults` gives `[]` and the page hides every gene
+  (0 labels). The real config sets `LOF_DEFAULTS: []` (all ticked), so it is not affected.

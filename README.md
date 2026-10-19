@@ -299,6 +299,26 @@ The page shows a spinner while it loads, and it shows the interface only when th
 ready. nginx compresses the HTML, JS and SVG files (gzip), so a load moves about 25 MB, not the
 112 MB on disk (`Serac_Px_interface_data.js` is 104 MB on disk and about 22 MB on the VPN).
 
+**Link to plates.** Add `#Plate=` to the URL. The entries follow the `SHOW_PLATE` rule, with commas
+between entries:
+
+| Link | Plates ticked |
+|---|---|
+| `…/Px_interface/#Plate=20261006` | the date block 2026-10-06 (primary plates) |
+| `…/Px_interface/#Plate=validation20261006` | the validation block 2026-10-06 |
+| `…/Px_interface/#Plate=20261006,validation20261006` | both blocks |
+| `…/Px_interface/#Plate=Pw50,Pw63` | these plates only |
+
+Add `&Labels=false` to start with the Labels eye shut (only FBXO31-dependent and pinned genes keep
+their labels), e.g. `…/Px_interface/#Plate=20261006&Labels=false`; `Labels=true` opens the eye. The
+link wins over the config default (`LABELS_ON`).
+
+The browser does not send the part after `#` to the server, so the link needs no server change.
+It also works on the Dropbox copy (`Serac_Px_interface.html#Plate=…`). A changed link in an open tab
+applies at once. If no plate matches, the page keeps its default plates and the Session note tells
+you. The **Link** button copies the full view (exact plates, pins, hides, colour mode and, when it
+differs from the config default, the Labels eye).
+
 > **You can put real Px interface files on this box** (decision of 2026-10-01). Three controls
 > protect them: the box is reachable only over the VPN (no public IP), nginx asks for the
 > Basic-Auth password (shared through 1Password), and TLS encrypts the traffic. All users share
