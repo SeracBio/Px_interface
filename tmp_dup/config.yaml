@@ -31,4 +31,5 @@ GENE_SIZE_BUCKETS:
 - 13
 - 16
 GENE_RING_PX: 5
+Z_FIT_PAD: 0.08
 SRB_PNG_DIR: tmp_dup/srb_png

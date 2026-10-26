@@ -71,14 +71,14 @@ class TestDataPipeline(unittest.TestCase):
             self.assertTrue(set(sdf[c].dropna().unique()).issubset({0, 1}))
 
     def test_df_raw_and_df_ms(self):
-        """load_old_df derives ms_score (clipped 0-100) and a per-(gene,plate) df_ms."""
+        """load_old_df derives ms_score (-log10(p) * -logfc, not clipped since 2026-10-26) and a per-(gene,plate) df_ms."""
+        import numpy as np
         df = self.data.df_raw
         # ms_score and the -log10 helper column are created
         self.assertIn('ms_score', df.columns)
         self.assertIn('-log10(p-value)', df.columns)
-        # ms_score respects the [0, 100] clip
-        self.assertGreaterEqual(df['ms_score'].min(), 0.0)
-        self.assertLessEqual(df['ms_score'].max(), 100.0)
+        # ms_score is the formula, with no clip
+        self.assertTrue(np.allclose(df['ms_score'], -np.log10(df['pvalue']) * -df['logfc']))
         # df_ms is unique per (genes, MSPlate)
         self.assertFalse(self.data.df_ms.duplicated(['genes', 'MSPlate']).any())
 
@@ -187,23 +187,20 @@ class TestDataPipeline(unittest.TestCase):
                         .issubset(set(self.data.serac_df['compound'])))
 
     def test_compounds_df_ms_score(self):
-        """Each compound experiment carries its OWN per-(gene,compound,plate) MS score, on the
-        same scale as the plotted z (the gene's max). Real (non-completion) hit rows always have
-        a score; completion rows are null (they bypass the MS filter). No gene's per-entry MS may
-        exceed its plotted z — the dot sits at the gene max, entries are that max or below."""
+        """Each compound experiment carries its OWN per-(gene,compound,plate) MS score, for the MS slider (pl[8]).
+        Real (non-completion) hit rows always have a score; completion rows are null (a tested-target row gets its
+        validation score). Since 2026-10-26 the dot's z follows gene_ms_score and stays fixed, so an experiment may
+        score above its gene's z (an FBX score wins over a higher legacy one)."""
         cdf = self.output.compounds_df
         # the per-compound MS column reached compounds_df
         self.assertIn('ms_score', cdf.columns)
         comp = cdf['is_completion'].fillna(False)
         # every real hit row has a numeric MS score
         self.assertEqual(int(cdf.loc[~comp, 'ms_score'].isna().sum()), 0)
-        # completion rows carry no score (never filtered out by the MS slider)
-        self.assertTrue(cdf.loc[comp, 'ms_score'].isna().all())
-        # coherence: a gene's largest per-entry MS never exceeds its plotted z (the gene max)
-        gmax = cdf.loc[~comp].groupby('gene')['ms_score'].max()
-        z = self.output.iface_df.set_index('gene')['ms_score']
-        j = pd.concat([gmax.rename('e'), z.rename('z')], axis=1).dropna()
-        self.assertEqual(int((j['e'] > j['z'] + 1e-6).sum()), 0)
+        # completion rows that are not tested-target rows carry no score
+        self.assertTrue(cdf.loc[comp & ~cdf['is_target'], 'ms_score'].isna().all())
+        # each dot names the source of its z
+        self.assertTrue(set(self.output.iface_df['ms_source']) <= {'validation', 'FBX', 'April-May', ''})
 
     def test_validation_stem_completion(self):
         """Stem completion adds ride-along rows for measured-but-not-significant conditions,
@@ -289,10 +286,11 @@ class TestValidationOnlyTranche(unittest.TestCase):
         self.assertTrue(self.removed)
 
     def test_fbx_csv_none_for_absent_kind(self):
+        files = self.data.TRANCHE_CSVS[self.latest]       # the tranche's csv list, as load_new_df saw it
         # absent kind -> None; the kinds the tranche does have still resolve to a path
-        self.assertIsNone(px._fbx_csv(self.latest, 'MSSCORE'))
-        self.assertIsNotNone(px._fbx_csv(self.latest, 'MEASURE'))
-        self.assertIsNotNone(px._fbx_csv(self.latest, 'REPORT'))
+        self.assertIsNone(px._fbx_csv(files, 'MSSCORE'))
+        self.assertIsNotNone(px._fbx_csv(files, 'MEASURE'))
+        self.assertIsNotNone(px._fbx_csv(files, 'REPORT'))
 
     def test_msscore_loaded_from_other_tranches(self):
         # MSSCORE is still populated from the tranche(s) that have it
@@ -325,7 +323,7 @@ class TestDuplicateTrancheDate(unittest.TestCase):
         data.load_chemical_lib_df(params); data.load_old_df(params); data.load_new_df(params)
         data.get_contaminants_and_controls(params); data.get_gene_research(params)
         out = px.OUTPUT(); out.combine_datasets(data, params)
-        shared = pd.read_csv(px._fbx_csv(dst, 'REPORT'), usecols=['plate'])['plate'].dropna().astype(str).unique()
+        shared = pd.read_csv(px._fbx_csv(data.TRANCHE_CSVS[dst], 'REPORT'), usecols=['plate'])['plate'].dropna().astype(str).unique()
         # precondition: the duplicated tranche has plates to test
         self.assertGreater(len(shared), 0)
         _later = f'{newdate[:4]}-{newdate[4:6]}-{newdate[6:8]}'
@@ -356,6 +354,52 @@ class TestValidationDir(unittest.TestCase):
         out.build_interface(data, params, 'tmp_vdir/out_test')   # and the render (a no-plate row crashed it)
         cls.data, cls.out = data, out
 
+    def test_volcano_colours_targets_only(self):
+        """Input: validation exports whose report names the targets G_00000;G_00001. Expected: on a contrast with
+        targets, volcano_sig = 1 only for a target with adjpval < 0.05 (any logfc); on the other contrasts it equals
+        `significant`; `significant` does not change. Rationale: user decision 2026-10-23 (the reference validation
+        volcano colours only the tested targets); the panel hits keep the platform flag."""
+        import numpy as np
+        m, rep = self.out.meas, self.out.report
+        tg = rep.dropna(subset=['target']).drop_duplicates('uniquecontrast')
+        pairs = {(u, g.strip()) for u, t in zip(tg['uniquecontrast'].astype(str), tg['target'].astype(str)) for g in t.split(';')}
+        val = m['uniquecontrast'].isin(set(tg['uniquecontrast']))
+        q = self.out.measure.loc[m.index, 'adjpval'].to_numpy(dtype=float)
+        want = np.array([(u, g) in pairs for u, g in zip(m['uniquecontrast'].astype(str), m['genes'].astype(str))]) & (q < 0.05)
+        # the fixture holds validation contrasts with targets, and significant non-targets that lose the colour
+        self.assertTrue(val.any() and (m.loc[val, 'significant'].fillna(0) > m.loc[val, 'volcano_sig']).any())
+        # on a contrast with targets: only the targets with adjpval < 0.05
+        self.assertTrue((m.loc[val, 'volcano_sig'].to_numpy() == want[val.to_numpy()]).all())
+        # on the other contrasts: the significant flag
+        self.assertTrue((m.loc[~val, 'volcano_sig'].to_numpy() == m.loc[~val, 'significant'].fillna(0).to_numpy()).all())
+        # the flag itself is the measure flag (the panel hits do not change)
+        self.assertTrue((m['significant'].to_numpy() == self.out.measure.loc[m.index, 'significant'].to_numpy()).all())
+
+    def test_validation_volcano_svg_colours_targets_only(self):
+        """Input: the rendered fixture build. Expected: each validation volcano SVG (found by its data-keyed name)
+        has coloured points (<title> tooltips) only on report targets; a primary volcano can colour other genes.
+        Rationale: checks that build_interface passes volcano_sig to the renderer (user decision 2026-10-23)."""
+        import re
+        from python import functions as fn
+        m, rep, vdir = self.out.meas, self.out.report, 'tmp_vdir/out_test/interfaces/volcanoes_px'
+        tg = rep.dropna(subset=['target']).drop_duplicates('uniquecontrast')
+        targets = {u: {g.strip() for g in t.split(';')} for u, t in zip(tg['uniquecontrast'].astype(str), tg['target'].astype(str))}
+        vks = sorted(json.load(open(os.path.join(vdir, 'positions.json'))))
+        vsrc = m.rename(columns={'uniquecontrast': 'compound'})
+        ymax = fn._stem_shared_ymax(self.out.compounds_df, vsrc, ['WT', 'MLN', 'KO', 'BIND'])
+        vh = fn._volcano_data_hash(vsrc, vks, sig_col='volcano_sig')
+        sig_other = set(m.loc[(m['significant'] > 0) & ~m['genes'].astype(str).isin({'G_00000', 'G_00001'}),
+                              'uniquecontrast'].astype(str))
+        checked = 0
+        for vk in (v for v in vks if v in targets and v in vh):
+            path = os.path.join(vdir, fn._volcano_base_cache_fname(vk, (-8, 8), 350, '.svg', ymax=ymax.get(vk), data=vh[vk]))
+            titles = set(re.findall(r'<title>([^<]+)</title>', open(path).read()))
+            # the coloured points of a validation volcano are targets only
+            self.assertTrue(titles <= targets[vk], vk)
+            checked += vk in sig_other
+        # some checked volcanoes hold significant non-targets (the old colour rule would show them)
+        self.assertGreater(checked, 0)
+
     def test_render_completes(self):
         """The interface HTML is written for the fixture with validation folders."""
         # build_interface reached the end and wrote the page
@@ -374,7 +418,7 @@ class TestValidationDir(unittest.TestCase):
         self.assertEqual(len(self.data.VAL_TRANCHES), 2)
         self.assertEqual(len(self.data.FBX_TRANCHES), 4)
         # REPORT and MEASURE resolve in each validation folder (names like 202606025_REPORT.csv)
-        self.assertTrue(all(px._fbx_csv(t, k) for t in self.data.VAL_TRANCHES for k in ('REPORT', 'MEASURE')))
+        self.assertTrue(all(px._fbx_csv(self.data.TRANCHE_CSVS[t], k) for t in self.data.VAL_TRANCHES for k in ('REPORT', 'MEASURE')))
 
     def test_new_plates_get_folder_date(self):
         """A plate first seen in a validation folder takes that folder's date."""
@@ -404,6 +448,50 @@ class TestValidationDir(unittest.TestCase):
         # one REPORT row for the contrast
         self.assertEqual(int((self.data.FBX_REPORT['uniquecontrast'] == self.reexported).sum()), 1)
 
+    def test_validation_ms_score(self):
+        """Input: the per-target MSSCORE of the validation folder (G_00000 50, G_00001 20). Expected: VAL_MSSCORE holds
+        both, the two genes sit at those scores with the source 'validation', and the hover names it. Rationale: user
+        decision 2026-10-26: a validation target sits at its validation score."""
+        # the per-target file reached VAL_MSSCORE and VAL_ASSOC
+        self.assertEqual(self.data.VAL_MSSCORE.to_dict(), {'G_00000': 50.0, 'G_00001': 20.0})
+        self.assertEqual(self.data.VAL_ASSOC.to_dict(), {'G_00000': 0.5, 'G_00001': 0.2})
+        z = self.out.iface_df.set_index('gene').loc[['G_00000', 'G_00001']]
+        # the two targets sit at their validation score
+        self.assertEqual(z['ms_score'].tolist(), [50.0, 20.0])
+        self.assertEqual(set(z['ms_source']), {'validation'})
+        # the hover names the source
+        page = ''.join(open(f'tmp_vdir/out_test/interfaces/{f}').read()
+                       for f in ('Serac_Px_interface.html', 'Serac_Px_interface_data.js'))
+        self.assertIn('MS score=50.000 (validation)', page)
+
+    def test_validation_ms_score_on_target_experiments(self):
+        """Input: validation contrasts whose REPORT names G_00000;G_00001 (validation scores 50 and 20), on validation
+        plates and on the primary reference plate Pw00. Expected: every hit or tested-target row of a named gene on
+        such a contrast on a validation plate carries the gene's validation score; the stem completions stay null;
+        a row on a primary plate keeps its own score. Rationale: the MS slider filters each experiment; a target's
+        validation experiments use its validation score, the primary screen plates the primary score (2026-10-26)."""
+        cdf, rep = self.out.compounds_df, self.out.report
+        tg = rep.dropna(subset=['target']).drop_duplicates('uniquecontrast')
+        pairs = {(g.strip(), u) for u, t in zip(tg['uniquecontrast'].astype(str), tg['target'].astype(str)) for g in t.split(';')}
+        own = (pd.Series([(g, u) in pairs for g, u in zip(cdf['gene'].astype(str), cdf['uniquecontrast'].astype(str))], index=cdf.index)
+               & cdf['plate'].astype(str).str.contains('(?:WT|MLN|KO|BIND)$', regex=True))
+        rows = cdf[own & (~cdf['is_completion'] | cdf['is_target'])]
+        # the fixture has such rows for both genes
+        self.assertEqual(set(rows['gene']), {'G_00000', 'G_00001'})
+        # each carries its gene's validation score
+        self.assertTrue((rows['ms_score'] == rows['gene'].map({'G_00000': 50.0, 'G_00001': 20.0})).all())
+        # stem completions (not tested-target rows) carry no score
+        self.assertTrue(cdf.loc[own & cdf['is_completion'] & ~cdf['is_target'], 'ms_score'].isna().all())
+        # rows on contrasts with no report target keep their own score (not 50 or 20 by this rule)
+        other = cdf[~own & ~cdf['is_completion'] & cdf['gene'].isin(['G_00000', 'G_00001'])]
+        self.assertGreater(len(other), 0)
+        self.assertTrue(other['ms_score'].notna().all())
+        # a tested-target row on the primary reference plate Pw00 does not take the validation score
+        ref = cdf[cdf['is_target'] & ~cdf['plate'].astype(str).str.contains('(?:WT|MLN|KO|BIND)$', regex=True)
+                  & cdf['gene'].isin(['G_00000', 'G_00001'])]
+        self.assertGreater(len(ref), 0)
+        self.assertFalse((ref['ms_score'] == ref['gene'].map({'G_00000': 50.0, 'G_00001': 20.0})).any())
+
     def test_per_target_msscore_skipped(self):
         """The per-target MSSCORE (target/msscore, no contrast) does not reach FBX_MSSCORE."""
         # no column of the per-target file leaks in
@@ -424,7 +512,8 @@ class TestValidationDir(unittest.TestCase):
 
     def test_negative_target_rows_flagged(self):
         """Batch 002 (plate Pw22VD) has both target genes not significant -> 4 target rows (2 genes x WT/KO)
-        with is_target and is_completion set (not a hit: no export, no dot size) and no MS score."""
+        with is_target and is_completion set (not a hit: no export, no dot size). Since 2026-10-26 they carry the
+        gene's validation score (50 / 20), so the MS slider filters them like the target's other validation rows."""
         cdf = self.out.compounds_df
         r = cdf[cdf['uniquecontrast'].astype(str).str.contains('.002_', regex=False)
                 & cdf['gene'].isin(make_synthetic.GENES[:2])]
@@ -433,8 +522,8 @@ class TestValidationDir(unittest.TestCase):
                          sorted((g, p) for g in make_synthetic.GENES[:2] for p in ('Pw22VDKO', 'Pw22VDWT')))
         # tested-target context rows, not hits
         self.assertTrue(r['is_target'].all() and r['is_completion'].all())
-        # no MS score, so the MS slider does not hide them
-        self.assertTrue(r['ms_score'].isna().all())
+        # the gene's validation score
+        self.assertEqual(r['ms_score'].tolist(), r['gene'].map(dict(zip(make_synthetic.GENES[:2], [50.0, 20.0]))).tolist())
 
     def test_both_batches_in_panel(self):
         """Compound 8 has batch 001 (plate Pw21VD) and batch 002 (plate Pw22VD). The target gene's panel
@@ -452,12 +541,12 @@ class TestValidationDir(unittest.TestCase):
         self.assertLessEqual({'Pw22VDKO', 'Pw22VDWT'}, {pl[0] for pl in rows if pl[11] == 1})
 
     def test_target_rows_open_stem_js(self):
-        """Client side: a target row (pl[11]) on a ticked plate opens its stem like a hit, and it keeps its
-        gene in the 3D view; other completion rows still need a real hit."""
+        """Client side: a target row (pl[11]) on a ticked plate, with its validation score in the MS window, opens
+        its stem like a hit, and it keeps its gene in the 3D view; other completion rows still need a real hit."""
         with open('tmp_vdir/out_test/interfaces/Serac_Px_interface.html') as f:
             html = f.read()
         # the stem rule
-        self.assertIn('if (pl[11] && ticked[pl[0]]) okStems[valStemOf(pl[0])] = 1;', html)
+        self.assertIn('if (pl[11] && ticked[pl[0]] && msOk(pl)) okStems[valStemOf(pl[0])] = 1;', html)
         # the gene-visibility rule
         self.assertIn('if (pl[6] && !pl[11]) continue;', html)
 
@@ -487,6 +576,57 @@ class TestValidationTargetRows(unittest.TestCase):
         out = px.validation_target_rows(self.rep.assign(target=['G1;G9', None, None, None]), self.cdf.iloc[:0], self.meas)
         # only G1 of 'G1;G9'
         self.assertEqual(out['gene'].tolist(), ['G1'])
+
+
+class TestPlotVolcano(unittest.TestCase):
+    """fn.plot_volcano (2026-10-26): `key` selects the rows, `sig_col` colours by a flag column, `gene` can be a list."""
+
+    def test_flag_colour_key_and_gene_list(self):
+        """Input: plate P1 with A (flag 1, logfc -0.5), B (flag 0, logfc -2, p 1e-6), C (flag 1, logfc +2) and D, plus
+        a row on P2; the genes A, C and X (X not measured). Expected: only the P1 rows; with sig_col A is down and B
+        grey; without it the thresholds apply (B down, A grey); A and C carry a label, X is skipped. Rationale: the
+        notebook volcano colours by the database flag, as the interface does."""
+        import matplotlib
+        matplotlib.use('Agg')
+        import matplotlib.pyplot as plt
+        from python import functions as fn
+        df = pd.DataFrame({'plate': ['P1'] * 4 + ['P2'], 'genes': ['A', 'B', 'C', 'D', 'A'],
+                           'logfc': [-0.5, -2.0, 2.0, 0.1, -3.0], 'pvalue': [1e-10, 1e-6, 1e-4, 0.5, 1e-9],
+                           'significant': [1, 0, 1, 0, 1]})
+        fig, (ax, ax2) = plt.subplots(1, 2)
+        agg = fn.plot_volcano(df, 'P1', ['A', 'C', 'X'], key='plate', sig_col='significant', ax=ax)
+        fn.plot_volcano(df, 'P1', 'A', key='plate', ax=ax2)
+        down = lambda a: sorted(a.collections[2].get_offsets()[:, 0].tolist())   # scatter order: ns, up, down
+        texts = {t.get_text() for t in ax.texts}
+        plt.close(fig)
+        # only the P1 rows, with the flag
+        self.assertEqual(sorted(agg['genes']), ['A', 'B', 'C', 'D'])
+        self.assertIn('significant', agg.columns)
+        # the flag colours A as down; the thresholds colour B as down
+        self.assertEqual(down(ax), [-0.5])
+        self.assertEqual(down(ax2), [-2.0])
+        # the measured genes of the list carry a label
+        self.assertEqual(texts, {'A', 'C'})
+
+
+class TestVolcanoColour(unittest.TestCase):
+    """px.volcano_colour (user decision 2026-10-23): the reference validation volcano colours only the tested
+    targets with adjpval < 0.05, any logfc. The DG25VDA01WT case: MAP2K3 (logfc about -0.9) red, off-targets grey."""
+
+    def test_targets_only_on_validation(self):
+        """Input: a validation contrast (targets A;B) and a primary contrast (no target). Expected: on the
+        validation contrast A (adjpval 0.01, logfc -0.9, not significant) colours, B (adjpval 0.2) and the
+        significant non-target C do not; on the primary contrast the flag is `significant`. Rationale: the
+        reference plot; primary volcanoes keep the platform flag."""
+        meas = pd.DataFrame({'uniquecontrast': ['v', 'v', 'v', 'p', 'p'], 'genes': ['A', 'B', 'C', 'A', 'C'],
+                             'significant': [0, 0, 1, 1, 0]}, index=[10, 11, 12, 13, 14])
+        report = pd.DataFrame({'uniquecontrast': ['v', 'p'], 'target': ['A; B', None]})
+        measure = pd.DataFrame({'adjpval': [0.01, 0.2, 1e-5, 1e-3, 0.5]}, index=[10, 11, 12, 13, 14])
+        flag = px.volcano_colour(meas, report, measure, 0.05)
+        # targets only on the validation contrast; the flag on the primary one
+        self.assertEqual(flag.tolist(), [1, 0, 0, 1, 0])
+        # the index of meas is kept
+        self.assertEqual(flag.index.tolist(), [10, 11, 12, 13, 14])
 
 
 class TestPlateReconstruction(unittest.TestCase):
@@ -554,6 +694,32 @@ class TestStemSharedYmax(unittest.TestCase):
         self.assertEqual(geom_ovr['ymax'], 40.0)
 
 
+class TestVolcanoDataHash(unittest.TestCase):
+    """The base-volcano filename carries a hash of the experiment's data (2026-10-23). Before, the cache
+    kept an image after its data changed: the DG25VDA01WT volcano still showed the p = 0 floor of the old parse."""
+
+    def test_hash_follows_the_data(self):
+        """Input: two experiments, then the same rows in another order, then one changed p-value. Expected:
+        the order gives the same hash; the change gives a new hash for that experiment only, and a new filename.
+        Rationale: a data change must render the volcano again; unchanged data must stay a cache hit."""
+        from python import functions as fn
+        vsrc = pd.DataFrame({'compound': ['uc1', 'uc1', 'uc2', 'uc2'], 'genes': ['G1', 'G2', 'G1', 'G2'],
+                             'logfc': [-2.0, 0.1, -1.0, 0.3], 'pvalue': [1e-50, 0.5, 1e-3, 0.2], 'significant': [1, 0, 1, 0]})
+        h = fn._volcano_data_hash(vsrc, ['uc1', 'uc2'])
+        changed = vsrc.copy()
+        changed.loc[0, 'pvalue'] = 1e-30
+        h2 = fn._volcano_data_hash(changed, ['uc1', 'uc2'])
+        name = lambda d: fn._volcano_base_cache_fname('uc1', (-8, 8), 350, data=d)
+        # the row order does not change the hash
+        self.assertEqual(fn._volcano_data_hash(vsrc.iloc[::-1], ['uc1', 'uc2']), h)
+        # a changed p-value changes the hash of its experiment only
+        self.assertNotEqual(h2['uc1'], h['uc1'])
+        self.assertEqual(h2['uc2'], h['uc2'])
+        # the filename follows the hash
+        self.assertNotEqual(name(h['uc1']), name(h2['uc1']))
+        self.assertEqual(name(h['uc1']), name(fn._volcano_data_hash(vsrc, ['uc1'])['uc1']))
+
+
 class TestRender(unittest.TestCase):
     """End-to-end render: build_interface writes the HTML, data.js and volcano SVGs."""
 
@@ -586,6 +752,40 @@ class TestRender(unittest.TestCase):
         self.assertIn('syncValLegendFromTicks', html)
         # the 2D labels-off leader-line declutter is emitted
         self.assertIn('declutterLabels', html)
+
+    def test_controls_shown_by_default(self):
+        """Config CONTROLS_ON (2026-10-26): absent or true -> the control tickbox starts ticked (the CONTROLS compounds
+        show); false -> it starts unticked. Before, build_interface always passed control_default_on=False."""
+        import tempfile
+        js = lambda d: open(os.path.join(d, 'interfaces', 'Serac_Px_interface_data.js')).read()
+        had, saved = hasattr(self.params, 'CONTROLS_ON'), getattr(self.params, 'CONTROLS_ON', None)
+        tmp = tempfile.TemporaryDirectory()
+        try:
+            self.params.CONTROLS_ON = False
+            self.output.build_interface(self.data, self.params, tmp.name)
+            off = js(tmp.name)
+        finally:
+            if had:
+                self.params.CONTROLS_ON = saved
+            else:
+                del self.params.CONTROLS_ON
+            tmp.cleanup()
+        # the fixture config has no CONTROLS_ON: the controls show on load
+        self.assertIn('window.__CONTROL_DEFAULT_ON__ = true;', js(self.out_dir))
+        # CONTROLS_ON: false hides them on load
+        self.assertIn('window.__CONTROL_DEFAULT_ON__ = false;', off)
+
+    def test_compound_peek_stays_under_the_pointer(self):
+        """The compound row keeps its own width at the right edge of the panel, and the volcano peek closes only when
+        the pointer leaves the whole panel (2026-10-23). Before, the panel grew to the left when the volcanoes
+        opened, the cells moved under the pointer, and leaving the row closed the peek. A headless-Chrome check
+        (scratchpad hover_test.py) showed: cells moved 198 px before, 0 px after."""
+        html = open(os.path.join(self.out_dir, 'interfaces', 'Serac_Px_interface.html')).read()
+        # the row stays at the right, at its own width
+        self.assertIn('width: fit-content; max-width: 100%; margin-left: auto;', html)
+        # the peek closes on leaving the panel, not the row
+        self.assertIn('box.addEventListener("mouseleave"', html)
+        self.assertNotIn('row.addEventListener("mouseout"', html)
 
     def test_loading_screen_first(self):
         """The loading screen comes right after <body>, before plotly.min.js and the figure, so it
@@ -672,6 +872,41 @@ class TestRender(unittest.TestCase):
         self.assertGreater(fresh, 0)
         # the cache path emits the SAME positions (not an empty map)
         self.assertEqual(cached, fresh)
+
+    def test_volcano_rerenders_on_data_change(self):
+        """Input: builds into one output folder: the same data two times, then one changed logfc in one
+        experiment. Expected: the second build renders no volcano; the third renders only that experiment,
+        under a new filename. Rationale: the 2026-10-23 stale image (the cache ignored the data)."""
+        import contextlib, io, re, tempfile
+        tmp = tempfile.TemporaryDirectory()                # empty: positions.json holds only this build's experiments
+        out = tmp.name
+        vdir = os.path.join(out, 'interfaces', 'volcanoes_px')
+        meas = self.output.meas
+
+        def build():
+            buf = io.StringIO()
+            with contextlib.redirect_stdout(buf):
+                self.output.build_interface(self.data, self.params, out)
+            n = int(re.search(r'([\d,]+) base\(s\) rendered', buf.getvalue()).group(1).replace(',', ''))
+            return n, {f for f in os.listdir(vdir) if f.endswith('.svg')}
+
+        saved_ow, saved_logfc = self.params.IFACE_OVERWRITE, meas['logfc'].copy()
+        try:
+            self.params.IFACE_OVERWRITE = True
+            build()
+            n_same, files_same = build()
+            vk = sorted(json.load(open(os.path.join(vdir, 'positions.json'))))[0]
+            meas.loc[meas.index[meas['uniquecontrast'].astype(str) == vk][0], 'logfc'] += 0.01
+            n_changed, files_changed = build()
+        finally:
+            self.params.IFACE_OVERWRITE = saved_ow
+            meas['logfc'] = saved_logfc
+            tmp.cleanup()
+        # the same data renders nothing again
+        self.assertEqual(n_same, 0)
+        # one changed experiment renders one volcano, under one new filename
+        self.assertEqual(n_changed, 1)
+        self.assertEqual(len(files_changed - files_same), 1)
 
     def test_volcano_base_dedup(self):
         """Base-dedup: many (gene,plate) cells share ONE per-experiment base SVG (keyed by
@@ -813,11 +1048,28 @@ class TestRender(unittest.TestCase):
         # pin ring underlay is emitted and sits just below (before) the pin fill trace
         self.assertEqual(num('PIN_RING_TRACE'), num('PIN_TRACE') - 1)
 
+    def test_z_fit_pad(self):
+        """The MS (z) axis top follows the genes that show: config Z_FIT_PAD reaches the client as
+        __RANGES__.zFitPad, and the page sets the z range from the shown genes + pins before each redraw
+        that can change them (applyRanges, a pin change, a legend toggle)."""
+        import re
+        js = open(os.path.join(self.out_dir, 'interfaces', 'Serac_Px_interface_data.js')).read()
+        m = re.search(r'window\.__RANGES__ = JSON\.parse\("(.*?)"\);', js, re.S)
+        # the config margin (set in make_synthetic) reached the client
+        self.assertEqual(json.loads(json.loads('"' + m.group(1) + '"'))['zFitPad'], 0.08)
+        html = open(os.path.join(self.out_dir, 'interfaces', 'Serac_Px_interface.html')).read()
+        # applyRanges fits z before its redraw
+        self.assertIn('fitZ();\n        Plotly.redraw(gd);', html)
+        # a pin change fits z before its redraw
+        self.assertIn('fitZHook();            // a pin above the z top raises it\n          Plotly.redraw(gd);', html)
+        # a legend toggle redraws only when the z range changed
+        self.assertIn('if (fitZ()) Plotly.redraw(gd);', html)
+
 
     def test_ms_score_platerows(self):
-        """The MS slider filters each compound experiment by its own MS score. Every real
-        plate-row in the injected panel must carry a numeric MS at index 8, and the client must
-        wire that value into the per-entry filter (msOk / msLo / msHi)."""
+        """The MS slider filters each compound experiment by its own MS score, and the dot's z stays fixed.
+        Every real plate-row in the injected panel must carry a numeric MS at index 8, and the client must wire
+        that value into the per-entry filter (msOk / msLo / msHi), with no range test on the dot's z."""
         import re
         js = open(os.path.join(self.out_dir, 'interfaces', 'Serac_Px_interface_data.js')).read()
         m = re.search(r'__GENE_COMPOUNDS__ = JSON\.parse\("(.*?)"\);', js, re.S)
@@ -839,6 +1091,8 @@ class TestRender(unittest.TestCase):
         html = open(os.path.join(self.out_dir, 'interfaces', 'Serac_Px_interface.html')).read()
         self.assertIn('function msOk(pl)', html)
         self.assertIn('msLo = b.z[0]', html)
+        # the dot's fixed z is not range-tested
+        self.assertNotIn('o.z[k] >= b.z[0]', html)
 
 
 class TestFbxo31IndependentTicked(unittest.TestCase):
@@ -872,8 +1126,8 @@ class TestFbxo31IndependentTicked(unittest.TestCase):
 class TestFilterDefaults(unittest.TestCase):
     """The config filter defaults reach the page: SHOW_PLATE 'validation <date>' ticks that validation
     block (the JS no longer forces validation plates off), ACTIVITY_DEFAULTS picks the Activity boxes,
-    an empty DEPMAP/CONF/LOF_DEFAULTS ticks every box (injected null, not []), and LABELS_ON false
-    starts the Labels eye toggle off."""
+    an empty DEPMAP/CONF/LOF_DEFAULTS ticks every box (injected null, not []), LABELS_ON false
+    starts the Labels eye toggle off, and Z_FIT_PAD null keeps the z axis on all genes."""
 
     @classmethod
     def setUpClass(cls):
@@ -885,6 +1139,7 @@ class TestFilterDefaults(unittest.TestCase):
         params.ACTIVITY_DEFAULTS = ['Single', 'Low']
         params.DEPMAP_DEFAULTS, params.CONF_DEFAULTS, params.LOF_DEFAULTS = [], [], []
         params.LABELS_ON = False
+        params.Z_FIT_PAD = None
         output.build_interface(data, params, 'tmp/out_filter_defaults')
         with open('tmp/out_filter_defaults/interfaces/Serac_Px_interface_data.js') as f:
             cls.js = f.read()
@@ -933,6 +1188,14 @@ class TestFilterDefaults(unittest.TestCase):
         self.assertIn('var hideOtherLabels = (window.__LABELS_DEFAULT_ON__ === false);', self.html)
         # the eye icon starts from it
         self.assertIn('tg.classList.toggle("off", hideOtherLabels);   // icon follows labels_default_on', self.html)
+
+    def test_z_fit_off_from_config(self):
+        """Z_FIT_PAD null -> __RANGES__.zFitPad null, so fitZ does nothing and Plotly fits the z axis to
+        all genes (the invisible backdrop), as before the fit."""
+        # null reaches the page
+        self.assertIsNone(self._inj('RANGES')['zFitPad'])
+        # fitZ stops on null
+        self.assertIn('if (R.zFitPad == null) return false;', self.html)
 
 
 class TestMemoryFreeing(unittest.TestCase):
@@ -1198,7 +1461,8 @@ class TestBuildOldDf(unittest.TestCase):
         with tempfile.TemporaryDirectory() as d:
             p = SimpleNamespace(RAW_PROTEOMICS_PATH='r', CLEAN_PROTEOMICS_PATH='c', PX_20260520_DB='db20',
                                 PX_20260520_CDDVAULT='v20', PX_20260529_DB='db29', PX_20260529_CDDVAULT='v29',
-                                DFRAW_PATH=os.path.join(d, 'df_raw.parquet'), MS_PATH=os.path.join(d, 'MS.parquet'))
+                                DFRAW_PATH=os.path.join(d, 'df_raw.parquet'), MS_PATH=os.path.join(d, 'MS.parquet'),
+                                dbx=lambda path: path)    # the 'local' backend: paths pass as they are
             with mock.patch.object(px.fn, 'load_proteomics_data', side_effect=rets) as lpd:
                 px.DATA().build_old_df(p)
             df_raw, MS = pd.read_parquet(p.DFRAW_PATH), pd.read_parquet(p.MS_PATH)
@@ -1238,6 +1502,106 @@ class TestBuildOldDf(unittest.TestCase):
                 self.assertEqual(build.call_count, n_calls, f'DFRAW_OVERWRITE={flag}')
                 # the files are loaded in both cases
                 self.assertEqual((len(data.df_raw), len(data.MS)), (2, 1))
+
+    def test_load_old_df_stops_on_p0(self):
+        """Input: a df_raw file with p = 0 on a significant-down row (a file written before the exact parse).
+        Expected: ValueError that names DFRAW_OVERWRITE. Rationale: the score -log10(p) * -logfc is infinite there,
+        and the clip at 100 that hid it is gone (2026-10-26)."""
+        import tempfile
+        from types import SimpleNamespace
+        with tempfile.TemporaryDirectory() as d:
+            p = SimpleNamespace(DFRAW_PATH=os.path.join(d, 'df_raw.parquet'), MS_PATH=os.path.join(d, 'MS.parquet'),
+                                DFRAW_OVERWRITE=False)
+            pd.DataFrame({'genes': ['G_001'], 'MSPlate': ['P1'], 'logfc': [-1.0], 'pvalue': [0.0],
+                          'significant': [1]}).to_parquet(p.DFRAW_PATH)
+            pd.DataFrame({'compound': ['SRB-0000001'], 'ndown': [5]}).to_parquet(p.MS_PATH)
+            # the load stops and names the rebuild flag
+            with self.assertRaisesRegex(ValueError, 'DFRAW_OVERWRITE'):
+                px.DATA().load_old_df(p)
+
+
+class TestGeneMsScore(unittest.TestCase):
+    """gene_ms_score (user decision 2026-10-26): the dot's z is the validation score of a validation target, else
+    the highest FBX score, else the highest legacy (April-May) score of a significant-down row, else 0. Raw scale."""
+
+    MS = pd.DataFrame({'genes': ['G1', 'G2', 'G2', 'G3', 'G3', 'G4'],
+                       'source': ['FBX', 'FBX', 'df_raw', 'df_raw', 'df_raw', 'df_raw'],
+                       'logfc': [None, None, -2.0, -1.0, 1.5, 0.8],
+                       'ms_score': [120.0, 30.0, 90.0, 40.0, -7.0, -3.0]}).astype({'genes': 'category', 'source': 'category'})
+
+    def test_rule(self):
+        """Input: G1 a validation target (50) with FBX 120; G2 FBX 30 and legacy 90; G3 legacy only (a down row 40
+        and an up row); G4 a significant-up legacy row only; G5 a target with no mscore row. Expected: G1 50
+        validation, G2 30 FBX, G3 40 April-May, G4 0 with no source, G5 20 validation. Rationale: an FBX score wins
+        over a higher legacy score (BCL6), and the legacy score fills only the genes with no FBX score."""
+        z = px.gene_ms_score(self.MS, pd.Series({'G1': 50.0, 'G5': 20.0})).set_index('genes')
+        # the score of each gene
+        self.assertEqual(z['ms_score'].to_dict(), {'G1': 50.0, 'G2': 30.0, 'G3': 40.0, 'G4': 0.0, 'G5': 20.0})
+        # the source of each score
+        self.assertEqual(z['ms_source'].to_dict(),
+                         {'G1': 'validation', 'G2': 'FBX', 'G3': 'April-May', 'G4': '', 'G5': 'validation'})
+
+    def test_row_without_gene_dropped(self):
+        """Input: the rows of MS plus an FBX row with no gene (pandas reads the symbol 'NA' as missing). Expected: no
+        gene dot without a name. Rationale: a NaN gene went into __AREA_DATA__, and JSON.parse stopped the page script
+        (no dots, no target filters; found 2026-10-26)."""
+        ms = pd.concat([self.MS, pd.DataFrame({'genes': [None], 'source': ['FBX'], 'logfc': [None], 'ms_score': [50.0]})],
+                       ignore_index=True).astype({'genes': 'category', 'source': 'category'})
+        z = px.gene_ms_score(ms, None)
+        # every dot has a gene name, and the four named genes stay
+        self.assertFalse(z['genes'].isna().any())
+        self.assertEqual(sorted(z['genes']), ['G1', 'G2', 'G3', 'G4'])
+
+    def test_no_validation_score(self):
+        """Input: no validation scores (None). Expected: G1 takes its FBX score. Rationale: a build without
+        validation data keeps working."""
+        z = px.gene_ms_score(self.MS, None).set_index('genes')
+        # the FBX score, from the FBX source
+        self.assertEqual((z.loc['G1', 'ms_score'], z.loc['G1', 'ms_source']), (120.0, 'FBX'))
+
+
+class TestGeneAssociation(unittest.TestCase):
+    """gene_association (user decision 2026-10-26): with the RDS opentarget table, a validation target's
+    px_ms_score_glues association first, else the opentarget value; without it, the max OT_CACHE overall_score."""
+
+    OT = pd.DataFrame({'target_symbol': ['G1', 'G1', 'G2'], 'overall_score': [0.2, 0.7, 0.4]})
+
+    def test_ot_cache(self):
+        """Input: no opentarget table (None). Expected: each gene's highest OT_CACHE overall_score. Rationale: config
+        ASSOC_SOURCE 'ot_cache' keeps the y of the builds before 2026-10-26."""
+        a = px.gene_association(self.OT, pd.Series({'G1': 0.9}), None)
+        # the OT_CACHE max, the validation value is not used
+        self.assertEqual(a.to_dict(), {'G1': 0.7, 'G2': 0.4})
+
+    def test_opentarget(self):
+        """Input: validation values G1 0.9, G3 empty, G4 0.3 (G4 not in opentarget); opentarget G1 0.5, G2 0.6, G3 0.1.
+        Expected: G1 0.9, G2 0.6, G3 0.1, G4 0.3. Rationale: px_ms_score_glues > opentarget; an empty validation
+        value falls back to opentarget; a target that opentarget lacks (HSPB11 in the real data) keeps its value."""
+        a = px.gene_association(self.OT, pd.Series({'G1': 0.9, 'G3': float('nan'), 'G4': 0.3}),
+                                pd.Series({'G1': 0.5, 'G2': 0.6, 'G3': 0.1}))
+        # the validation value first, else opentarget
+        self.assertEqual(a.to_dict(), {'G1': 0.9, 'G2': 0.6, 'G3': 0.1, 'G4': 0.3})
+
+
+class TestValidationExperimentScores(unittest.TestCase):
+    """validation_experiment_scores (user decision 2026-10-26): the MS slider filters each experiment, and a
+    validation target's own validation experiments use its validation score."""
+
+    def test_rule(self):
+        """Input: G1 (validation score 50) as a hit on its own validation contrast, a tested-target row, a stem
+        completion and a hit on a primary reference plate; G2 a hit on a contrast that names only G1; G3 named but
+        with no validation score. Expected: 50 for the G1 hit and the G1 target row, NaN for all others. Rationale:
+        the validation sets use the validation score, the primary screen plates their own score."""
+        import numpy as np
+        cdf = pd.DataFrame({'gene': ['G1', 'G1', 'G1', 'G1', 'G2', 'G3'],
+                            'uniquecontrast': ['u1', 'u2', 'u3', 'u4', 'u1', 'u5'],
+                            'plate': ['P1WT', 'P1KO', 'P2KO', 'Pw50', 'P1WT', 'P3WT'],
+                            'is_completion': [False, True, True, False, False, False],
+                            'is_target': [False, True, False, False, False, False]})
+        rep = pd.DataFrame({'uniquecontrast': ['u1', 'u2', 'u3', 'u4', 'u5'], 'target': ['G1', 'G1', 'G1;G9', 'G1', 'G3']})
+        s = px.validation_experiment_scores(cdf, rep, pd.Series({'G1': 50.0}), ['P1WT', 'P1KO', 'P2KO', 'P3WT'])
+        # the validation score only on the G1 hit and the G1 tested-target row of its validation plates
+        np.testing.assert_array_equal(s.to_numpy(), [50.0, 50.0, np.nan, np.nan, np.nan, np.nan])
 
 
 class TestResolveOutputDir(unittest.TestCase):
@@ -1354,6 +1718,512 @@ class TestPublish(unittest.TestCase):
         # a failed EC2 sync stops the CLI with an error
         with self.assertRaises(SystemExit):
             self._publish('Failed')
+
+
+class TestDropboxAccess(unittest.TestCase):
+    """Dropbox readers (fn.dbx_target / dbx_open / dbx_glob / dbx_push, bound by PARAMS.setup_dropbox). The
+    cluster has no Dropbox client: with DROPBOX_BACKEND 'rclone', a path under DROPBOX_LOCAL_ROOT goes to the
+    rclone remote, as in MS_ML; every other path, and every path with 'local', stays on the local disk.
+    subprocess.run is mocked, so no test calls rclone or the network."""
+
+    ROOT = '/mnt/c/Users/gtamo/Serac Biosciences Dropbox/'
+
+    def _params(self, d, backend=None):
+        """PARAMS from a temp config that has the DROPBOX_* keys only when `backend` is given."""
+        import yaml
+        cfg = {} if backend is None else {'DROPBOX_BACKEND': backend, 'DROPBOX_REMOTE': 'dropbox:',
+                                          'DROPBOX_LOCAL_ROOT': self.ROOT}
+        with open(os.path.join(d, 'config.yaml'), 'w') as fh:
+            yaml.safe_dump(cfg, fh)
+        return px.PARAMS(os.path.join(d, 'config.yaml')).load_params()
+
+    def test_target(self):
+        """Input: a laptop Dropbox path (with '//'), a path outside the root, and prefix None. Expected:
+        'dropbox:Serac_team/x/y.csv', then None two times. Rationale: the config keeps the laptop paths, and
+        the cluster maps them to the remote as MS_ML does."""
+        # a path under the root maps to the remote; '//' counts as one '/'
+        self.assertEqual(px.fn.dbx_target(self.ROOT + 'Serac_team/x//y.csv', 'dropbox:', self.ROOT),
+                         'dropbox:Serac_team/x/y.csv')
+        # a path outside the root is local
+        self.assertIsNone(px.fn.dbx_target('/home/gtamo/MS_ML/data/x.csv', 'dropbox:', self.ROOT))
+        # backend 'local' (prefix None): every path is local
+        self.assertIsNone(px.fn.dbx_target(self.ROOT + 'Serac_team/x.csv', 'dropbox:', None))
+
+    def test_local_backend(self):
+        """Input: a config with no DROPBOX_* keys, and a temp folder. Expected: dbx_push writes a csv (parent
+        folders made); dbx returns the path; '*.csv' lists files only and '*/' folders only; no rclone call.
+        Rationale: the laptop and the test fixtures read the disk, as before."""
+        import tempfile
+        from unittest import mock
+        df = pd.DataFrame({'a': [1, 2], 'b': ['x', 'y']})
+        with tempfile.TemporaryDirectory() as d, mock.patch('subprocess.run') as run:
+            p = self._params(d)
+            f = os.path.join(d, 'sub', 'f.csv')
+            p.dbx_push(df, f)
+            opened, back = p.dbx(f), pd.read_csv(p.dbx(f))
+            files, dirs = p.dbx_glob(os.path.join(d, 'sub'), '*.csv'), p.dbx_glob(d, '*/')
+        # a local path comes back as it is
+        self.assertEqual(opened, f)
+        # the pushed csv reads back the same (no index column)
+        pd.testing.assert_frame_equal(back, df)
+        # '*.csv' lists files only; '*/' lists folders only (config.yaml is a file)
+        self.assertEqual((files, dirs), ([f], [os.path.join(d, 'sub')]))
+        # the local backend never calls rclone
+        run.assert_not_called()
+
+    def test_rclone_backend(self):
+        """Input: DROPBOX_BACKEND rclone, mocked rclone output. Expected: `rclone cat` on the mapped path gives
+        a buffer pandas reads; `rclone lsf` names come back in the config form, and '[0-9]*/' keeps the date
+        folders only; dbx_push sends the csv bytes to `rclone rcat`; a local path makes no rclone call.
+        Rationale: the cluster reads the laptop's config paths from Dropbox directly."""
+        import tempfile
+        from unittest import mock
+        out = {'cat': b'a,b\n1,x\n', 'lsf': b'20260601/\n20260616_02/\nnotes.txt\nold/\n', 'rcat': b''}
+        fake = lambda cmd, input=None, capture_output=True: mock.Mock(returncode=0, stdout=out[cmd[1]], stderr=b'')
+        root = self.ROOT + 'Serac_team/Data_Prototype'
+        with tempfile.TemporaryDirectory() as d, mock.patch('subprocess.run', side_effect=fake) as run:
+            p = self._params(d, 'rclone')
+            df = pd.read_csv(p.dbx(root + '/20260601/x_FBX_REPORT.csv'))
+            tranches = p.dbx_glob(root, '[0-9]*/')
+            p.dbx_push(df, self.ROOT + 'Serac_team/out/df.csv')
+            n_rclone, local = run.call_count, p.dbx(os.path.join(d, 'config.yaml'))
+        cmds = [c.args[0] for c in run.call_args_list]
+        # the Dropbox path streams with rclone cat from the mapped remote path
+        self.assertEqual(cmds[0], ['rclone', 'cat', 'dropbox:Serac_team/Data_Prototype/20260601/x_FBX_REPORT.csv'])
+        # pandas reads the streamed bytes
+        self.assertEqual(df.to_dict('list'), {'a': [1], 'b': ['x']})
+        # rclone lsf lists the mapped folder; only the date folders match, in the config path form
+        self.assertEqual(cmds[1], ['rclone', 'lsf', 'dropbox:Serac_team/Data_Prototype'])
+        self.assertEqual(tranches, [root + '/20260601', root + '/20260616_02'])
+        # dbx_push uploads the csv bytes (no index) with rclone rcat
+        self.assertEqual((cmds[2], run.call_args_list[2].kwargs['input']),
+                         (['rclone', 'rcat', 'dropbox:Serac_team/out/df.csv'], b'a,b\n1,x\n'))
+        # a local path comes back as it is, with no rclone call, also with the rclone backend
+        self.assertEqual((local, run.call_count), (os.path.join(d, 'config.yaml'), n_rclone))
+
+    def test_rclone_error_raises(self):
+        """Input: rclone exits 1 with a message. Expected: OSError with that message. Rationale: a missing
+        folder or an expired token must stop the build with rclone's reason, not give an empty table."""
+        from unittest import mock
+        fail = mock.Mock(returncode=1, stdout=b'', stderr=b'directory not found')
+        with mock.patch('subprocess.run', return_value=fail):
+            # the rclone message reaches the error
+            with self.assertRaisesRegex(OSError, 'directory not found'):
+                px.fn.dbx_glob(self.ROOT + 'Serac_team/missing', '*', 'dropbox:', self.ROOT)
+
+    def test_tranche_folders_listed_once(self):
+        """Input: the synthetic fixture, with params.dbx_glob wrapped to count its calls. Expected: one call
+        for FBX_DIR plus one per date folder; TRANCHE_CSVS holds every tranche. Rationale: one rclone listing
+        takes ~1 s, so load_new_df must not list a folder again for each file kind."""
+        from unittest import mock
+        params, _, _ = _pipeline()
+        spy, data = mock.Mock(side_effect=params.dbx_glob), px.DATA()
+        with mock.patch.object(params, 'dbx_glob', spy):
+            data.load_new_df(params)
+        n_dirs = sum(os.path.isdir(os.path.join(params.FBX_DIR, n)) for n in os.listdir(params.FBX_DIR))
+        # one listing of FBX_DIR + one per date folder (this fixture has no VALIDATION_DIR)
+        self.assertEqual(spy.call_count, 1 + n_dirs)
+        # every tranche keeps its csv list
+        self.assertEqual(sorted(data.TRANCHE_CSVS), sorted(data.FBX_TRANCHES))
+
+    def test_pipeline_through_rclone(self):
+        """Input: the synthetic fixture read through the 'rclone' backend: FBX_DIR and the PX_* exports sit
+        under DROPBOX_LOCAL_ROOT, and a fake rclone serves the fixture files. Expected: the same FBX tables,
+        REPORT and plate dates as the local build. Rationale: every Dropbox file arrives as a stream that
+        pandas can read one time only, and CLEAN_PROTEOMICS_PATH (outside the root) stays local in that run."""
+        from pathlib import Path
+        from unittest import mock
+        root = os.path.abspath('tmp') + '/'
+
+        def fake(cmd, input=None, capture_output=True):   # rclone cat / lsf, served from the fixture
+            local = os.path.join(root, cmd[2][len('fake:'):])
+            if cmd[1] == 'cat':
+                return mock.Mock(returncode=0, stdout=Path(local).read_bytes(), stderr=b'')
+            names = [n + ('/' if os.path.isdir(os.path.join(local, n)) else '') for n in os.listdir(local)]
+            return mock.Mock(returncode=0, stdout='\n'.join(names).encode(), stderr=b'')
+
+        def build(params):
+            data, out = px.DATA(), px.OUTPUT()
+            for m in ('load_chemical_lib_df', 'load_old_df', 'load_new_df', 'get_contaminants_and_controls'):
+                getattr(data, m)(params)
+            out.combine_datasets(data, params)
+            return data, out
+
+        _pipeline()                                       # the fixture exists
+        data_l, out_l = build(px.PARAMS(_CFG).load_params())
+        p = px.PARAMS(_CFG).load_params()
+        for k in ('FBX_DIR', 'PX_20260520_DB', 'PX_20260520_CDDVAULT', 'PX_20260529_DB', 'PX_20260529_CDDVAULT'):
+            setattr(p, k, os.path.abspath(getattr(p, k)))
+        p.DROPBOX_BACKEND, p.DROPBOX_REMOTE, p.DROPBOX_LOCAL_ROOT = 'rclone', 'fake:', root
+        p.setup_dropbox()
+        with mock.patch('subprocess.run', side_effect=fake) as run:
+            data_r, out_r = build(p)
+        n_rclone = run.call_count
+        # the Dropbox reads really went through rclone
+        self.assertGreater(n_rclone, 0)
+        # the same tranches, by folder name
+        self.assertEqual([os.path.basename(t) for t in data_r.FBX_TRANCHES], [os.path.basename(t) for t in data_l.FBX_TRANCHES])
+        # the same FBX tables
+        for k in ('FBX_MEASURE', 'FBX_MSSCORE', 'FBX_REPORT'):
+            pd.testing.assert_frame_equal(getattr(data_r, k), getattr(data_l, k), obj=k)
+        # the same REPORT (the source exports read through rclone) and the same plate dates
+        pd.testing.assert_frame_equal(out_r.report, out_l.report)
+        self.assertEqual(out_r.plate2date, out_l.plate2date)
+
+
+class TestRdsTable(unittest.TestCase):
+    """fn.rds_table: a read-only session with a verified certificate, COPY of the quoted table, credentials
+    split at the first ':'. psycopg2.connect is mocked, so no database is needed."""
+
+    def test_rds_table(self):
+        """Input: a credential file 'user:pa:ss' and a fake cursor that writes a 2-row CSV. Expected: the frame of
+        that CSV; connect gets user 'user', password 'pa:ss' and sslmode verify-full; the session is read-only;
+        the COPY quotes the table name. Rationale: a password may hold ':', and the build never writes to the DB."""
+        import tempfile
+        from unittest import mock
+        conn = mock.MagicMock()
+        cur = conn.cursor.return_value.__enter__.return_value
+        cur.copy_expert.side_effect = lambda q, buf: buf.write(b'id,plate\n1,Pw1\n2,Pw2\n')
+        with tempfile.TemporaryDirectory() as d:
+            cred = os.path.join(d, 'cred')
+            with open(cred, 'w') as fh:
+                fh.write('user:pa:ss\n')
+            with mock.patch('psycopg2.connect', return_value=conn) as connect:
+                df = px.fn.rds_table('px_fbx_report', 'host.example', 'postgres', cred, 'ca.pem')
+        kw = connect.call_args.kwargs
+        # the frame of the streamed CSV
+        self.assertEqual(df.to_dict('list'), {'id': [1, 2], 'plate': ['Pw1', 'Pw2']})
+        # the credentials split at the first ':', and the certificate is verified
+        self.assertEqual((kw['user'], kw['password'], kw['sslmode']), ('user', 'pa:ss', 'verify-full'))
+        # a read-only session, closed at the end
+        conn.set_session.assert_called_once_with(readonly=True)
+        conn.close.assert_called_once()
+        # the COPY names the table as a quoted identifier
+        self.assertIn("Identifier('px_fbx_report')", repr(cur.copy_expert.call_args.args[0]))
+
+    def test_rds_query(self):
+        """Input: the SQL text 'SELECT target FROM px_ms_score_glues;' and a fake cursor that writes a 2-row CSV.
+        Expected: the frame of that CSV; a read-only session, closed at the end; the COPY wraps the query without
+        the ';'. Rationale: a notebook cell runs any read-only query, and 'COPY (...;)' is a syntax error."""
+        import tempfile
+        from unittest import mock
+        conn = mock.MagicMock()
+        cur = conn.cursor.return_value.__enter__.return_value
+        cur.copy_expert.side_effect = lambda q, buf: buf.write(b'target\nG1\nG2\n')
+        with tempfile.TemporaryDirectory() as d, mock.patch('psycopg2.connect', return_value=conn):
+            open(os.path.join(d, 'cred'), 'w').write('u:p\n')
+            df = px.fn.rds_query('SELECT target FROM px_ms_score_glues;', 'h', 'postgres', os.path.join(d, 'cred'), 'ca.pem')
+        # the frame of the streamed CSV
+        self.assertEqual(df.to_dict('list'), {'target': ['G1', 'G2']})
+        # a read-only session, closed at the end
+        conn.set_session.assert_called_once_with(readonly=True)
+        conn.close.assert_called_once()
+        # the COPY holds the query text without the trailing ';'
+        self.assertIn("SQL('SELECT target FROM px_ms_score_glues')", repr(cur.copy_expert.call_args.args[0]))
+
+
+class TestExactPvalueParse(unittest.TestCase):
+    """The exports and the database store p-values as plain decimals (no exponent). pandas' default float
+    parser cuts a decimal after ~17 digits, so every p < ~1e-17 became 0 (found 2026-10-21: 599 RDS contrasts
+    got an infinite ms score, and the volcanoes drew those points at the floor). The readers parse exactly."""
+
+    P = '0.' + '0' * 30 + '5856726383653'          # 5.856726383653e-31 as a plain decimal
+
+    def test_rds_table_exact(self):
+        """Input: a fake COPY stream with one plain-decimal p of 5.9e-31. Expected: that exact value, not 0.
+        Rationale: the MS score is -log10(p) * -logfc, so p = 0 gives an infinite score."""
+        import tempfile
+        from unittest import mock
+        conn = mock.MagicMock()
+        conn.cursor.return_value.__enter__.return_value.copy_expert.side_effect = \
+            lambda q, buf: buf.write(f'id,pvalue\n1,{self.P}\n'.encode())
+        with tempfile.TemporaryDirectory() as d, mock.patch('psycopg2.connect', return_value=conn):
+            open(os.path.join(d, 'cred'), 'w').write('u:p\n')
+            p = px.fn.rds_table('px_fbx_measure', 'h', 'postgres', os.path.join(d, 'cred'), 'ca.pem')['pvalue'].iloc[0]
+        # the exact value of the decimal
+        self.assertEqual(p, float(self.P))
+
+    def test_dropbox_tranche_exact(self):
+        """Input: one tranche folder whose MEASURE holds a plain-decimal p of 5.9e-31. Expected: FBX_MEASURE keeps
+        the exact value. Rationale: the Dropbox exports use the same format as the database."""
+        import functools, tempfile
+        from types import SimpleNamespace
+        with tempfile.TemporaryDirectory() as d:
+            t = os.path.join(d, '20260101'); os.makedirs(t)
+            uc = 'SRB.0000001.001_vs_DMSO'
+            pd.DataFrame({'uniquecontrast': [uc], 'srbnumber': ['SRB-0000001-001'], 'plate': ['Pw1']}).to_csv(f'{t}/20260101_FBX_REPORT.csv', index=False)
+            pd.DataFrame({'uniquecontrast': [uc], 'genes': ['G1'], 'plate': ['Pw1'], 'ms_score': [1.0]}).to_csv(f'{t}/20260101_FBX_MSSCORE.csv', index=False)
+            open(f'{t}/20260101_FBX_MEASURE.csv', 'w').write(f'uniquecontrast,genes,pg,logfc,pvalue,significant,plate\n{uc},G1,P1,-2.0,{self.P},1,Pw1\n')
+            data = px.DATA()
+            data.load_dropbox_fbx(SimpleNamespace(FBX_DIR=d, dbx=lambda p: p, dbx_glob=functools.partial(px.fn.dbx_glob)))
+        # the exact value of the decimal
+        self.assertEqual(data.FBX_MEASURE['pvalue'].iloc[0], float(self.P))
+
+    def test_legacy_export_exact(self):
+        """Input: an old proteomics export (serac mode) whose raw table holds a plain-decimal p of 5.9e-31.
+        Expected: df_raw keeps the exact value. Rationale: build_old_df makes df_raw from these exports, and the
+        legacy MS score is -log10(p) * -logfc (found 2026-10-26: 522 legacy rows read p = 0)."""
+        import tempfile
+        with tempfile.TemporaryDirectory() as d:
+            open(f'{d}/raw.csv', 'w').write('MoleculeBatchID,MSPlate,genes,pg,logfc,pvalue,adjpval,significant,uniquecontrast\n'
+                                            f'SRB-0000001-001,Plate1,G1,P1,-2.0,{self.P},{self.P},1,SRB.0000001.001_vs_DMSO\n')
+            pd.DataFrame({'CDD Number': ['C1'], 'Molecule Name': ['SRB-0000001'],
+                          'MSData - Proteomics activities: Source': ['SERAC'],
+                          'MSData - Proteomics activities: Date': ['2026-04-29'],
+                          'MSData - Proteomics activities: Molecule-Batch ID': ['SRB-0000001-001']}).to_csv(f'{d}/ms.csv', index=False)
+            df_raw, _ = px.fn.load_proteomics_data(f'{d}/raw.csv', f'{d}/ms.csv', verbose=False)
+        # the exact value of the decimal
+        self.assertEqual(df_raw['pvalue'].iloc[0], float(self.P))
+
+
+class TestRdsSource(unittest.TestCase):
+    """PX_SOURCE 'rds' (2026-10-21): the FBX tables come from the Px database plus a local archive of what it
+    lacks, and the plate dates come from PX_DATES. A fake database holds the tmp_vdir exports the way the
+    platform loads them: every export appended in date order (ids increase), the FBX folders in the main
+    tables, the validation folders in the glues tables (no plate column). It lacks the oldest FBX folder,
+    holds one contrast with another adjpval (the database wins), one new contrast with no date, and one FBX
+    contrast in the glues tables only (it keeps the score of its FBX export, like Pw108 in the real data)."""
+
+    @classmethod
+    def setUpClass(cls):
+        import glob, tempfile
+        from unittest import mock
+        make_synthetic.main('tmp_vdir')
+        cls.reexported = make_synthetic.add_validation_dir('tmp_vdir')
+        cls.tmp = tempfile.TemporaryDirectory()
+        params = px.PARAMS('tmp_vdir/config.yaml').load_params()
+        params.IFACE_DIR = os.path.join(cls.tmp.name, 'iface_dropbox')
+        params.RDS_HOST = params.RDS_DATABASE = params.RDS_CRED_FILE = params.RDS_CA_BUNDLE = 'fake'
+        params.PX_DATES = os.path.join(cls.tmp.name, 'PX_dates.csv')
+        params.PX_ARCHIVE_DIR = os.path.join(cls.tmp.name, 'px_archive')
+        cls.ref = cls._build(params)
+
+        # the fake database: exports in date order (validation after FBX on a tie), FBX -> main, validation -> glues
+        folders = sorted(glob.glob('tmp_vdir/fbx/*') + glob.glob('tmp_vdir/validation/*'),
+                         key=lambda d: (os.path.basename(d), 'validation' in d))
+        tables, n = {t: [] for t in ('px_fbx_measure', 'px_fbx_report', 'px_fbx_glues', 'px_fbx_glues_report')}, 0
+        for d in folders:
+            if os.path.basename(d) == '20260601':
+                continue                                  # the database lacks the oldest FBX folder
+            val = 'validation' in d
+            for kind, table in (('MEASURE', 'px_fbx_glues' if val else 'px_fbx_measure'),
+                                ('REPORT', 'px_fbx_glues_report' if val else 'px_fbx_report')):
+                df = pd.read_csv(glob.glob(os.path.join(d, f'*_{kind}.csv'))[0])
+                tables[table].append(df.assign(id=range(n, n + len(df))))
+                n += len(df)
+        cls.db = {t: pd.concat(f, ignore_index=True) for t, f in tables.items()}
+        cls.db['px_ms_score_glues'] = pd.read_csv(glob.glob('tmp_vdir/validation/*/*_MSSCORE.csv')[0])   # per-target scores
+        # opentarget: one value per gene for the first 40 genes; G_00000 has another value than its validation one,
+        # and G_00001 is absent (as HSPB11 in the real data)
+        g = [x for x in make_synthetic.GENES[:40] if x != make_synthetic.GENES[1]]
+        cls.db['opentarget'] = pd.DataFrame({'id': range(len(g)), 'approvedsymbol': g,
+                                             'associationscore': [0.99] + [round(0.02 * i, 2) for i in range(1, len(g))]})
+        m, r = cls.db['px_fbx_measure'], cls.db['px_fbx_report']
+        cls.changed, base = r['uniquecontrast'].iloc[0], r['uniquecontrast'].iloc[1]
+        m.loc[m['uniquecontrast'] == cls.changed, 'adjpval'] = 0.123
+        cls.extra = base + '_NEW'
+        cls.db['px_fbx_measure'] = pd.concat([m, m[m['uniquecontrast'] == base].assign(uniquecontrast=cls.extra, plate='Pw99')])
+        cls.db['px_fbx_report'] = pd.concat([r, r[r['uniquecontrast'] == base].assign(uniquecontrast=cls.extra, plate='Pw99')])
+        ms_ucs = set(cls.ref[0].FBX_MSSCORE['uniquecontrast'])
+        cls.moved = next(uc for uc in r['uniquecontrast'] if uc in ms_ucs and uc not in (cls.changed, base))
+        for src, dst in (('px_fbx_measure', 'px_fbx_glues'), ('px_fbx_report', 'px_fbx_glues_report')):
+            t = cls.db[src]
+            cls.db[dst] = pd.concat([cls.db[dst], t[t['uniquecontrast'] == cls.moved]], ignore_index=True)
+            cls.db[src] = t[t['uniquecontrast'] != cls.moved]
+
+        # archive + PX_DATES from the Dropbox build, then the same build from the fake database
+        with mock.patch.object(px.fn, 'rds_table', side_effect=lambda table, **kw: cls.db[table].copy()):
+            px.build_px_archive(params, cls.ref[1].plate2date)
+            params.PX_SOURCE, params.IFACE_DIR = 'rds', os.path.join(cls.tmp.name, 'iface_rds')
+            params.ASSOC_SOURCE = 'opentarget'
+            cls.rds = cls._build(params)
+        cls.params = params
+
+    @classmethod
+    def tearDownClass(cls):
+        cls.tmp.cleanup()
+
+    @staticmethod
+    def _build(params):
+        """DATA -> combine -> get_iface; returns (data, output) with every frame kept."""
+        data, out = px.DATA(), px.OUTPUT()
+        for m in ('load_chemical_lib_df', 'load_old_df', 'load_new_df', 'get_contaminants_and_controls', 'get_gene_research'):
+            getattr(data, m)(params)
+        out.combine_datasets(data, params)
+        out.get_de_validated(data, params)
+        out.get_iface(data, params)
+        return data, out
+
+    def test_px_dates(self):
+        """Input: the Dropbox build of the fixture. Expected: PX_DATES has one row per experiment of that build,
+        every FBX experiment as FBX, each with its plate's date. Rationale: RDS has no date yet; this keeps them."""
+        d = pd.read_csv(self.params.PX_DATES, dtype=str)
+        # every FBX experiment of the build, as FBX
+        self.assertEqual(set(d.loc[d['source'] == 'FBX', 'uniquecontrast']), set(self.ref[0].FBX_REPORT['uniquecontrast']))
+        # one row per experiment
+        self.assertFalse(d['uniquecontrast'].dropna().duplicated().any())
+        # each experiment carries its plate's date of the build
+        self.assertTrue((d['date'].fillna('') == d['plate'].map(self.ref[1].plate2date).fillna('')).all())
+
+    def test_archive_holds_what_rds_lacks(self):
+        """Input: a database without the 20260601 folder, and one FBX contrast in its glues tables only. Expected:
+        the archive holds exactly that folder's experiments in measure, report and msscore, and the msscore archive
+        also holds the glues-only contrast. Rationale: the data that RDS lacks stays available locally, and the
+        formula scores the main table only."""
+        import glob
+        old = set(pd.read_csv(glob.glob('tmp_vdir/fbx/20260601/*_FBX_REPORT.csv')[0])['uniquecontrast'])
+        for k in ('measure', 'report', 'msscore'):
+            arc = pd.read_parquet(os.path.join(self.params.PX_ARCHIVE_DIR, f'fbx_{k}.parquet'))
+            # the archived experiments = the experiments of the folder that the database lacks (+ the glues-only score)
+            self.assertEqual(set(arc['uniquecontrast']), old | ({self.moved} if k == 'msscore' else set()), k)
+
+    def test_measure_and_report_reproduced(self):
+        """Input: the same experiments from the database + the archive. Expected: FBX_MEASURE and FBX_REPORT equal
+        the Dropbox build row for row, except the one contrast whose database copy differs. Rationale: first
+        reproduce the last build (user decision 2026-10-21)."""
+        cols = {'FBX_MEASURE': ['uniquecontrast', 'genes', 'pg', 'plate', 'logfc', 'pvalue', 'adjpval', 'significant'],
+                'FBX_REPORT': ['uniquecontrast', 'srbnumber', 'plate', 'condition', 'activity', 'nr_down', 'target']}
+        for k, c in cols.items():
+            a, b = (getattr(x[0], k) for x in (self.ref, self.rds))
+            a, b = (x.loc[x['uniquecontrast'] != self.changed, c].sort_values(c[:3]).reset_index(drop=True) for x in (a, b))
+            # the same rows and values
+            pd.testing.assert_frame_equal(a, b, check_dtype=False, obj=k)
+
+    def test_validation_ms_score(self):
+        """Input: px_ms_score_glues = the per-target MSSCORE of the validation folder. Expected: the RDS build has the
+        same validation scores, and the two targets sit at the same z with the same source, as the Dropbox build.
+        Rationale: both sources give one validation score per target (user decision 2026-10-26)."""
+        # the same validation scores
+        self.assertEqual(self.rds[0].VAL_MSSCORE.to_dict(), self.ref[0].VAL_MSSCORE.to_dict())
+        # the targets sit at the same z, from the validation score
+        a, b = (x[1].iface_df.set_index('gene').loc[['G_00000', 'G_00001'], ['ms_score', 'ms_source']] for x in (self.ref, self.rds))
+        pd.testing.assert_frame_equal(a, b)
+
+    def test_association_from_opentarget(self):
+        """Input: ASSOC_SOURCE 'opentarget' (RDS build only); a fake opentarget table where G_00000 has 0.99 and
+        G_00001 is absent; validation values 0.5 / 0.2. Expected: G_00000 0.5 and G_00001 0.2 (px_ms_score_glues
+        first), every other gene its opentarget value or 0. Rationale: user decision 2026-10-26 (y = px_ms_score_glues
+        > opentarget; the FBX MSSCORE exports hold the same opentarget values)."""
+        import numpy as np
+        y = self.rds[1].iface_df.set_index('gene')['association_score']
+        # the two validation targets take their px_ms_score_glues value
+        self.assertEqual(y[['G_00000', 'G_00001']].tolist(), [0.5, 0.2])
+        # every other gene: the opentarget value, else 0
+        rest = y.drop(['G_00000', 'G_00001'])
+        ot = self.db['opentarget'].set_index('approvedsymbol')['associationscore']
+        self.assertTrue(np.allclose(rest, ot.reindex(rest.index).fillna(0.0)))
+        # the table gave values to the build
+        self.assertGreater(int((rest > 0).sum()), 0)
+
+    def test_database_wins(self):
+        """Input: one contrast whose database adjpval (0.123) differs from its Dropbox export. Expected: the RDS
+        build holds the database value. Rationale: user decision 2026-10-21 (RDS wins on a conflict)."""
+        m = self.rds[0].FBX_MEASURE
+        # every row of that contrast carries the database value
+        self.assertTrue((m.loc[m['uniquecontrast'] == self.changed, 'adjpval'] == 0.123).all())
+
+    def test_newest_insert_wins(self):
+        """Input: a validation contrast uploaded two times (the later export has logfc 3.0). Expected: only the
+        newer insert's 60 rows. Rationale: mirrors "newest tranche wins" (RDS holds 336 re-analysed contrasts)."""
+        rows = self.rds[0].FBX_MEASURE[self.rds[0].FBX_MEASURE['uniquecontrast'] == self.reexported]
+        # 60 gene rows, all from the newer upload
+        self.assertEqual(len(rows), 60)
+        self.assertTrue((rows['logfc'] == 3.0).all())
+
+    def test_undated_experiment_skipped(self):
+        """Input: a database experiment on a new plate that PX_DATES does not list. Expected: it is not in the FBX
+        tables. Rationale: first reproduce the last build; a new experiment needs a date."""
+        data = self.rds[0]
+        # not in the report and not in the measure table
+        self.assertNotIn(self.extra, set(data.FBX_REPORT['uniquecontrast']))
+        self.assertNotIn(self.extra, set(data.FBX_MEASURE['uniquecontrast']))
+
+    def test_msscore(self):
+        """Input: the RDS build. Expected: the main-table contrasts get ms_score = -log10(p) * -logfc on their
+        significant, down-regulated rows; the archived contrasts keep their exported rows; the glues (validation)
+        contrasts get no formula score. Rationale: the platform formula, and no score where the last build had none."""
+        import numpy as np
+        ms, meas = self.rds[0].FBX_MSSCORE, self.rds[0].FBX_MEASURE
+        arc = pd.read_parquet(os.path.join(self.params.PX_ARCHIVE_DIR, 'fbx_msscore.parquet'))
+        db_ms = ms[~ms['uniquecontrast'].isin(set(arc['uniquecontrast']))].merge(meas, on=['uniquecontrast', 'genes', 'pg'])
+        # the formula, to float precision
+        self.assertLess(float((db_ms['ms_score'] - -np.log10(db_ms['pvalue']) * -db_ms['logfc']).abs().max()), 1e-9)
+        # one row per significant, down-regulated database row of the main table
+        sig = meas[(meas['significant'] == 1) & (meas['logfc'] < 0) & meas['uniquecontrast'].isin(set(self.db['px_fbx_report']['uniquecontrast']))]
+        self.assertEqual(len(db_ms), len(sig))
+        # the archived contrasts keep their exported rows
+        self.assertEqual(int(ms['uniquecontrast'].isin(set(arc['uniquecontrast'])).sum()), len(arc))
+        # the only glues contrast with a score is the one with an archived export
+        glues = set(self.db['px_fbx_glues']['uniquecontrast'])
+        self.assertEqual(set(ms.loc[ms['uniquecontrast'].isin(glues), 'uniquecontrast']), {self.moved})
+
+    def test_glues_contrast_keeps_exported_score(self):
+        """Input: an FBX contrast that the database holds in the glues tables only (no formula score there), with
+        rows in its FBX MSSCORE export. Expected: the RDS build gives it exactly the exported rows of the Dropbox
+        build. Rationale: the Pw108 case of 2026-10-21; the archive fills the score that the database lacks."""
+        import numpy as np
+        key = ['genes', 'pg']
+        a, b = (x[0].FBX_MSSCORE for x in (self.rds, self.ref))
+        a, b = (x[x['uniquecontrast'] == self.moved].sort_values(key) for x in (a, b))
+        # the same rows
+        self.assertEqual(list(zip(a['genes'], a['pg'])), list(zip(b['genes'], b['pg'])))
+        # the same scores
+        np.testing.assert_allclose(a['ms_score'].to_numpy(), b['ms_score'].to_numpy())
+
+    def test_dates_and_panels_reproduced(self):
+        """Input: the RDS build. Expected: the same date for every plate of the report, and the same compound-panel
+        rows (gene, compound, plate) as the Dropbox build. Rationale: the interface shows the same experiments."""
+        ref_out, rds_out = self.ref[1], self.rds[1]
+        plates = set(ref_out.report['plate'].astype(str))
+        # the plate dates come back from PX_DATES unchanged
+        self.assertEqual({p: rds_out.plate2date.get(p) for p in plates}, {p: ref_out.plate2date.get(p) for p in plates})
+        # the same panel rows
+        key = lambda o: set(zip(o.compounds_df['gene'], o.compounds_df['compound'], o.compounds_df['plate']))
+        self.assertEqual(key(rds_out), key(ref_out))
+
+
+class TestPruneVolcanoes(unittest.TestCase):
+    """python/prune_volcanoes.py (2026-10-23), local folder only: it deletes the volcano SVGs that the page does not
+    use, and nothing in a dry run or when the page uses a missing file. (The --s3 part uses the publish targets.)"""
+
+    def _run(self, used, files, *flags):
+        import subprocess, tempfile
+        tmp = tempfile.TemporaryDirectory()
+        d = os.path.join(tmp.name, 'interfaces')
+        os.makedirs(os.path.join(d, 'volcanoes_px'))
+        with open(os.path.join(d, 'Serac_Px_interface.html'), 'w') as f:
+            f.write(f'<html>{used[0]}</html>')
+        with open(os.path.join(d, 'Serac_Px_interface_data.js'), 'w') as f:
+            f.write(json.dumps({'pl': used[1:]}))
+        for n in files:
+            open(os.path.join(d, 'volcanoes_px', n), 'w').close()
+        r = subprocess.run([sys.executable, 'python/prune_volcanoes.py', d, *flags], capture_output=True, text=True)
+        left = sorted(os.listdir(os.path.join(d, 'volcanoes_px')))
+        tmp.cleanup()
+        return r, left
+
+    def test_prune_local(self):
+        """Input: a page that uses a and b (one name in the HTML, one in data.js); the folder holds a, b, c and
+        positions.json. Expected: a dry run deletes nothing; --apply deletes only c. Rationale: the data-keyed names
+        leave the old files after each data change."""
+        a, b, c = 'a' * 16 + '.svg', 'b' * 16 + '.svg', 'c' * 16 + '.svg'
+        files = [a, b, c, 'positions.json']
+        r_dry, left_dry = self._run([a, b], files)
+        r_apply, left_apply = self._run([a, b], files, '--apply')
+        # the dry run deletes nothing and counts one unused file
+        self.assertEqual(left_dry, sorted(files))
+        self.assertIn('not used 1 ', r_dry.stdout)
+        # --apply deletes only the unused svg
+        self.assertEqual(left_apply, sorted([a, b, 'positions.json']))
+
+    def test_stop_when_page_uses_a_missing_file(self):
+        """Input: a page that uses a file that the folder lacks. Expected: a non-zero exit and no delete, also with
+        --apply. Rationale: a page with missing images means a broken build; a delete then could remove good files."""
+        a, d, c = 'a' * 16 + '.svg', 'd' * 16 + '.svg', 'c' * 16 + '.svg'
+        r, left = self._run([a, d], [a, c], '--apply')
+        # the script stops before any delete
+        self.assertNotEqual(r.returncode, 0)
+        self.assertEqual(left, sorted([a, c]))
 
 
 class TestExpatImportOrder(unittest.TestCase):

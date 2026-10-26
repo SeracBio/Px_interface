@@ -71,11 +71,69 @@ The REPORT `target` column names the gene(s) that each experiment tests (`;` bet
 gene's panel shows that experiment, also when the gene is not significant ("not significant" tag), and
 it shows every batch of a compound. A change to this data needs a build with `IFACE_OVERWRITE: true`.
 
-To write the interface into the Dropbox ML folder (quote the path — it contains spaces):
+### Dropbox access (the cluster)
 
-```bash
-python python/Px_interface.py --config config/config.yaml --output_dir "/mnt/c/Users/gtamo/Serac Biosciences Dropbox/Serac_team/4_Data_Sciences/15_ML/"
-```
+The Dropbox path keys in the config (`DROPBOX_*`, `PX_2026*`, `FBX_DIR`, `VALIDATION_DIR`, `PX_PARQUET_DIR`) keep
+the laptop paths (`/mnt/c/Users/gtamo/Serac Biosciences Dropbox/...`). The cluster has no Dropbox client, so the
+build reads these files with `rclone`, the same way as MS_ML. `DROPBOX_BACKEND` selects the method:
+
+- **`rclone`** (the cluster) — a path under `DROPBOX_LOCAL_ROOT` maps to the remote `DROPBOX_REMOTE`
+  (`.../Serac Biosciences Dropbox/Serac_team/x` → `dropbox:Serac_team/x`). `rclone cat` streams the file into
+  memory, so nothing goes to the local disk. A path outside `DROPBOX_LOCAL_ROOT` stays a local path.
+- **`local`** (or no key) — read every path from the disk: a laptop with the Dropbox client, or the test fixture.
+
+`load_params` binds three readers: `params.dbx(path)` opens a file for pandas, `params.dbx_glob(dir, pattern)`
+lists a folder, and `params.dbx_push(df, path)` writes a DataFrame (`.csv` or `.parquet`). The build lists each
+tranche folder one time (about 1 s for each `rclone lsf`). It streams all the tranches and the two DB exports,
+about 13 GB (2026-10). The one-time setup of the `dropbox:` remote and its team `root_namespace` is in the MS_ML
+README, "Pulling data files from Dropbox".
+
+> **CAUTION:** `params.dbx_push` to a Dropbox path (for example `EXPORT_COMBINED`) writes into the company Dropbox.
+
+On the cluster, `--output_dir` is a local folder, because there is no Dropbox folder to write into. To put the
+interface in the Dropbox ML folder, see "Publish the interface".
+
+### Px data from RDS
+
+The FBX tables (measure, report, MS score) can come from the Px database `px-seracbio-prod` (PostgreSQL,
+over the VPN) instead of the Dropbox tranche folders. `PX_SOURCE` in the config selects the source:
+
+- **`rds`** — `load_new_df` reads `px_fbx_measure` + `px_fbx_glues` (the validation exports, with the plate
+  in the contrast name) and `px_fbx_report` + `px_fbx_glues_report`. `fn.rds_table` streams each table in a
+  read-only session with a verified certificate (`RDS_*` keys; the password file is `RDS_CRED_FILE`). A
+  contrast that was uploaded two times keeps its newest insert. The MS score is `-log10(p) × -logfc` on the
+  significant, down-regulated rows of the main table: the formula of the platform's MSSCORE exports. A
+  glues contrast gets no formula score; it keeps the score of an older FBX export from the archive, as in
+  the last build. The validation MS score (one per target) comes from `px_ms_score_glues`. The plate dates
+  come from `PX_DATES`. A build in this mode reads nothing from Dropbox.
+
+**The association of a gene dot** (y; config `ASSOC_SOURCE: opentarget`, 2026-10-26) is the
+`px_ms_score_glues` value for a validation target, else the value in the RDS `opentarget` table, else 0. The
+FBX MSSCORE exports hold the same `opentarget` values. `ASSOC_SOURCE: ot_cache` gives the old y (the highest
+`OT_CACHE` overall_score). The disease-area colours always come from `OT_CACHE`.
+
+**The MS score of a gene dot** (z; user decision 2026-10-26) is the validation score for a validation
+target, else the highest FBX score, else the highest April-May (`df_raw`) score, else 0, on the raw scale
+(0 to about 212). The hover names the source. The z values do not change: the MS slider filters each
+experiment by its own score, and a target's experiments on its validation plates use its validation score.
+The top of the z axis sits a little above the highest gene that shows, pins included (config `Z_FIT_PAD`,
+default 0.05 of the span; `null` fits all genes). It changes with the filters, so the plot then stretches.
+- **`dropbox`** (also when the key is absent) — the `FBX_DIR` / `VALIDATION_DIR` tranche folders, as before.
+
+The database has no date column yet, and it lacks some older experiments. `px.build_px_archive` reads
+Dropbox one time and writes two things:
+
+- `PX_DATES` (`data/PX_dates.csv`): one row per experiment of the last Dropbox build, with `uniquecontrast`,
+  `molecule_batch_id`, `plate`, `date` and `source`. The RDS mode keeps the FBX experiments in this file. A
+  new database experiment shows only when it has a date (a row here, or later a datestamp in the database).
+- `PX_ARCHIVE_DIR` (`data/px_archive/`): the FBX rows (measure, report, MS score) of the experiments that
+  the database lacks, and the exported MS score rows of the experiments that only the glues tables hold.
+  If a contrast is in both, the database wins.
+
+The steps are in `vignettes/RDS_extraction.ipynb`. To publish, use the CLI (see "Publish the interface").
+To read any query result, use `fn.rds_query(sql, ...)`: the same read-only session and exact parse as
+`fn.rds_table`, for example `SELECT * FROM px_ms_score_glues`. Filter `px_fbx_measure` (55M rows) with a
+`WHERE` clause or a `LIMIT`.
 
 ### Notebook
 
@@ -96,13 +154,16 @@ Open `vignettes/MS_Interface.ipynb` and run top to bottom.
   the output folder must already hold `interfaces/volcanoes_px/` and `interfaces/srb_png/`.
 
 All tunable parameters and data paths live in [`config/config.yaml`](config/config.yaml).
-Output paths are switched by the `interface_output` knob (`GTLOCAL` vs `DROPBOX_ML`).
+The notebook writes under `OUTPUT_DIR` (`output`, the same as the CLI default).
 
 ## Layout
 
 | Path | Purpose |
 |---|---|
-| `python/functions.py` | Rendering engine + data-ingest/volcano helpers (`plot_3d_interface`, `load_proteomics_data`, `load_fbx_tranche`, `recompute_volcanoes`, …) |
+| `python/functions.py` | Rendering engine + data-ingest/volcano helpers (`plot_3d_interface`, `load_proteomics_data`, `recompute_volcanoes`, the Dropbox readers `dbx_open` / `dbx_glob` / `dbx_push`, the RDS readers `rds_table` / `rds_query`, `ms_score_rows`, …) |
+| `python/nb_edit.py` | Edit notebook cells without touching the other cells' outputs (copied from ADME_ML; can also insert new cells) |
+| `python/prune_volcanoes.py` | Delete the volcano SVGs that the page does not use (dry run unless `--apply`; see "Publish the interface") |
+| `vignettes/RDS_extraction.ipynb` | The Px data from RDS: connect, archive, load, build the interface inputs |
 | `vignettes/MS_Interface.ipynb` | Step-by-step build + render driver |
 | `config/config.yaml` | All parameters and data paths |
 | `wiki/wiki.md` | Durable repo notes — read at session start |
@@ -162,15 +223,57 @@ aws ssm get-command-invocation --region eu-north-1 \
 Useful on-box diagnostics: `systemctl status provision-webapp`,
 `journalctl -u provision-webapp`, `ls /var/www/webapp/Px_interface/`.
 
-### Publish the interface (one command)
+### Publish the interface (AWS or Dropbox)
 
-Build the interface and push it to the box in one run. Real Px interface data can go on this box
-(see the note under "Browse the interface").
+**AWS (one command).** Build the interface and push it to the box in one run. Real Px interface data can go
+on this box (see the note under "Browse the interface").
 
 ```bash
 python python/Px_interface.py --config config/config.yaml \
   --output_dir "https://advantedge.seracbio.com/Px_interface/"
 ```
+
+**Dropbox ML folder (two commands).** The cluster has no Dropbox folder to write into. Build into the local
+`output` folder, then copy `output/interfaces` to Dropbox with rclone (quote the path: it contains spaces):
+
+```bash
+python python/Px_interface.py --config config/config.yaml --output_dir output
+rclone copy output/interfaces "dropbox:Serac_team/4_Data_Sciences/15_ML/interfaces" --checksum --transfers 32
+```
+
+The folder holds about 13,000 small files (volcanoes and thumbnails), and Dropbox limits the write operations
+in the team space. `--checksum` skips each file that Dropbox already holds with the same content. Without it,
+rclone uploads each file again, because Dropbox cannot change a file time. `--transfers 32` commits the uploads
+in batches of 32, not 4. On `too_many_requests`, rclone waits and tries again. A second run completes a
+stopped copy.
+
+> **CAUTION:** `rclone copy` replaces each file of the same name in the Dropbox folder (for example the HTML).
+> It does not delete the other files.
+
+On a laptop with the Dropbox client, one command does the same: set `--output_dir` to the Dropbox folder
+`".../Serac Biosciences Dropbox/Serac_team/4_Data_Sciences/15_ML"`.
+
+**Remove the unused volcano images (after a publish with new data).** The volcano file names carry a hash of
+their data (2026-10-23), so each data change renders new files and leaves the old ones. The publish never
+deletes. After the new page works, remove the old files with `python/prune_volcanoes.py`:
+
+```bash
+python python/prune_volcanoes.py output/interfaces --s3            # dry run: counts only
+python python/prune_volcanoes.py output/interfaces --s3 --apply    # delete: the local folder, S3, then the box
+```
+
+Without `--s3`, it changes only the local folder. The script finds the image names in the page (HTML and
+`data.js`) and deletes only the `volcanoes_px` SVGs that the page does not use. It uses the publish targets
+(`aws_publish_targets`) and deletes on S3 with `delete_objects`. Then it makes the box remove the same files
+with an `aws s3 sync --delete` of `volcanoes_px/` only. It stops before any delete in these conditions:
+
+- The page is older than `python/functions.py`.
+- The page uses a file that the local folder or S3 lacks.
+- The `data.js` on S3 or on the box has another size (the published page is not this page).
+
+The bucket keeps a deleted file as an old version for `interface_noncurrent_days` (`aws-vpn/s3.tf`).
+
+> **CAUTION:** `--apply` deletes files. Run the dry run first, and check the new page before you delete.
 
 When `--output_dir` is the config `PUBLISH_URL`, the CLI:
 

@@ -204,6 +204,7 @@ def make_sources_config(out, out_rel, rng):
         'BMS_C': '#BA09D9',                            # 'BMS' dot colour
         'GENE_SIZE_BUCKETS': [5, 7, 9, 11, 13, 16],    # non-default -> proves config->interface plumbing
         'GENE_RING_PX': 5,                             # non-default ring thickness -> proves plumbing
+        'Z_FIT_PAD': 0.08,                             # non-default z-axis margin -> proves plumbing
         'SRB_PNG_DIR': rel('srb_png'),                 # no real PNGs -> RDKit-render from CCO smiles
     }
     yaml.safe_dump(cfg, open(os.path.join(out, 'config.yaml'), 'w'), sort_keys=False)

@@ -3,13 +3,114 @@ _Durable, aggregate memory of this repo — read at session start. Aggregate onl
 
 ## Where we are now
 - **Focus:** building the per-gene 3D Px interface (`Serac_Px_interface.html`) via `fn.plot_3d_interface`.
+- **The z axis fits the genes that show (2026-10-26, STE): code done, 138 tests OK; needs a page build and a
+  publish.** User request: the top of the MS axis sits a little above the highest gene that shows. Before,
+  Plotly fit all 11,342 genes (top 218; EFNA1 211.7, NUDCD2 210.9, LOX 206.8), but the default view
+  (validation 20261006) tops at about 93 (built page, scratchpad `page_zrange.py`, counts only). Code: JS
+  `fitZ()` in the range block: range = `[R.z.min - pad*span, top + pad*span]`, top = the highest dot that shows
+  (not `legendonly`) or shown pin; called by `applyRanges`, `redrawPins` (`fitZHook`) and the `plotly_restyle`
+  handler; no dot -> autorange. `plot_3d_interface(z_fit_pad=)` -> `__RANGES__.zFitPad`; config
+  `Z_FIT_PAD: 0.05` (`null` = all genes, as before). Tests `TestRender.test_z_fit_pad`,
+  `TestFilterDefaults.test_z_fit_off_from_config`. Headless Chrome, synthetic build: the range is correct
+  after load, ticks, the x slider, a pin (link and search box), the pins toggle and a D-mode legend hide; no
+  JS error; no z value moves. **User step:** build with `IFACE_OVERWRITE: false`, then publish. The page code
+  changes only, so the volcano files stay the same and no prune is necessary.
+- **New association (y) of a gene dot (2026-10-26, STE): built and published (page 16:22); the user checked
+  the page.** User decision: `px_ms_score_glues.associationscore` for a validation target, else the
+  RDS `opentarget.associationscore` (the FBX MSSCORE exports and `px_fbx_msscore` via its join hold the same
+  values: checked), else 0. Config `ASSOC_SOURCE: opentarget` (`ot_cache` = the old y, the max `OT_CACHE`
+  overall_score; absent = `ot_cache`). Code: `px.gene_association`; `data.VAL_ASSOC` (rds: `px_ms_score_glues`;
+  dropbox: the per-target MSSCORE `associationscore`); `data.OT_ASSOC` (read in `load_new_df` only with
+  `opentarget`). The disease-area colours keep `OT_CACHE`; `MS_Prioritization` still filters on `OT_CACHE`.
+  Real tables, no build: 11,014 of 11,343 interface genes get a value (329 at 0: multi-gene `;` groups and old or
+  alias symbols), range 0.001-0.897, all 40 targets = their `px_ms_score_glues` value. Most dots move down
+  (the value is lower than `OT_CACHE` for 10,080 of 10,553 genes).
+- **Fixed (2026-10-26): the page showed no dots and no target filters after the new-score build.** Cause: one gene
+  dot with no name. Rows with the symbol 'NA' read as missing, and with pandas 3 `astype(str)` keeps NaN (the old
+  `groupby` dropped it), so `gene_ms_score` made a NaN gene. `__AREA_DATA__` then held `NaN`, which is not JSON:
+  `JSON.parse` stopped the data script at payload 10 of 35, so the dots and the 24 later payloads (DepMap,
+  confidence, LoF, validation categories) never loaded. Fix: `gene_ms_score` drops rows with no gene; `_jsp`
+  (functions.py) writes with `allow_nan=False`, so such data now stops the build. Test
+  `TestGeneMsScore.test_row_without_gene_dropped`; 136 tests OK. Check script: scratchpad `page_nan.py <interfaces dir>`
+  (names the payloads that are not strict JSON). The user rebuilt and published (page 16:22): the page works.
+- **New MS score (z) of a gene dot (2026-10-26, STE): built and published (page 16:22); the user checked it.**
+  User decisions: (1) a validation target sits at its validation score (`px_ms_score_glues`, 40 targets, 11.6-100,
+  KDM1B at 100); (2) other genes: the highest FBX score, else the April-May (legacy) score, else 0; an FBX score
+  wins also where the legacy one is higher (3,946 genes, e.g. BCL6 FBX 76.6 vs legacy 263.2); (3) raw scale
+  (0-212, no scaling); (4) re-analysed experiments use the database score (RDS formula, as before); (5) the MS
+  slider filters each experiment by its own score (`pl[8]`, `msOk`, as since 2026-07-22) and the dot positions
+  stay fixed; a validation target's hits and tested-target rows on its own validation plates carry its validation
+  score (`px.validation_experiment_scores`); a primary reference plate keeps its own score. (A gene-only z test
+  was in the code for a few hours: I misread the user's answer; the user asked for the per-experiment filter
+  back the same day.) A tested-target row now opens its stem only inside the MS window. Code:
+  `px.gene_ms_score` (get_iface; `iface_df.ms_source` + the hover name the source), `data.VAL_MSSCORE` (rds:
+  `px_ms_score_glues`; dropbox: the per-target MSSCORE of a validation folder), `load_old_df` without the
+  [0, 100] clip (it stops if df_raw still has p = 0 on a significant-down row). 132 tests OK. Checked: the 40 targets =
+  the targets of the 151 validation contrasts, each measured on every contrast that names it, all 40 on the
+  interface validation plates (12 have no significant-down own contrast). Headless Chrome on the synthetic
+  build (per-experiment filter): no JS error, no dot moves, lower handle 5 -> 110 of 291 dots. User steps done:
+  df_raw rebuilt, build + publish, `DFRAW_OVERWRITE: false` again, volcano prune applied.
+- **RDS as the Px source (2026-10-21, STE): built, verified against the last build, and published (last
+  publish 2026-10-26).** User
+  decisions: `px-seracbio-prod` is the database (`seracbio-prod` is deleted); the plate dates come from
+  `data/PX_dates.csv` until RDS has a datestamp; first reproduce the last build (only its experiments); on a
+  conflict RDS wins. Code: config `PX_SOURCE` (`rds` | `dropbox`; the user set `rds` on 2026-10-22), `RDS_*`, `PX_DATES`,
+  `PX_ARCHIVE_DIR`; `DATA.load_new_df` dispatches to `load_rds_fbx` / `load_dropbox_fbx`; `combine_datasets`
+  takes the plate dates from `PX_DATES` in rds mode; `px.build_px_archive` (one time) writes `PX_DATES` +
+  `data/px_archive/fbx_{measure,report,msscore}`; `fn.rds_query` (any SQL text; COPY CSV, read-only, verify-full, exact
+  p-value parse; 2026-10-26) + `fn.rds_table` (one table), `fn.ms_score_rows`. Rules in rds mode: newest insert (max `id`) per row; the glues copy wins
+  on a contrast in both tables; the MS score is the formula on the MAIN table only + the archived MSSCORE rows
+  of every other experiment (a glues contrast keeps the score of an older FBX export, as in the last build).
+  The two CDD Vault exports moved to `data/px_archive/`, so rds mode reads nothing from Dropbox. The RDS build
+  of the interface inputs takes 12 min (Dropbox 20 min). Tests: 106 OK (`TestRdsTable`, `TestRdsSource` with a
+  fake database built from the tmp_vdir exports, `TestExactPvalueParse`). **Verified:** the same 9,074
+  experiments; R2, association, disease area and plate dates equal; every other difference is database data
+  (log 2026-10-21, "Verified"). **Follow-ups:** (1) **decided (user, 2026-10-26): use the RDS copy** of the 27
+  validation experiments (folder 20261006 (validation)) whose database copy agrees with no Dropbox file (one, on
+  Pw166, is the old 07-24 analysis); the rds build already reads that copy, so no code change;
+  (2) **closed (user, 2026-10-26: "it is all good, the cell was edited")**: no apply into
+  `vignettes/RDS_extraction.ipynb`. The user works in `RDS_extraction.claude.ipynb`, which holds outputs now:
+  read it only through `nb_edit.py checkout` (that writes `RDS_extraction.claude.claude.ipynb`). Its cells:
+  ee23985d, 78044839, 5c1e7a90, the query cell eac4b03b (`fn.rds_query(SQL, ...)`), 5e4b6f85 (the 13 Dropbox FBX
+  MSSCORE csv stacked into `fbx_ms`), 8f8f9afb (the legacy ms score `leg_ms`, 2026-10-26) and short user cells;
+  (3) the user rebuilt from RDS on 2026-10-23 (`IFACE_OVERWRITE: true`); (4) the volcano cache is data-keyed
+  since 2026-10-23 (fixed: 1,654 images were older than their data; the new bases are built and published);
+  (5) validation volcanoes colour only the report targets (adjpval < 0.05), user decision (log 2026-10-23);
+  (6) **volcano prune applied (2026-10-26, on user request, after the 16:22 build and publish):**
+  `conda run -n ML python python/prune_volcanoes.py output/interfaces --s3 --apply` (local, then S3
+  `delete_objects`, then the box `aws s3 sync --delete` of `volcanoes_px/` only). It deleted 9,382 unused of
+  16,553 SVGs in each of the three places (local 341 MB); 7,171 remain in each, and a new dry run shows 0 unused
+  and 0 missing. Run it again after a publish that changes volcano data (dry run first). It stops if S3/the box
+  hold another `data.js`, or if the page is older than `python/functions.py`. The CLI loads all data again even with
+  `IFACE_OVERWRITE: false`. The bucket denies object reads outside
+  the VPC (`DenyObjectReadOutsideVpc`), so the script reads sizes from the listing; deleted files stay as old
+  versions for `interface_noncurrent_days`. README "Publish the interface" has the AWS and Dropbox commands.
+  `python/nb_edit.py` copied from ADME_ML, extended: `apply` inserts a cell that the live notebook lacks.
+  Facts: log entry 2026-10-21.
+- **The work runs on the cluster ("bizon") since 2026-10-19 (STE).** The cluster has no Dropbox client, so config
+  `DROPBOX_BACKEND: rclone` streams the Dropbox paths with the MS_ML remote (`dropbox:`, team `root_namespace`)
+  and path mapping. `load_params` binds `params.dbx` / `dbx_glob` / `dbx_push` (README "Dropbox access"; log
+  entry 2026-10-19). A copy of `output/interfaces` to Dropbox (13,088 small files) hits the Dropbox write limit
+  (`too_many_write_operations`, 2026-10-23); the README command now has `--checksum --transfers 32` (not tested).
+  **Setup done (the 3 OPEN items of 2026-10-19; checked 2026-10-26, file presence and versions only):**
+  `GENE_RESEARCH` = `data/20260623_10Kgenes_research.json` (present); `boto3` 1.43.94 in the `ML` env; `aws`,
+  `terraform` 1.15.7 (same as the laptop) and the Session Manager plugin; `~/.aws`, `~/.serac_aws`,
+  `~/.px_db_password`, `~/.px_db_dev_password`, `aws-vpn/backend.hcl` and `aws-vpn/terraform.tfvars` present.
+  **CAUTION:** without `aws-vpn/terraform.tfvars`, `aws-vpn` uses its defaults, and 4 network defaults
+  (`vpc_cidr`, `private_subnet_cidr`, `on_premises_cidr`, `allowed_cidr`) differ from the example values, so a
+  plan can replace the VPC; without `~/.px_db_password` the RDS password falls back to `""`. `aws-rds/tfplan` is
+  an old laptop plan (still on disk): never apply it. `aws-vpn/bootstrap` has its state on the laptop only (no
+  state file on the cluster): do not run it on the cluster. The cluster reaches the AWS APIs and the Terraform
+  registry, it is on the VPN path (resolves and reaches the box), and the S3 policy blocks only object reads
+  from outside the VPC, so an upload from the cluster is allowed.
 - **OPEN TO-DO (2026-10-05): security batch B on the AWS box** — step 3 (new login, bcrypt cost 05) done 2026-10-09;
   left: secret files at 0600 from the start (step 4), optional `limit_req` (5) and per-person logins (6). Step 4
   replaces the EC2, so do it at a quiet time. Details: log entry "Signals agent handoff: SSM and password
   hardening for Px" (2026-10-05).
-- **OPEN (2026-10-02): S3 item 3, the move to SSO + MFA** (plan: 2026-09-23 entry). Items 1 + 2 (old versions
-  expire after 7 days; object reads only through the S3 gateway endpoint) are live (checked 2026-10-12). The
-  CLI still uses the IAM user's long-lived key (checked 2026-10-12). Status summary: log entry 2026-10-12.
+- **CANCELLED (user decision, 2026-10-26): S3 item 3, the move to SSO + MFA** (plan: 2026-09-23 entry). The user:
+  the shared 1Password password plus the VPN into the VPC is enough. Items 1 + 2 (old versions expire after 7
+  days; object reads only through the S3 gateway endpoint) are live (checked 2026-10-12). The CLI keeps the IAM
+  user's long-lived key. Status summary: log entry 2026-10-12.
 - **Architecture doc:** [`docs/INTERFACE.md`](../docs/INTERFACE.md) — full map of how the build fits together
 - **Data-transform doc:** [`docs/data_transform.md`](../docs/data_transform.md) — how `measure`/`mscore`/`report` (+ `df_raw`/`MS`/FBX) are derived from the raw files
   (pipeline → `plot_3d_interface` → volcano cache → `_INTERFACE_INJECT` JS → the JS↔Python `__X__` contract +
@@ -101,7 +202,7 @@ _Durable, aggregate memory of this repo — read at session start. Aggregate onl
   applied: renamed the column in the CSV header in place** (14-byte swap, `contrastunique`↔`uniquecontrast`
   are same length, data untouched). Considered a code-side alias-normalise on load but chose the data fix.
 - **Primary-screen volcano attached to validation stems (2026-07-24).** For a validation-plate hit
-  (e.g. ARG1 / SRB-0005514 on WT+KO), the interface now also shows that compound's **broad
+  (e.g. an ARG1 hit on WT+KO), the interface now also shows that compound's **broad
   primary-screen volcano** and links the gene across `primary → WT → MLN → KO` on hover. `get_iface`
   adds a pass after stem-completion: for each validation `(gene, compound)`, pick the compound's
   non-validation contrast where the gene has the **highest MS score** (tie-break strongest/most-negative
@@ -181,9 +282,11 @@ _Durable, aggregate memory of this repo — read at session start. Aggregate onl
 
 ## Compound prioritization / selection reconciliation — `vignettes/MS_Prioritization.ipynb` (2026-07-22)
 Notebook to reproduce the interface's compound selection outside the browser and produce a deliverable table.
-- **KEY GOTCHA — the interface's association (y) axis is the OpenTargets `overall_score` per gene
-  (`OT_CACHE`, max per gene), NOT `mscore['association_score']`** (which varies per plate, so it's wrong to
-  filter on). This was the whole reconciliation blocker. At `ms_score>10 & assoc>0.6`: 5,127 genes clear ms>10;
+- **Changed 2026-10-26:** with config `ASSOC_SOURCE: opentarget` the interface's y-axis is `px_ms_score_glues` >
+  RDS `opentarget` (see "Where we are now"); this notebook still filters on `OT_CACHE`, so it no longer matches.
+  **KEY GOTCHA — the interface's association (y) axis is the OpenTargets `overall_score` per gene
+  (`OT_CACHE`, max per gene), NOT `mscore['association_score']`** (one value per gene from the RDS `opentarget`
+  table, lower than OT for most genes, and empty on the legacy rows: log 2026-10-26). This was the whole reconciliation blocker. At `ms_score>10 & assoc>0.6`: 5,127 genes clear ms>10;
   adding assoc>0.6 gives **839 genes via `mscore.association_score`** vs **1,723 via OT** (the interface uses OT).
 - **`mscore` is now PER-COMPOUND (2026-07-23):** `combine_datasets` no longer collapses to the best compound per
   (gene,plate) — it keeps **one row per (genes, uniquecontrast)** (FBX wins on shared uc, noisy plates dropped, df_raw
@@ -211,7 +314,7 @@ Notebook to reproduce the interface's compound selection outside the browser and
 - Launch Jupyter from the **repo root**; cell 0 `%cd ../.` sets cwd so `import python.functions` resolves.
 - `IFACE_OVERWRITE=True` rebuilds the four render inputs (`iface_df`, `compounds_df`, `meas`,
   `plate2date`) from source tables + FBX tranches and saves them to `IFACE_DIR`; `False` loads them
-  and renders only (fast). Output dir switched by the `interface_output` knob (`GTLOCAL`/`DROPBOX_ML`).
+  and renders only (fast). The notebook writes under `OUTPUT_DIR` (`output`, the CLI default; 2026-10-19).
 
 ## Command-line build (`python/Px_interface.py`) — complete port (2026-06-30)
 Full `.py` port of the notebook so the interface rebuilds from the CLI without running cells. Runs
@@ -222,12 +325,13 @@ Run: `python python/Px_interface.py --config config/config.yaml --output_dir <di
   `os.chdir`) so it works from any cwd. **`--output_dir <PUBLISH_URL>`** (2026-10-01) builds in
   `PUBLISH_STAGE_DIR` and then publishes to S3 and the EC2 (see the 2026-10-01 publish log entry).
 - **`PARAMS(config_path)`** → `load_params()` reads the YAML and sets every key as an attribute
-  (`params.DFRAW_PATH`, …); returns `self`.
+  (`params.DFRAW_PATH`, …), then `setup_dropbox()` binds `params.dbx` / `dbx_glob` / `dbx_push` (2026-10-19);
+  returns `self`. A `SimpleNamespace` params in a test needs `dbx=lambda p: p` for the methods that read sources.
 - **`DATA()`** — methods take `params`, store on `self`, return None: `load_chemical_lib_df` (serac_df:
   CDD pull if `CHEMLIB_OVERWRITE` else cached csv; yes/no→1/0/NaN), `download_cdd_pngs` (MAIN calls it
   after the library load since 2026-10-01; no-op unless `UPDATE_PNGS`), `load_old_df` (df_raw + ms_score +
   df_ms; MS; with `DFRAW_OVERWRITE` it first calls `build_old_df`, added 2026-10-01), `load_new_df` (FBX MEASURE/MSSCORE/REPORT auto-discovered tranches, target2R2_df,
-  uc2compound), `get_contaminants_and_controls` (control_compounds, contaminants), `get_gene_research`
+  uc2compound; `TRANCHE_CSVS` = one csv listing per tranche folder, since 2026-10-19), `get_contaminants_and_controls` (control_compounds, contaminants), `get_gene_research`
   (gene_research list).
 - **`OUTPUT()`** — methods take `(data, params)`: `combine_datasets` (§0.3: measure/mscore/report +
   plate2date; FBX source-of-truth on shared keys), `get_de_validated` (validated/devalidated
@@ -409,6 +513,13 @@ data shares the namespace); no real PNGs so thumbnails are RDKit-rendered from `
   were removed). Once a gene is clicked (panel `pinned`), hovering a compound row shows that compound's
   grouped volcanoes (`row` `mouseover` → `showVolcano`, gated on `pinned`); the panel widens (max 96vw,
   `.vstem` scrolls if needed). Multiple compounds: paged via the existing ◀▶ (one compound at a time).
+  **Fixed 2026-10-23 (user report):** the panel is fixed to the right and grows to the LEFT when the volcanoes
+  open; the cells (flex-start) moved with the left edge (198 px in a headless-Chrome test), so the pointer landed
+  on another compound, and the row `mouseout` closed the peek. Now `.row` = `width: fit-content; margin-left:
+  auto` (cells stay put) and the peek closes on `box` `mouseleave` (the pointer can go into the volcanoes).
+  Checked with scratchpad `hover_test.py` (stdlib CDP client, Chrome 134 on the cluster, port 19222; the
+  `ML` env has no `websockets`; turn off the cache with `Network.setCacheDisabled`): 0 px move, each cell
+  shows its own volcanoes, at 1920x1080 and 1366x768. Test `TestRender.test_compound_peek_stays_under_the_pointer`.
   - **Clicked gene → green ring (2026-07-21).** Clicking a dot sets `clickedGene = currentGene`; the ring
     underlay paints that gene's ring `CLICK_RING` (`#2ca02c`) instead of its category/`#333` colour, in both
     the area underlay (`applyRanges`) and the pin underlay (`buildPinTrace`). `plotly_click` defers
@@ -642,7 +753,9 @@ data shares the namespace); no real PNGs so thumbnails are RDKit-rendered from `
   rotate; `setMode` does `setTimeout(refreshLabelsHook, 0)` so the 2D/3D toggle adds/removes it. Needs `refreshLabels`
   to run — it does whenever in-range dots exist (real data; the synthetic 0-dot default doesn't, which only affects
   testing). Verified with dots at 4 orientations incl. a below-view: the label rides the SAR axis; 0 console errors.
-- **MS slider filters per compound, not the gene max (2026-07-22):** the dot's z stays at the gene's max MS
+- **Still valid, with a change on 2026-10-26:** the dot's z is now the gene score of `px.gene_ms_score` (not the
+  max of the experiments), so a dot can show while its z is outside the window; see "Where we are now".
+  **MS slider filters per compound, not the gene max (2026-07-22):** the dot's z stays at the gene's max MS
   (`mscore.groupby('genes')['ms_score'].max()`) so genes keep their position under any filter — but the MS range
   slider now filters each **compound experiment** by its OWN per-(gene,compound,plate) MS score. That score is sourced
   from the SAME metric as the position (`FBX_MSSCORE` per uniquecontrast ∪ `df_raw`, FBX wins on shared ucs), attached
@@ -781,8 +894,12 @@ and a *merged* cluster means either a <55px (tight, good) gap or an overlap (loo
   1900×1000, broke at 1920×800). Also fire a `resize` event ~0.6s after load so the CSS-boxed plot re-fits.
 
 ## Decisions & conventions
-- All parameters/paths live in `config/config.yaml`; data paths are absolute (Dropbox/local).
+- All parameters/paths live in `config/config.yaml`; data paths are absolute (Dropbox/local). Dropbox paths keep
+  the laptop form (`/mnt/c/.../Serac Biosciences Dropbox/...`); on the cluster `DROPBOX_BACKEND: rclone` maps them
+  to `dropbox:` (2026-10-19). Read a source path through `params.dbx`, and read its stream one time only.
 - Local-only data policy (see CLAUDE.md): chemistry data never leaves the machine.
+- AWS access (user decision, 2026-10-26): no SSO + MFA. The shared 1Password password plus the VPN into the VPC
+  is enough.
 
 ## Log
 - 2026-06-23 — repo created: copied `functions.py`/`config.yaml`/`CLAUDE.md` + the notebook from
@@ -1714,3 +1831,224 @@ and a *merged* cluster means either a <55px (tight, good) gap or an overlap (loo
   `&labels=false`. **Test-setup note:** a synthetic build whose config has no `LOF_DEFAULTS` gets the old
   default `[Yes]`; no synthetic gene has `Yes`, so `_resolve_defaults` gives `[]` and the page hides every gene
   (0 labels). The real config sets `LOF_DEFAULTS: []` (all ticked), so it is not affected.
+- 2026-10-19 — **Dropbox access on the cluster (STE).** The work moved from the laptop to the cluster ("bizon").
+  **Working tree at session start:** `.git` and some folders came from the laptop at HEAD `81c7f77`, but `python/`,
+  `docs/`, `wiki/`, `aws-vpn/` and `requirements.txt` were still the 2026-10-01 files (equal to `75220e6`). They were
+  restored from HEAD (no loss). The untracked `python/px_rds.py`, `python/20261001_test_connect.py` and
+  `tests/test_px_rds.py` (removed in HEAD) are still on disk. **Change:** config `DROPBOX_BACKEND` (`rclone` |
+  `local`; no key → `local`), `DROPBOX_REMOTE`, `DROPBOX_LOCAL_ROOT`; `functions.py` `dbx_target` / `dbx_open` /
+  `dbx_glob` / `dbx_push` (rclone `cat` / `lsf` / `rcat`). The helpers are path-aware: only a path under
+  `DROPBOX_LOCAL_ROOT` goes to rclone, so a local path (MS_ML data, the fixture, a local copy of `FBX_DIR`) works
+  in the same config. `load_new_df` lists each tranche folder one time into `TRANCHE_CSVS` (an `rclone lsf` takes
+  ~0.9 s; the old code listed a folder up to 5 times), and `_fbx_csv(files, kind)` picks from that list.
+  `_load_src` reads a file one time (callable `usecols`), because a stream cannot be read two times.
+  `EXPORT_COMBINED` writes with `params.dbx_push`. Notebooks: `MS_Interface` `OUTPUT_DIR = 'output'`;
+  `MS_Prioritization` loads `PARAMS` (globals shim kept) and uses `params.dbx` / `dbx_push`; its pptx goes to
+  `output/Claude_ppt/`. **Real-Dropbox smoke test:** 14 FBX + 2 validation tranches found in 16 s; a REPORT and a
+  CDD Vault export read through rclone. **Cost:** a build streams ~13 GB (`FBX_DIR` 11.2 GiB, the two DB exports
+  0.9 + 0.5 GB) into memory, one file at a time; the cluster has 377 GB RAM, and the largest file is 2.4 GB.
+  **Tests:** 94 OK (+6 `TestDropboxAccess`; one runs load + combine through a fake rclone and compares the
+  result with the local build). The `ML` env has no `boto3`, so the tests ran with a stub module.
+- 2026-10-21 — **RDS as the Px source: what the database holds (STE; schema and aggregates only, no rows read).**
+  Request: build and publish the interface from RDS instead of Dropbox, with a local copy of what RDS lacks.
+  **Reach (from the cluster):** the live `seracbio-prod` (public address) times out on 5432; the private copy
+  `px-seracbio-prod` (172.20.7.x, VPN path) is open, but it is the 2026-09-29 snapshot. Setup of 2026-10-19 is
+  done on the cluster (`~/.px_db_password`, `~/.aws`, `aws`, `terraform`, `boto3`, the research JSON).
+  **Tables (`public`):** `px_fbx_measure` (54.8M rows, 14 GB; numbers as `varchar`, all parse; `significant`
+  '0'/'1') = FBX_MEASURE; `px_fbx_report` (6,486 rows; no `target`) = FBX_REPORT; `px_fbx_glues` (no `plate`)
+  + `px_fbx_glues_report` (has `target`, 151 contrasts) = the VALIDATION_DIR exports; `px_fbx_msscore` only the
+  20 plates of 2026-10-06. Not for the interface: `px_ip`, `px_ubiquitinomics`, `opentarget`, `maintable`,
+  `px_ms_score_glues` (40 rows: per-target scores of the validation, like the skipped Dropbox per-target MSSCORE;
+  `pg_class.reltuples` showed 0 because the table was never analysed — use `count(*)` for small tables). `px_fbx_measure_284busy` is **malformed** (no column holds a contrast, no numeric
+  `logfc`; its contrasts do not match `px_fbx_report_284busy`); its plates are not in the interface.
+  **No table holds a date**, so the plate dates (now the Dropbox folder names) need another source.
+  **Duplicates:** 336 contrasts were uploaded two times; each (contrast, gene, pg) has 2 rows with different
+  values (a re-analysis) — keep the higher `id`, like "newest tranche wins". The report has the same 336.
+  **MS score:** `ms_score = -log10(pvalue) * -logfc` on the significant, logfc<0 rows, unclipped: exact
+  (<5e-13) and the same rows as the Dropbox MSSCORE for 06-23, 07-06, 07-14, 08-13 (17 rows off) and 10-06.
+  So compute it from the measure table. The Dropbox MSSCORE files have no `logfc`/`pvalue`.
+  **Coverage (contrasts, vs the Dropbox tranches):** equal for 06-23, 07-06, 07-14, 07-24, 08-13, 10-06 and
+  both validation folders (via `glues`); in 07-24, 87 MSSCORE rows on 4 contrasts have no RDS match (values). Missing in RDS: 06-01 (303 of 305), 06-16 (all 335),
+  06-16_02 (all 336), 06-17 (143 of 144), 06-30 (384 of 528), 08-12 (20), 08-14 (49), 08-17 (1): about 1,240
+  contrasts for a local copy. Some 08-12 / 08-14 contrasts have other values in RDS than in those tranches'
+  own files (ms_score up to 25 apart): resolve with the full newest-wins comparison. RDS has 35 plates that the
+  last build does not have (Pw189-Pw249, 16 of them `VD_WT`/`VD_KO`). Old df_raw plates: RDS has 41 of 97,
+  but df_raw is already local (`DFRAW_PATH`). Scripts: scratchpad `rds_*.py` (aggregate prints only).
+  **Load note:** three `count(DISTINCT (...))` on the 55M-row table ran >11 min with 34 GB of temp files
+  and were cancelled; one hash pass (`GROUP BY uniquecontrast, plate`) or a filter first is enough.
+  **Built (same day):** the RDS `id` is the database's own insert number (Dropbox export ids 102M, RDS 157M for
+  the same rows), so "max id = newest insert" holds; tranche 06-23 is identical in both (376,896 rows, zero
+  difference). `COPY ... TO STDOUT CSV` streams ~34 MB/s (px_fbx_measure ~3.4 min); the tables keep the export
+  schemas (same dtypes as the Dropbox CSVs). `glues` also holds re-uploads (224k extra rows); 10 contrasts are
+  in both the main and the glues tables. `build_px_archive` (14.3 min): `PX_DATES` = 9,099 experiments (6,667
+  FBX; 25 df_raw rows with no plate have no date); **706 compound batches ran on plates of different dates**, so
+  the file keys on the experiment (contrast), with the batch as a column. Archive = 1,570 FBX experiments, 13.2M
+  measure rows (332 MB). **p-value parse bug (old, also in the Dropbox path; fixed 2026-10-21):** the exports and
+  the database store p-values as plain decimals (no exponent); pandas' default float parser cuts a decimal after
+  ~17 digits, so every p < ~1e-17 read as `0` (and p ~1e-15 kept 2 digits). Symptoms: 2,789 archived MSSCORE rows
+  with "p = 0" (true -log10 p 16-66), and 599 RDS contrasts with an infinite formula score. In the last build those
+  points sat at the `meas` p-floor, i.e. at the top of their volcanoes. Fix: `float_precision='round_trip'` in
+  `fn.rds_table` and in the Dropbox tranche reader (tests: `TestExactPvalueParse`). Postgres itself holds no
+  p = 0 (smallest significant-down p 5.9e-74). The older MSSCORE exports cover only some contrasts
+  (283 archived contrasts with significant-down rows have no MSSCORE row): the archive keeps exactly the
+  exported rows.
+  **Verified (same day; scratchpad builds of the interface inputs + `compare_iface.py`, `diff_tranches.py`,
+  `diff_ids.py`, `diag_report.py`; counts only).** The exact parse changes no gene or panel value of the
+  Dropbox build (the scores come from the exports), but it moves 530,891 volcano points: 37,994 points in 1,870
+  contrasts on 125 plates sat at the p-floor 1.57e-76 (-log10 p 75.8), and their true median is 20.2; the other
+  points move by 9 % of p or less. RDS build vs Dropbox build (both exact): the same 9,074 experiments (6,667
+  FBX = 5,097 database + 1,570 archive; 1,194 undated database experiments skipped); R2, association score,
+  disease area and the dates of all panel plates are equal; 245 experiments have other measure rows, none of
+  them archived, and each Dropbox build copy is its folder's copy. Causes, all database data ("RDS wins"):
+  (a) 218 main-table experiments of folders 20260812 (171) and 20260814 (47), plates Pw207, Pw208, Pw209,
+  Pw213, Pw222: one upload at ids 178.1M-180.9M, after the rest of those folders (<= 171.7M) and before the
+  10-06 folder (>= 183.2M), so a later re-analysis that Dropbox lacks; 41 have another row count; panel logfc
+  moves up to 2.14 and ms_score up to 28.2. (b) 27 validation experiments of 20261006 (validation), plates
+  DG45VDA01KO/WT, Pw124VDWT, Pw145VDKO/WT, Pw156VDWT, Pw166: the glues table holds two identical uploads (one
+  contrast three) that agree with no Dropbox file, and the ids do not give the order; for the Pw166 one, the
+  database copy is the 07-24 analysis, and the validation folder has a newer one. (c) The database report has
+  other `nr_down` (155 experiments), `activity` (54) and `time` (190; no code reads it) on Pw140-Pw227; a change
+  to or from `Silent` adds or removes panel rows. (d) The formula fills gaps in the MSSCORE exports, which skip
+  whole plates (Pw164 in 07-24, Pw179 + Pw188 in 08-12) and the `Silent` contrasts: 1,975 panel hits of 93
+  experiments get a score (1.67-147) where the last build had none. (e) A glues-only experiment (Pw108) lost
+  the score of its 06-17 export: **fixed** — the archive keeps the MSSCORE rows of each experiment that the main
+  tables lack (4 rows), and `load_rds_fbx` drops an archived score only where the formula gives one (test
+  `test_glues_contrast_keeps_exported_score`). After the fix: 278 genes with another ms_score (higher mostly
+  from Pw207, Pw164, Pw188; lower mostly from Pw207-Pw222), 5 genes only in RDS and 1 only in Dropbox; panel
+  rows 388,706 vs 388,106. **Not a difference:** on Pw105VM, 40 panel rows show another contrast label, but the
+  two contrasts have equal logfc and ms_score (an exact tie that the input order breaks). A compare of
+  compounds_df must key on (gene, compound, plate, uniquecontrast): 4 keys on Pw105VM hold two contrasts.
+- 2026-10-23 — **Validation volcano different from the user's reference plot: two causes, the data are correct
+  (STE; one compound, stem DG25VDA01 WT/KO, report targets MAP2K6 + MAP2K3; yes/no checks only).** All copies
+  (Dropbox 20261006 (validation) export, database glues upload, the Dropbox and the RDS build) hold the same
+  values, and the heights in the 2026-10-23 inputs equal the reference. (1) **Stale base-volcano cache:**
+  `fn._volcano_base_cache_fname` keys on the experiment + render settings, not on the data, so a rebuild keeps
+  an image whose data changed. The WT image dates from 2026-10-19 (old parse: MAP2K6 and MAP2K3 read as p = 0,
+  drawn at the 75.8 floor); the KO image was rendered again on 2026-10-23 only because its stem y-max salt
+  changed (about 53, from the WT's new exact maximum). In the 2026-10-23 build, 1,898 of 7,171 panel volcanoes
+  have other data than the 10-19 inputs, and 1,654 of them keep an older image. (2) **Colour rule:** the
+  export/database flag `significant` = adjp < 0.05 and |logfc| >= 1 (exact on this experiment); the interface
+  colours every gene by it, so MAP2K3 (logfc about -0.9) is "not significant". The reference plot colours only
+  the report targets with adjp < 0.05, no logfc limit: this agrees exactly on WT and KO (inferred; the user to
+  confirm). The database also holds a primary experiment of this compound on Pw211 that has no `PX_DATES` date,
+  so the build skips it. Script: scratchpad `diag_volcano.py`. **Fixed (same day):** the base filename now
+  carries `fn._volcano_data_hash` (genes, logfc, pvalue, significant; a sum of row hashes), so a data change
+  renders again and the same data stays a cache hit. All names change one time, so the next build renders every
+  base (the old files stay in `volcanoes_px/`, unused). Tests: `TestVolcanoDataHash`,
+  `TestRender.test_volcano_rerenders_on_data_change` (fails without the hash); 108 OK. With the fix, the 5
+  volcanoes of this stem get new names, and the new WT render puts MAP2K6 and MAP2K3 at the reference heights
+  (shared y-max 53.8). `docs/INTERFACE.md` §4 and §7 updated. **Decision (user, same day): targets-only
+  colour** on the validation volcanoes: `px.volcano_colour` -> `meas.volcano_sig` (a report target with adjpval
+  < `VOLCANO_TARGET_ADJP` 0.05, any logfc; other experiments keep `significant`), passed as
+  `plot_3d_interface(volcano_sig_col=)`; the data hash covers it. The panel hits keep `significant`. Tests:
+  `TestVolcanoColour`, `TestValidationDir.test_volcano_colours_targets_only` and
+  `test_validation_volcano_svg_colours_targets_only`; 111 OK. Not published yet.
+  **Second reference (same day; a second compound, WT, batch 001 on Pw145VDWT and batch 002 on DG45VDA01WT):** the
+  reference colours PDCD2L, STAT2 and GLTP. Heights agree. GLTP is not a report target (no validation contrast in
+  the database has GLTP as a target), so "targets only" makes it grey. Tested on the three reference WT volcanoes:
+  **H1** = targets with adjp < 0.05 + genes flagged on the plate AND in a primary screen of the same compound
+  gives all three exactly; H2 (also flagged in the KO) gives 1 extra; flag + targets gives 3-7 extra.
+  **User: no change for now.** STAT2 on the primary of that compound (batch 001, Pw101): not flagged (adjp < 0.05 yes,
+  |logfc| >= 1 no, down). The database has no Pw101 at all: it lacks the whole 2026-06-16 folder (Pw101 = 48
+  experiments there), so the build takes this experiment from `data/px_archive/` (the Dropbox export).
+  **2026-10-26, from `px_fbx_glues` directly (every upload):** GLTP **is** flagged significant in all four
+  validation experiments of that compound (Pw145VD WT/KO, DG45VDA01 WT/KO; adjp < 0.05, |logfc| >= 1, down); PDCD2L
+  only on the two WT plates; STAT2 on none (WT: adjp < 0.05 but |logfc| < 1). The user expected GLTP "not
+  significant"; the data say otherwise. `vignettes/RDS_extraction.ipynb` (rebuilt 2026-10-26 at the user's request):
+  ee23985d params + `px_fbx_glues` (replaced a `Path(__file__)` cell that fails in Jupyter), 78044839 the table
+  (logfc / adjpval / flag per gene and plate), new 5c1e7a90 one volcano per validation plate. For it,
+  `fn.plot_volcano` got `key=` (select by plate or contrast), `sig_col=` (colour by a flag column, max per gene,
+  as the interface volcano) and a gene list (each ringed + labelled); defaults unchanged (`TestPlotVolcano`).
+  **2026-10-26, user request: show the control compounds by default.** New config `CONTROLS_ON: true` (absent =
+  true) -> `plot_3d_interface(control_default_on=)`; before, `build_interface` always passed `False` (controls
+  hidden until the "control" tickbox was ticked). Test `TestRender.test_controls_shown_by_default`; 116 OK.
+- 2026-10-26 — **MS score scale: the axis is 0-212, not 0-100 (STE; counts, gene names and axis maxima only).**
+  User: "it should go from 0 to 100, with KDM1B as the only gene at 100". **Now:** z = per-gene max of the raw
+  score; the FBX side (RDS formula + archive) is not clipped, the legacy side (`load_old_df`) is clipped to
+  [0, 100]. Builds 10-21 (Dropbox and RDS) and 10-23 (RDS): max 212.0 = KDM1B (rank 1), 76-81 genes > 100,
+  **274-277 genes at exactly 100** (the legacy clip). **Legacy p-value bug (same as the FBX one, not fixed):**
+  `fn.load_proteomics_data` reads the 3 old exports with the default parser; 522 significant-down df_raw rows
+  read p = 0 (true p down to 1e-72; 38,673 of 65,523 export rows use an exponent, the rest plain decimals), so
+  their score is inf, then 100. With the exact p and no clip: legacy max 263.2 (BCL6); 4 legacy genes (BCL6,
+  STAT1, ZFP36L2, GSPT1) score above KDM1B's 212, from 5 experiments that no FBX copy replaces; only 1 of these
+  5 rows had a lost p (the clip hid the other 4). **Platform scales (RDS):** `px_fbx_msscore.ms_score_percent`
+  (also in every Dropbox FBX MSSCORE export) = `100 * (ms_score - plate min) / (plate max - plate min)`, exact on
+  all 11,577 rows (one gene at 100 on each plate). `px_ms_score_glues` (= the 40-row per-target MSSCORE of the
+  validation folder 20261006: target, msscore, associationscore): 11.6-100, KDM1B the only target at 100. It
+  covers every validation target (40 = all targets of `px_fbx_glues_report`; WT 40, KO 39, BIND 16; the 16 of
+  folder 20260817 included), one score per target although 13 targets have 2-13 validated compounds.
+  **Not reproducible from the data (user asked, same day):** tested the raw score, the per-plate/contrast/stem/
+  condition min-max and rank scales, p and adjp, WT/KO/BIND and WT-KO terms on the Dropbox validation MEASURE
+  and on `px_fbx_glues`, per-gene aggregates over all primary MSSCORE rows (platform `ms_score_percent`
+  included), the validated compound's primary rows, percentiles over all genes; best Spearman 0.78 (primary,
+  significant-down, mean -log10 adjp), no exact fit. Example of the gap: msscore MAP2K3 > MAP2K6, but MAP2K6 is
+  the stronger hit on the validation plates. `associationscore` ~ OpenTargets max `overall_score` (Spearman
+  0.94, not exact: another release or filter). Ask the data team for the msscore code. The user's sheet shows
+  the same values as the file (21 rows, all digits shown). **Estimate from the 20261006 data alone (user asked,
+  same day): not usable.** Validation folder (150 per-target features: WT/KO/BIND, score, p, logfc, rank,
+  share of the experiment's degradation, number of degraded proteins): best single Spearman 0.56; best
+  two-feature fit R2 0.40, leave-one-out mean |error| 16.5 points (max 48) vs 21.3 when every target gets the
+  mean. The 10-06 primary plates: only 14 targets have significant rows (Spearman <= 0.78, deviations to 70).
+  Scripts: scratchpad `ms_1006_*.py`. **RDS holds the primary MSSCORE of 20261006 (checked 2026-10-26):**
+  `Data_Prototype/20261006/20261006_FBX_MSSCORE.csv` = `px_fbx_msscore` LEFT JOIN `opentarget` ON
+  `approvedsymbol = genes` (all 9 columns, 11,577 rows, same ids; numbers within 5e-13; `associationscore` =
+  `opentarget.associationscore` for all 2,932 genes, the 106 empty ones are not in `opentarget`). The formula
+  on `px_fbx_measure` gives the same rows and `ms_score` + 256 rows of 22 experiments that the export leaves
+  out: on each plate the experiment of the first `CONTROLS` compound (20; the second one stays), and 2 others.
+  With them the per-plate percent moves up to 26 points, so take the percent from `px_fbx_msscore`. Older
+  tranches have no MSSCORE table in RDS: formula = exact `ms_score`; the percent needs the export's row set. **Options on exact data:** A = 100 x
+  score / top of all data -> only BCL6 at 100, KDM1B 80.6 (rank 5); B = 100 x score / FBX top (KDM1B), clip
+  100 -> 5 genes at 100; C = platform per-plate percent, gene max -> 95 genes at 100. KDM1B is the only gene at
+  100 only on the platform (FBX) data. `MS_Prioritization.ipynb` filters `mscore.ms_score > MS_CTF` (3 cells), so
+  a scale must stay in the interface (z + MS slider) and keep `mscore` raw. Scripts: scratchpad `ms_*.py`.
+  **Sources of the current z (user asked, 2026-10-26; the rebuild = the 10-23 `iface_df` for all 11,342 genes):**
+  we compute `-log10(p) x -logfc` ourselves on the RDS `px_fbx_measure` (`fn.ms_score_rows`, no clip; the build
+  does not read `px_fbx_msscore`) and on the legacy df_raw (clip 0-100). The 1,570 FBX experiments that RDS lacks
+  keep the platform `ms_score` of the Dropbox MSSCORE exports (archive). z from: RDS formula 5,477 | exports 876 |
+  legacy 4,770 (274 at exactly 100) | 0 for 219 (significant up rows only). 10,300 genes have an FBX score, 823 a
+  legacy score only; of the 7,053 with both, the legacy score is higher for 3,947. Scope: RDS 4,957 experiments /
+  144 plates (2026-06-23..10-06; `px_fbx_msscore` holds only its 820 of 10-06, 3,038 genes), archive 1,570 / 41
+  (06-01..08-17), legacy 2,432 / 83 (04-29..05-29); the 140 experiments of the RDS glues tables get no formula
+  score (2 genes take z from 4 archive rows). z > 100: RDS 48 (KDM1B 212), archive 33, legacy 0 (clip). Scripts:
+  scratchpad `ms_sources.py`, `ms_sources_scope.py`. **All Dropbox FBX MSSCORE csv (cell 5e4b6f85, 2026-10-26):**
+  13 files (FBX_DIR 20260601..20261006; 20260817 has none), 340,042 rows, 4,964 experiments, 10,287 genes, max
+  212.0, 76 genes > 100. No experiment is in 2 tranches (20260616 and 20260616_02 hold different ones). The 10-06
+  file has `associationscore`; the 12 older ones have `association_score`, `genetic_score`, `literature_score`.
+  **Decided (user, 2026-10-26):** z = `px_ms_score_glues.msscore` for a validation target, else the max FBX primary
+  `ms_score` (all primary screens), else 0; fix the legacy p = 0 bug (round_trip parse + df_raw rebuild).
+  **Decided and built later the same day** (see "Where we are now", New MS score): raw scale (0-212), FBX wins
+  and the legacy score fills only the genes with no FBX score (about 830), no cut at 100, the MS slider filters
+  each experiment (positions fixed). Facts for it: the FBX exports hold no validation-suffix plate; the highest export score
+  outside the 40 targets is 211.7 (EFNA1), and 69 non-target genes are above 100; the legacy fill max is 206.0
+  (FEM1A); exports-only vs the current RDS formula: 9,867 genes equal, 352 lower, 67 higher (re-analysed
+  experiments and rows that the exports skip). Scripts: scratchpad `ms_plan_facts.py`, `ms_scale_facts.py`.
+  **Built (2026-10-26): the legacy exact parse.** `fn.load_proteomics_data` reads the raw table with
+  `float_precision='round_trip'` (its only caller is `build_old_df`; test `TestExactPvalueParse.
+  test_legacy_export_exact`, where the default parser gives p = 0 for 5.9e-31; 125 tests OK). The df_raw file
+  keeps the old p until a rebuild with `DFRAW_OVERWRITE: true` (back up `DFRAW_PATH` + `MS_PATH` first).
+  Notebook cell 8f8f9afb of `RDS_extraction.claude.ipynb`: `leg` = df_raw of the 3 exports with the exact p
+  (`dropna`, as `load_old_df`), `leg_ms` = `fn.ms_score_rows` on it (significant down, not clipped). Checked on
+  fake exports only (scratchpad `test_leg_cell.py`). `leg_ms` keeps the legacy experiments that an FBX copy
+  replaces in the build (`combine_datasets` drops those rows).
+- 2026-10-26 — **Association score of the FBX exports: one value per gene, from the RDS `opentarget` table (STE;
+  counts and gene names only).** User: are all genes covered, can a gene have different values? No FBX REPORT has
+  the score. It is in the FBX MSSCORE exports: `association_score` in 12 tranches, `associationscore` in 20261006,
+  so `fbx_ms` (cell 5e4b6f85) holds two columns. **One value per gene:** 10,045 genes, each with one value in all
+  340,042 rows (no change across rows, plates, experiments or tranches). Every value equals
+  `opentarget.associationscore` in RDS (one row per gene, 30,468 genes; `nameassociation` = its disease), in all 13
+  tranches. **Coverage:** 242 `fbx_ms` genes (1,995 rows) have no value: 37 multi-gene groups (`;`) and old or
+  alias symbols (e.g. AES, ADSSL1) that neither OpenTargets source holds; a gene has the value in all its rows or
+  in none. Interface genes (11,342): FBX value 10,045; RDS `opentarget` 11,013; `OT_CACHE` (the y-axis now)
+  10,553, so 789 get y = 0; none of the three 329 (69 with `;`). **Versus the y-axis now** (`OT_CACHE` max
+  `overall_score`; equal to `iface_df.association_score` for all 11,342 genes): 10,553 genes in both, Spearman
+  0.930; the RDS value is lower for 10,080 (median |diff| 0.067, p90 0.165); genes above 0.6: RDS 2,778, OT
+  3,807. In `mscore`, `association_score` is empty on the legacy rows, and in rds mode also on the formula rows
+  (`fn.ms_score_rows` has no such column). Scripts: scratchpad `assoc_check.py`, `assoc_check2.py`.
+  **Chain checked (2026-10-26):** `px_fbx_msscore` has no association column (its 2,932 genes with a value via
+  the `opentarget` join equal the exports); `px_ms_score_glues.associationscore` = `opentarget` for 39 of 40
+  targets, and the 40th (HSPB11) is not in `opentarget`. Interface coverage: `px_ms_score_glues` > `px_fbx_msscore`
+  > Dropbox exports = 10,046 of 11,342 genes (1,296 missing: genes no FBX export holds); `px_ms_score_glues` >
+  RDS `opentarget` = 11,014 (328 missing: 69 multi-gene `;` groups + old or alias symbols such as ADSSL1, AES,
+  ARNTL, ASNA1; 313 have an MS score > 0, 18 > 50); `OT_CACHE` (y now) = 10,553 (789 at y = 0). User decision:
+  `px_ms_score_glues` > `opentarget`; built the same day (`ASSOC_SOURCE`). Scripts: scratchpad `assoc_chain.py`,
+  `assoc_code_check.py`.

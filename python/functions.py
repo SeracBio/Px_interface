@@ -316,7 +316,9 @@ def load_proteomics_data(
         and keep only the ``collections`` of interest (drops PROTACs).
         Join key: ``Batch Molecule-Batch ID``.
 
-    Common to both: read the raw table, split ``MoleculeBatchID``
+    Common to both: read the raw table with the exact float parse
+    (``float_precision='round_trip'``: the default parser reads a plain-decimal
+    p below ~1e-17 as 0), split ``MoleculeBatchID``
     (``SRB-0000385-001``) into ``compound`` + ``batch``, drop ``drop_plates``
     by ``MSPlate`` (a GLOBAL rule — never per-gene), then keep only the
     molecule-batches present in the metadata table.
@@ -333,7 +335,7 @@ def load_proteomics_data(
     :return: ``(df_raw, MS)`` — filtered raw table and the metadata table.
     """
     # --- Raw table (common to all tranches) ---
-    df_raw = pd.read_csv(raw_proteomics_path)
+    df_raw = pd.read_csv(raw_proteomics_path, float_precision='round_trip')
     if mode == 'cddvault':
         # Database export names this column 'unique'; match the earlier tranche.
         df_raw = df_raw.rename(columns={'unique': 'uniquecontrast'})
@@ -936,8 +938,11 @@ _INTERFACE_INJECT = '''
                user-select: text; }
   #hover-img.pinned { border-color: #1D3557; border-width: 2px; padding: 5px;
                       box-shadow: 0 4px 14px rgba(0,0,0,0.25); }
+  /* The panel is fixed to the right edge and grows to the left when volcanoes open: keep the row at its own
+     width on the right, so the compound cells stay under the pointer (2026-10-23). */
   #hover-img .row { display: flex; flex-direction: row; gap: 6px;
-                    align-items: flex-start; flex-wrap: wrap; }
+                    align-items: flex-start; flex-wrap: wrap;
+                    width: fit-content; max-width: 100%; margin-left: auto; }
   #hover-img .cell { display: flex; flex-direction: column; align-items: center;
                      border: 1px solid #eee; border-radius: 4px; padding: 3px; }
   #hover-img .cell img { display: block; width: 170px; height: 110px;
@@ -1429,8 +1434,9 @@ _INTERFACE_INJECT = '''
       tickedAct[a] = actDefaults ? (actDefaults.indexOf(a) !== -1) : true;
     });
     // Current MS-score (z) slider window, set by applyRanges. The MS slider filters each compound
-    // experiment by its OWN per-(gene,compound,plate) MS score (plate-row index 8), NOT the gene's
-    // plotted z (which stays at the gene max so dots keep their position); see geneHasVisibleCompound.
+    // experiment by its OWN MS score (plate-row index 8), NOT the gene's plotted z (which stays fixed so
+    // dots keep their position); see geneHasVisibleCompound. A validation target's own validation
+    // experiments carry its validation score (2026-10-26).
     var msLo = -Infinity, msHi = Infinity;
     // Control-compound filter: a single tickbox in the Activity panel. When OFF,
     // every entry whose compound id is a control is hidden everywhere — panel list,
@@ -1781,6 +1787,7 @@ _INTERFACE_INJECT = '''
     var buildPinTraceHook = function() {};        // set in the pin block; repaints the pin overlay under current filters
     var applySessionHook = function() {};         // set in the session block; applies a (partial) session/hash state
     var syncPlateUIHook = function() {};          // set in the plate block; re-syncs stem/parent boxes from `ticked`
+    var fitZHook = function() { return false; };  // set in the range block; fits the z axis top to the shown genes + pins
 
     // A gene is "active" under the current Plate + Activity ticks if it has at
     // least one compound whose plate AND activity are both ticked. Used to grey
@@ -1852,7 +1859,6 @@ _INTERFACE_INJECT = '''
     // A plate-row is visible only if BOTH its plate and its activity are ticked.
     function isPaged(t) { return Array.isArray(t[3]); }
     // A plate-row passes the MS slider if its per-compound MS score (pl[8]) is in the window.
-    // Rows without a score (null — e.g. completion rows) are never dropped by the MS filter.
     function msOk(pl) {
       var v = pl[8];
       // No score (a hit absent from the mscore table) can't clear an MS threshold — it passes ONLY when
@@ -1874,7 +1880,7 @@ _INTERFACE_INJECT = '''
       if (real.length === t[3].length) return real;   // all rows plainly visible -> fast path
       var okStems = {};
       real.forEach(function(pl) { if (isValidationPlate(pl[0])) okStems[valStemOf(pl[0])] = 1; });
-      t[3].forEach(function(pl) { if (pl[11] && ticked[pl[0]]) okStems[valStemOf(pl[0])] = 1; });   // tested target
+      t[3].forEach(function(pl) { if (pl[11] && ticked[pl[0]] && msOk(pl)) okStems[valStemOf(pl[0])] = 1; });   // tested target
       var hasStem = Object.keys(okStems).length > 0;
       var out = real.slice(), inOut = new Set(real);
       // completion rows ride along a visible stem (bypass activity filter); primary handled below
@@ -2292,9 +2298,10 @@ _INTERFACE_INJECT = '''
       var cell = e.target.closest(".cell");
       if (cell) showVolcano(cell);
     });
-    row.addEventListener("mouseout", function(e) {
+    // The peek closes only when the pointer leaves the whole panel, so it can move into the volcanoes
+    // (below the row) and back to another compound (2026-10-23).
+    box.addEventListener("mouseleave", function() {
       if (!pinned || volPinIdx !== null) return;
-      if (e.relatedTarget && row.contains(e.relatedTarget)) return;
       volBox.style.display = "none";
     });
     row.addEventListener("click", function(e) {
@@ -2755,7 +2762,7 @@ _INTERFACE_INJECT = '''
                   (hiV >= R[a].max - st) ?  Infinity : hiV];
         });
         // The MS (z) slider filters each compound experiment by its own MS score, not the gene's
-        // plotted z (its max) — so dots keep their position while the panel prunes out-of-range hits.
+        // plotted z — so dots keep their position while the panel prunes out-of-range hits.
         msLo = b.z[0]; msHi = b.z[1];
         var total = 0, masks = {}, _pinSet = shownPinSet();
         R.areaTraces.forEach(function(ti) {
@@ -2768,7 +2775,7 @@ _INTERFACE_INJECT = '''
               ? !!_pinSet[o.text[k]]
               : (o.x[k] >= b.x[0] && o.x[k] <= b.x[1]
                    && o.y[k] >= b.y[0] && o.y[k] <= b.y[1]
-                   // z (MS) is NOT range-tested on the gene's plotted max — the MS window (msLo/msHi)
+                   // z (MS) is NOT range-tested on the gene's fixed position — the MS window (msLo/msHi)
                    // is applied per compound experiment inside geneHasVisibleCompound instead.
                    && geneHasVisibleCompound(o.text[k])
                    && depAllowed(o.text[k])
@@ -2833,9 +2840,31 @@ _INTERFACE_INJECT = '''
         // toggle can re-derive labels without recomputing the range filter.
         lastMasks = masks; lastTotal = total;
         buildPinTraceHook();   // refresh pin overlay: drop pins with no compound on the ticked plates
+        fitZ();
         Plotly.redraw(gd);
         refreshLabels();
         updateCount();
+      }
+      // z axis top = the highest shown gene (shown pins too) + R.zFitPad of the z span, so the dots fill
+      // the height; the floor stays at the data min. No gene shows -> autorange (the backdrop = all genes).
+      // Sets gd.layout only (the caller redraws); returns true when the range changed.
+      var _zFit = null;
+      function fitZ() {
+        if (R.zFitPad == null) return false;
+        var top = -Infinity, xyz = window.__GENE_XYZ__ || {};
+        R.areaTraces.forEach(function(ti) {
+          var o = orig[ti], m = lastMasks[ti], vis = gd.data[ti] && gd.data[ti].visible;
+          if (!o || !m || vis === "legendonly" || vis === false) return;
+          for (var k = 0; k < m.length; k++) if (m[k] && o.z[k] > top) top = o.z[k];
+        });
+        Object.keys(shownPinSet()).forEach(function(g) { if (xyz[g] && xyz[g][2] > top) top = xyz[g][2]; });
+        var span = top - R.z.min;
+        var rng = span > 0 ? [R.z.min - R.zFitPad * span, top + R.zFitPad * span] : null;
+        if (String(rng) === String(_zFit)) return false;
+        _zFit = rng;
+        var sc = gd.layout.scene || (gd.layout.scene = {}), za = sc.zaxis || (sc.zaxis = {});
+        if (rng) { za.range = rng; za.autorange = false; } else { delete za.range; za.autorange = true; }
+        return true;
       }
       recolor3d = applyRanges;   // let the Plate/Activity checkboxes re-colour too
       // Coalesce slider-drag 'input' events to one applyRanges per animation frame — a fast
@@ -2848,9 +2877,10 @@ _INTERFACE_INJECT = '''
       refreshLabelsHook = refreshLabels;   // expose to the pin block (label dedup)
       updateCountHook = updateCount;       // expose to the pin block (tally includes pins)
       exportCSVHook = buildExportCSV;      // expose to the download block
+      fitZHook = fitZ;                     // expose to the pin block (a pin can raise the z top)
       // Toggling a disease area in the legend changes trace visibility (plotly fires
-      // plotly_restyle); re-derive labels so hidden areas drop their labels too.
-      if (gd.on) gd.on("plotly_restyle", refreshLabels);
+      // plotly_restyle); re-fit z and re-derive labels so hidden areas drop their labels too.
+      if (gd.on) gd.on("plotly_restyle", function() { if (fitZ()) Plotly.redraw(gd); refreshLabels(); });
       // Re-place the SAR axis annotation when the camera rotates (it must follow the front-bottom
       // x-edge). React ONLY to camera changes — not our own scene.annotations relayout — to avoid a
       // loop; rAF-debounce so a rotate drag coalesces to one rebuild per frame.
@@ -3006,6 +3036,7 @@ _INTERFACE_INJECT = '''
         if (soloPins || wasSolo) {
           recolor3d();           // solo enter/refresh/exit changes the area filter -> re-run it
         } else if (typeof Plotly !== "undefined" && buildPinTrace()) {
+          fitZHook();            // a pin above the z top raises it
           Plotly.redraw(gd);
         }
         refreshLabelsHook();   // pinned genes label via scene.annotations (dedup with range labels)
@@ -3545,6 +3576,7 @@ def plot_3d_interface(
     title='',
     range_sliders=False,
     range_defaults=None,
+    z_fit_pad=None,   # with range_sliders: z axis top = the highest shown gene + this part of the z span; None -> all genes
     activity_defaults=None,
     control_genes=(),
     control_compounds=(),
@@ -3566,6 +3598,7 @@ def plot_3d_interface(
     lof_defaults=None,
     validation_defaults=None,
     volcano_significant=False,
+    volcano_sig_col='significant',
     volcano_dir=None,
     html_path=None,
     height=900,
@@ -3620,6 +3653,8 @@ def plot_3d_interface(
         interface this is ``FBX_MEASURE`` keyed by ``uniquecontrast``.
     :param str volcano_key: column in ``volcano_source`` / ``compounds_df`` that
         identifies one volcano (default ``'uniquecontrast'``).
+    :param str volcano_sig_col: column of ``volcano_source`` that colours the volcano points (> 0 = a
+        coloured point; default ``'significant'``). ``'significant'`` is used if the column is absent.
     :param int page_size: compounds shown per page in the panel (default 5).
     :return: ``(fig, highlighted)`` — the Plotly figure and highlighted-set DataFrame; when
         ``return_panels=True``, a 3-tuple ``(fig, highlighted, panels)`` where ``panels`` is the
@@ -3904,7 +3939,7 @@ def plot_3d_interface(
                 has_ng = 'n_genes' in compounds_df.columns   # genes measured in the experiment
                 has_mbid = 'molecule_batch_id' in compounds_df.columns  # per-plate batch id
                 has_comp = 'is_completion' in compounds_df.columns  # ride-along validation-stem condition (gene not significant here)
-                has_ms = 'ms_score' in compounds_df.columns  # per-(gene,compound,plate) MS score for the slider
+                has_ms = 'ms_score' in compounds_df.columns  # per-(gene,compound,plate) MS score for the slider (pl[8])
                 has_primary = 'is_primary' in compounds_df.columns  # broad primary-screen volcano attached to a validation stem
                 has_tgt = 'is_target' in compounds_df.columns  # validation-target row: a tested gene, not a hit there
                 import re as _re_v   # validation-plate matcher: only these rows carry a contrast id (vk) for the trace
@@ -4055,7 +4090,8 @@ def plot_3d_interface(
         if _vsrc is not None and tasks:
             # Volcanoes: interactive SVG (rasterised grey cloud + vector significant points with
             # <title> tooltips) shown via <object>; PNG via <img> for the non-significant fallback.
-            _sig = bool(volcano_significant) and ('significant' in _vsrc.columns)
+            _scol = volcano_sig_col if volcano_sig_col in _vsrc.columns else 'significant'
+            _sig = bool(volcano_significant) and (_scol in _vsrc.columns)
             _external = bool(volcano_dir) and bool(html_path)
             if _sig and _external:
                 import json as _json
@@ -4071,9 +4107,12 @@ def plot_3d_interface(
                 if stem_ymax:
                     print(f'> shared y-max on {len(stem_ymax):,} validation-stem volcano(es)')
 
+                # the data hash in the filename: a data change renders the volcano again
+                vhash = _volcano_data_hash(_vsrc, {str(vk) for (_g, vk, _e, _p) in tasks}, sig_col=_scol)
+
                 def _bfname(vk):
                     return _volcano_base_cache_fname(vk, volcano_xlim, volcano_size_px, _ext,
-                                                     ymax=stem_ymax.get(str(vk)))
+                                                     ymax=stem_ymax.get(str(vk)), data=vhash.get(str(vk)))
 
                 # persisted focal-gene ring positions {vk: {gene: [fx, fy]}} so a rebuild whose base
                 # images are already cached can fill pl[9] without re-rendering the base.
@@ -4122,11 +4161,12 @@ def plot_3d_interface(
                             _joblib.parallel.BatchCompletionCallBack = prev
                             pbar.close()
 
-                    _cols = ['compound', 'genes', 'logfc', 'pvalue', 'significant']
+                    _cols = ['compound', 'genes', 'logfc', 'pvalue', _scol]
                     sub_cache = {c: g for c, g in
-                                 _vsrc.loc[_vsrc['compound'].isin(render_vks), _cols].dropna()
+                                 _vsrc.loc[_vsrc['compound'].isin(render_vks), _cols]
+                                 .rename(columns={_scol: 'significant'}).dropna()
                                  .groupby('compound', sort=False)}
-                    _empty = _vsrc.iloc[0:0][_cols]
+                    _empty = _vsrc.iloc[0:0][_cols].rename(columns={_scol: 'significant'})
                     print(f'> rendering {n_render:,} base volcanoes (one per experiment) for '
                           f'{len(tasks):,} (gene,plate) cells on {volcano_n_jobs} workers '
                           f'({n_cached:,} cached) [significant SVG]...', flush=True)
@@ -4315,9 +4355,11 @@ def plot_3d_interface(
                     # second ~meas-sized frame resident alongside sub_cache during the render).
                     sub_cache = {c: g for c, g in
                                  _vsrc.loc[_vsrc['compound'].isin(unique_keys),
-                                           ['compound', 'genes', 'logfc', 'pvalue', 'significant']]
+                                           ['compound', 'genes', 'logfc', 'pvalue', _scol]]
+                                 .rename(columns={_scol: 'significant'})
                                  .dropna().groupby('compound', sort=False)}
-                    _empty = _vsrc.iloc[0:0][['compound', 'genes', 'logfc', 'pvalue', 'significant']]
+                    _empty = (_vsrc.iloc[0:0][['compound', 'genes', 'logfc', 'pvalue', _scol]]
+                              .rename(columns={_scol: 'significant'}))
                     print(f'> rendering {len(unique_keys):,} unique volcanoes for {n_render:,} '
                           f'(gene,plate) cells on {volcano_n_jobs} workers'
                           + (f' ({n_cached:,} cached)' if _external else '')
@@ -4480,11 +4522,14 @@ def plot_3d_interface(
     def _hover_text(d):
         areas = (d['disease_area'].fillna('—') if 'disease_area' in d.columns
                  else pd.Series(['—'] * len(d), index=d.index))
+        # the source of the z value (e.g. 'validation'), when the frame has one
+        srcs = (d['ms_source'].fillna('').map(lambda s: f' ({s})' if s else '') if 'ms_source' in d.columns
+                else pd.Series([''] * len(d), index=d.index))
         return [
             f'<b>{g}</b><br>{x_label}={xx:.3f}<br>{y_label}={yy:.3f}<br>'
-            f'{z_label}={zz:.3f}<br>area={a}'
-            for g, xx, yy, zz, a in zip(
-                d['gene'], d[x_col], d[y_col], d[z_col], areas)
+            f'{z_label}={zz:.3f}{s}<br>area={a}'
+            for g, xx, yy, zz, s, a in zip(
+                d['gene'], d[x_col], d[y_col], d[z_col], srcs, areas)
         ]
 
     fig = go.Figure()
@@ -4666,6 +4711,7 @@ def plot_3d_interface(
             'y': _axis_cfg(yv, y_label),
             'z': _axis_cfg(zv, z_label),
             'areaTraces': area_trace_indices,
+            'zFitPad': (None if z_log else z_fit_pad),   # None -> Plotly autorange over all genes
         }
         # Per-axis default lower-handle overrides, e.g. {'y': 0.35} to start the
         # association handle at 0.35 (clamped to the axis range).
@@ -4720,7 +4766,8 @@ def plot_3d_interface(
         # scans a string literal cheaply and the native JSON parser is far faster than
         # parsing a multi-MB object literal as source (big page load-time win).
         def _jsp(obj):
-            s = _json.dumps(obj).replace('</', '<\\/')   # neutralise premature </script>
+            # allow_nan=False: NaN is not JSON, and JSON.parse would stop the page script (no dots, no filters)
+            s = _json.dumps(obj, allow_nan=False).replace('</', '<\\/')   # neutralise premature </script>
             return 'JSON.parse(' + _json.dumps(s) + ')'
 
         # Resolve activity_defaults against the ACTUAL level labels (e.g. the data
@@ -4976,13 +5023,14 @@ def plot_3d_interface(
 
 def plot_volcano(df, compound, gene,
                  *,
+                 key='compound', sig_col=None,
                  fc_thresh=1.0, p_thresh=0.05,
                  xmin=-5.0, xmax=5.0,
                  figsize=(6, 6), dpi=100,
                  up_color='#008bfb', down_color='#ff0051',
                  ax=None, title=None):
     """
-    Volcano plot for a single compound, with one target gene highlighted.
+    Volcano plot for a single compound (or plate / experiment, see ``key``), with target gene(s) highlighted.
 
     For the given ``compound``, collapse multi-batch/plate replicates per gene
     using mean ``logfc`` and min ``pvalue``. Genes are coloured by significance
@@ -4991,9 +5039,14 @@ def plot_volcano(df, compound, gene,
     the rest of the proteome.
 
     :param df df: must contain columns ``compound``, ``genes``, ``logfc``, ``pvalue``.
-    :param str compound: e.g. ``'SRB-0000615'``.
-    :param str gene: gene symbol to highlight (e.g. ``'KDM1B'``); silently
-        ignored if not measured for that compound.
+    :param str compound: the ``key`` value to plot, e.g. ``'SRB-0000615'`` (or a plate, a contrast).
+    :param str|list gene: gene symbol(s) to ring + label (e.g. ``'KDM1B'`` or ``['GLTP', 'STAT2']``);
+        a gene not measured for that compound is skipped (with a note).
+    :param str key: column that ``compound`` selects on (default ``'compound'``; e.g. ``'plate'`` or
+        ``'uniquecontrast'`` for one experiment).
+    :param str sig_col: if given, colour by this flag column (> 0 = significant, max per gene; e.g. the
+        export/database ``'significant'``), as the interface volcano does, instead of the
+        ``fc_thresh`` / ``p_thresh`` buckets (2026-10-26).
     :param float fc_thresh, p_thresh: logfc / p-value thresholds for the
         significance buckets and the dashed reference lines.
     :param float xmin, xmax: x-axis limits (logfc range).
@@ -5004,24 +5057,29 @@ def plot_volcano(df, compound, gene,
         figure is created.
     :param str title: optional custom title; default = ``f'{compound}  (N genes)'``.
     :return df: the per-gene aggregate frame
-        (``genes``, ``logfc``, ``pvalue``, ``nlog10p``), useful for downstream
+        (``genes``, ``logfc``, ``pvalue``, ``nlog10p``; + ``significant`` with ``sig_col``), useful for downstream
         filtering of the volcano data without recomputing the aggregation.
     """
     import matplotlib.pyplot as plt
 
-    sub = df[df['compound'] == compound][['genes', 'logfc', 'pvalue']].dropna()
+    sub = df[df[key] == compound][['genes', 'logfc', 'pvalue'] + ([sig_col] if sig_col else [])].dropna()
     if sub.empty:
-        print(f'> {compound}: no rows in df_raw')
+        print(f'> {compound}: no rows')
         return None
     # collapse multi-batch/plate replicates per gene: mean logfc, min p
-    agg = (sub.groupby('genes')
-              .agg(logfc=('logfc', 'mean'), pvalue=('pvalue', 'min'))
-              .reset_index())
+    aggspec = {'logfc': ('logfc', 'mean'), 'pvalue': ('pvalue', 'min')}
+    if sig_col:
+        aggspec['significant'] = (sig_col, 'max')
+    agg = sub.groupby('genes').agg(**aggspec).reset_index()
     agg['nlog10p'] = -np.log10(agg['pvalue'].clip(lower=1e-300))
 
-    # classify
-    up   = (agg['logfc'] >=  fc_thresh) & (agg['pvalue'] <= p_thresh)
-    down = (agg['logfc'] <= -fc_thresh) & (agg['pvalue'] <= p_thresh)
+    # classify: the flag column if given, else the logfc / p-value thresholds
+    if sig_col:
+        up   = (agg['significant'] > 0) & (agg['logfc'] > 0)
+        down = (agg['significant'] > 0) & (agg['logfc'] < 0)
+    else:
+        up   = (agg['logfc'] >=  fc_thresh) & (agg['pvalue'] <= p_thresh)
+        down = (agg['logfc'] <= -fc_thresh) & (agg['pvalue'] <= p_thresh)
     ns   = ~(up | down)
 
     if ax is None:
@@ -5041,14 +5099,15 @@ def plot_volcano(df, compound, gene,
     ax.axvline(+fc_thresh,          ls='--', lw=0.7, c='#888')
     ax.axvline(-fc_thresh,          ls='--', lw=0.7, c='#888')
 
-    # highlight target gene
-    tg = agg[agg['genes'] == gene]
-    if tg.empty:
-        print(f'> {gene} not measured for {compound}')
-    else:
+    # highlight the target gene(s)
+    for g in ([gene] if isinstance(gene, str) else list(gene)):
+        tg = agg[agg['genes'] == g]
+        if tg.empty:
+            print(f'> {g} not measured for {compound}')
+            continue
         ax.scatter(tg['logfc'], tg['nlog10p'],
                    s=70, facecolor='none', edgecolor='black', lw=1.5, zorder=5)
-        ax.annotate(gene,
+        ax.annotate(g,
                     xy=(tg['logfc'].iat[0], tg['nlog10p'].iat[0]),
                     xytext=(8, 6), textcoords='offset points',
                     fontsize=11, fontweight='bold',
@@ -5890,6 +5949,16 @@ def _stem_shared_ymax(compounds_df, vsrc, suffixes):
     return out
 
 
+def _volcano_data_hash(vsrc, vks, sig_col='significant'):
+    """Hash of each experiment's volcano rows (``genes``, ``logfc``, ``pvalue`` and the colour column
+    ``sig_col``), as ``{vk: 16 hex digits}``. ``vsrc`` carries the vk in a ``'compound'`` column (the render
+    slices it by that name). The row order does not change the hash (a sum of row hashes, modulo 2**64)."""
+    cols = [c for c in ('genes', 'logfc', 'pvalue', sig_col) if c in vsrc.columns]
+    sub = vsrc.loc[vsrc['compound'].isin(list(vks)), ['compound'] + cols]
+    h = pd.util.hash_pandas_object(sub[cols], index=False)
+    return {str(k): f'{int(v):016x}' for k, v in h.groupby(sub['compound'], observed=True).sum().items()}
+
+
 def _volcano_base_svg(df, uniquecontrast,
                       *,
                       key='uniquecontrast', sig_col='significant',
@@ -6168,7 +6237,7 @@ def _volcano_cache_fname(gene, key, xlim, size_px, ext='.svg', version=''):
     return hashlib.md5(s.encode()).hexdigest()[:16] + ext
 
 
-def _volcano_base_cache_fname(vk, xlim, size_px, ext='.svg', version='b1', ymax=None):
+def _volcano_base_cache_fname(vk, xlim, size_px, ext='.svg', version='b1', ymax=None, data=None):
     """On-disk filename for ONE experiment's shared base volcano — keyed by the experiment
     (``vk``) only, NOT the focal gene. One base per experiment (vs one file per
     (gene, experiment)) collapses the ~19× duplication of the embedded raster; the focal-gene
@@ -6176,10 +6245,15 @@ def _volcano_base_cache_fname(vk, xlim, size_px, ext='.svg', version='b1', ymax=
 
     ``ymax`` salts the key with a shared per-validation-stem y-max override, so ONLY the volcanoes
     that get rescaled get a new filename (and re-render); ``None`` reproduces the original key, so
-    every auto-scaled volcano stays a cache hit."""
+    every auto-scaled volcano stays a cache hit.
+
+    ``data`` salts the key with the experiment's data hash (:func:`_volcano_data_hash`), so a data
+    change (a re-analysis, the exact p-value parse of 2026-10-21) gives a new filename and a new
+    render; the same data stays a cache hit. Without it, a cached image kept old data (2026-10-23)."""
     import hashlib
     _y = f'|y{float(ymax):.4f}' if ymax is not None else ''
-    s = f'{version}|{vk}|{xlim[0]}|{xlim[1]}|{size_px}{_y}|{ext}'
+    _d = f'|d{data}' if data is not None else ''
+    s = f'{version}|{vk}|{xlim[0]}|{xlim[1]}|{size_px}{_y}{_d}|{ext}'
     return hashlib.md5(s.encode()).hexdigest()[:16] + ext
 
 
@@ -6814,3 +6888,130 @@ def plot_autoresearch_progress(
         fig.savefig(save_path, dpi=150, bbox_inches='tight')
 
     return fig, ax
+
+
+# ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+# Dropbox access — rclone on the cluster (the remote + path mapping of MS_ML)
+# ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+def dbx_target(path, remote='dropbox:', prefix=None):
+    """
+    The rclone target of a config path, or None for a local path.
+
+    The Dropbox paths in the config are the laptop paths of its Dropbox client. A path under `prefix`
+    (config DROPBOX_LOCAL_ROOT) maps to `remote` + the rest of the path, as in MS_ML:
+    '/mnt/c/Users/gtamo/Serac Biosciences Dropbox/Serac_team/x' -> 'dropbox:Serac_team/x'.
+    prefix=None (backend 'local') or a path outside `prefix` gives None. Repeated '/' count as one,
+    because config paths are often joined into '...15_ML//x'.
+    """
+    import re
+    path, prefix = re.sub('/+', '/', str(path)), prefix and re.sub('/+', '/', str(prefix))
+    return remote + path[len(prefix):].lstrip('/') if prefix and path.startswith(prefix) else None
+
+
+def _rclone(*args, data=None):
+    """Run `rclone <args>` with `data` on stdin and return its stdout (bytes); raise OSError with rclone's message."""
+    import subprocess
+    out = subprocess.run(['rclone', *args], input=data, capture_output=True)
+    if out.returncode:
+        raise OSError(f"rclone {' '.join(args)} failed: {out.stderr.decode(errors='replace').strip()}")
+    return out.stdout
+
+
+def dbx_open(path, remote='dropbox:', prefix=None):
+    """
+    Open a config path for reading. A Dropbox path (see dbx_target) streams with `rclone cat` into an
+    io.BytesIO, so nothing goes to the local disk; a local path is returned as it is. Both go straight
+    to pd.read_csv / pd.read_parquet. Read the BytesIO one time only: a second read starts at its end.
+    """
+    import io
+    target = dbx_target(path, remote, prefix)
+    return io.BytesIO(_rclone('cat', target)) if target else path
+
+
+def dbx_glob(directory, pattern='*', remote='dropbox:', prefix=None):
+    """
+    Sorted paths of the items in `directory` whose names match the glob `pattern`. A pattern that ends
+    in '/' matches folders only, e.g. '[0-9]*/' -> the date-named tranche folders. A Dropbox folder is
+    listed with one `rclone lsf` (~1 s); the paths keep the config form, so dbx_open reads them.
+    A missing folder raises an error (rclone: OSError, local: FileNotFoundError).
+    """
+    import fnmatch
+    target = dbx_target(directory, remote, prefix)
+    names = (_rclone('lsf', target).decode().splitlines() if target   # rclone ends a folder name with '/'
+             else [n + ('/' if os.path.isdir(os.path.join(directory, n)) else '') for n in os.listdir(directory)])
+    return sorted(f"{str(directory).rstrip('/')}/{n.rstrip('/')}" for n in names if fnmatch.fnmatch(n, pattern))
+
+
+def dbx_push(src, path, remote='dropbox:', prefix=None):
+    """
+    Write a DataFrame (as the extension of `path` tells: .csv or .parquet, no index) or bytes to a config
+    path. A Dropbox path uploads with `rclone rcat` (rclone makes the parent folders); a local path is
+    written to the disk (parent folders made). CAUTION: a Dropbox path writes into the company Dropbox.
+    """
+    import io
+    if isinstance(src, pd.DataFrame):
+        buf = io.BytesIO()
+        {'.csv': src.to_csv, '.parquet': src.to_parquet}[os.path.splitext(str(path))[1].lower()](buf, index=False)
+        src = buf.getvalue()
+    target = dbx_target(path, remote, prefix)
+    if target:
+        _rclone('rcat', target, data=src)
+    else:
+        os.makedirs(os.path.dirname(str(path)) or '.', exist_ok=True)
+        with open(path, 'wb') as fh:
+            fh.write(src)
+
+
+# ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+# RDS access — the Px tables in PostgreSQL (px-seracbio-prod)
+# ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+def rds_query(query, host, database='postgres', cred_file='~/.px_db_password', ca_bundle='global-bundle.pem'):
+    """
+    Read the result of one SQL query on the Px database into a DataFrame, in a read-only session with a
+    verified TLS certificate (the session cannot write). COPY streams the result as CSV, and pandas parses
+    it as it parses the Dropbox exports. The p-values are plain decimals (no exponent), so the parse is
+    'round_trip': the default parser cuts a decimal after ~17 digits and reads every p < ~1e-17 as 0.
+    `query` is SQL text (a trailing ';' is dropped) or a psycopg2.sql.Composable.
+    `cred_file` holds one line user:password.
+    """
+    import io, psycopg2
+    from psycopg2 import sql
+    if not isinstance(query, sql.Composable):
+        query = sql.SQL(query.strip().rstrip(';'))
+    with open(os.path.expanduser(cred_file)) as fh:
+        user, password = fh.read().strip().split(':', 1)
+    conn = psycopg2.connect(host=host, port=5432, dbname=database, user=user, password=password,
+                            sslmode='verify-full', sslrootcert=os.path.expanduser(ca_bundle), connect_timeout=10)
+    try:
+        conn.set_session(readonly=True)
+        buf = io.BytesIO()
+        with conn.cursor() as cur:
+            cur.copy_expert(sql.SQL('COPY ({}) TO STDOUT WITH CSV HEADER').format(query), buf)
+    finally:
+        conn.close()
+    buf.seek(0)
+    return pd.read_csv(buf, float_precision='round_trip')
+
+
+def rds_table(table, host, database='postgres', cred_file='~/.px_db_password', ca_bundle='global-bundle.pem'):
+    """
+    Read one table of the Px database into a DataFrame: rds_query of SELECT * on the quoted table name.
+    COPY streams the table at ~34 MB/s over the VPN (~3.4 min for px_fbx_measure). The tables keep the
+    export columns, with the numbers stored as text.
+    """
+    from psycopg2 import sql
+    return rds_query(sql.SQL('SELECT * FROM public.{}').format(sql.Identifier(table)), host, database, cred_file, ca_bundle)
+
+
+def ms_score_rows(measure):
+    """
+    The MSSCORE rows of an FBX measure table: the significant, down-regulated rows, with
+    ms_score = -log10(pvalue) * -logfc (not clipped). This is the formula of the platform's MSSCORE
+    exports: it gives their rows and values (to ~1e-13) where the measure and the export share an analysis.
+    """
+    ms = measure.loc[(measure['significant'] == 1) & (measure['logfc'] < 0),
+                     ['uniquecontrast', 'plate', 'genes', 'pg', 'logfc', 'pvalue']]
+    return (ms.assign(ms_score=-np.log10(ms['pvalue']) * -ms['logfc'])
+              .drop(columns=['logfc', 'pvalue']).reset_index(drop=True))

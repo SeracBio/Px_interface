@@ -52,7 +52,8 @@ Everything downstream (the 3D interface, the reconcile notebook) consumes `measu
 | `CHEMLIB_PATH` (or CDD Vault if `CHEMLIB_OVERWRITE`) | SERAC compound library (collections AK/AJ) | `serac_df` |
 | `CONTAMINANTS` | contaminant `Molecule Name` list | `contaminants` |
 | `CONTROLS` | control-compound list (currently empty) | `control_compounds` |
-| `OT_CACHE` | OpenTargets target–disease parquet | `assoc` (OT `overall_score` max per gene) |
+| `OT_CACHE` | OpenTargets target–disease parquet | the disease areas; `assoc` only with `ASSOC_SOURCE: ot_cache` |
+| `ASSOC_SOURCE` | `opentarget` (RDS table + `px_ms_score_glues`) or `ot_cache` | `assoc` (the y-axis) |
 | `GENE_RESEARCH` | per-gene degradation-research JSON | `gene_research` |
 
 ---
@@ -64,8 +65,10 @@ Everything downstream (the 3D interface, the reconcile notebook) consumes `measu
 
 1. `read_parquet(DFRAW_PATH)` then `dropna()`.
 2. `-log10(p-value)` column = `-np.log10(pvalue)`.
-3. **`ms_score`** = `clip(-(-log10(p)) · logfc, 0, 100)` — the MS-score formula. For a **down** hit
-   (`logfc < 0`) this is positive; **up** hits clip to 0. Capped at 100.
+3. **`ms_score`** = `-log10(p) · -logfc` — the MS-score formula, not clipped (2026-10-26; before, it was
+   clipped to [0, 100]). For a **down** hit (`logfc < 0`) it is positive; an **up** hit gives a negative value.
+   The load stops if a significant-down row has p = 0 (a file written before the exact parse): rebuild with
+   `DFRAW_OVERWRITE: true`.
 4. sort by `ms_score` desc.
 
 **`df_ms`** — `df_raw[significant == 1]` collapsed with `groupby(['genes','MSPlate']).first()` → the legacy
@@ -80,7 +83,11 @@ an **activity fallback** when building `report`.
 ## 3. New FBX side — `FBX_MEASURE/MSSCORE/REPORT`, `uc2compound` (`load_new_df`)
 
 1. **Auto-discover tranches:** every date-named (`YYYYMMDD…`) subdir of `FBX_DIR` that holds an
-   `*FBX_REPORT*.csv` (`_fbx_csv` tolerates a `_02` re-export suffix).
+   `*FBX_REPORT*.csv` (`_fbx_csv` tolerates a `_02` re-export suffix). `params.dbx_glob` lists each folder
+   one time into `TRANCHE_CSVS` (rclone on the cluster), and `params.dbx` reads the files (README "Dropbox access").
+   With `PX_SOURCE: rds`, `load_rds_fbx` reads the same three tables from the Px database instead, plus
+   `PX_ARCHIVE_DIR` for the experiments the database lacks; the plate dates come from `PX_DATES` (README "Px data from RDS").
+   There, `FBX_MSSCORE` = `fn.ms_score_rows` on the main table + the archived export rows of the other experiments.
 2. **Concat** each kind across all tranches → `FBX_MEASURE`, `FBX_MSSCORE`, `FBX_REPORT`.
    - `FBX_MEASURE`: per (gene, experiment) `logfc`/`pvalue`/`significant`.
    - `FBX_MSSCORE`: per (gene, experiment) **delivered `ms_score`** (+ `activity`, `association_score`, …).
@@ -123,11 +130,15 @@ Columns include `genes`, `plate`, `uniquecontrast`, `compound`, `ms_score`, `act
 `logfc`, `pvalue`, `significant`, `source`.
 
 **How the interface uses it:**
-- **Dot position (z):** `mscore.groupby('genes')['ms_score'].max()` — the gene's single **highest** MS score.
-  Un-collapsing does not move dots (max-of-per-compound = max-of-best-per-plate).
-- **Per-compound MS score** for the slider / reconcile: each row's own `ms_score`. `compounds_df.ms_score`
-  (in `get_iface`) is sourced straight from `mscore`, so the slider filters on the same official number the
-  position is derived from.
+- **Dot position (z), `px.gene_ms_score` (user decision 2026-10-26, raw scale):** the validation score of a
+  validation target (`data.VAL_MSSCORE`: `px_ms_score_glues`, or the per-target MSSCORE of a validation
+  folder), else the highest FBX score, else the highest legacy (`df_raw`, April-May) score of a
+  significant-down row, else 0. An FBX score wins also where the legacy score is higher (e.g. BCL6).
+  `iface_df.ms_source` names the source (`validation` / `FBX` / `April-May` / empty), and the hover shows it.
+- **Per-compound MS score** for the MS slider / reconcile: each row's own `ms_score`. `compounds_df.ms_score`
+  (in `get_iface`) comes straight from `mscore` (`pl[8]`), except a validation target's hits and tested-target
+  rows on its own validation plates, which carry its validation score (`px.validation_experiment_scores`). The
+  slider filters each experiment; the dot positions do not move.
 
 *(The old collapse `sort_values('ms_score').groupby(['genes','plate']).first()` was removed — it discarded
 every runner-up compound, which broke per-compound filtering. See `docs/INTERFACE.md`.)*
@@ -169,7 +180,7 @@ A `date` column is then attached to `measure`, `mscore`, `report` via this map.
 | `serac_df` | CDD Vault collections **AK/AJ** (or cached `CHEMLIB_PATH`) | compound → smiles + Px annotations; `yes/no → 1/0/NaN`. The library-membership filter for the interface. |
 | `contaminants` | `CONTAMINANTS` CSV `Molecule Name` | contaminant compound ids; **hidden by default** in the interface. |
 | `control_compounds` | `CONTROLS` | currently empty. |
-| `assoc` | `OT_CACHE` | `overall_score.groupby('target_symbol').max()` — OpenTargets association per gene (the interface's Y axis / association filter). |
+| `assoc` | `px.gene_association` | the interface's Y axis / association filter. `ASSOC_SOURCE: opentarget` (2026-10-26): a validation target's `px_ms_score_glues.associationscore`, else the RDS `opentarget.associationscore` (the FBX MSSCORE exports hold the same values). `ot_cache`: `OT_CACHE` `overall_score.groupby('target_symbol').max()`. Missing -> 0. |
 | `gene_research` | `GENE_RESEARCH` JSON | per-gene degradation-research card. |
 
 ---
@@ -178,8 +189,8 @@ A `date` column is then attached to `measure`, `mscore`, `report` via this map.
 
 - **`uniquecontrast`** = one compound × plate experiment; the universal join key.
 - **FBX wins on shared `uniquecontrast`** in `measure`, `mscore`, `report`, and on shared plates in `plate2date`.
-- **`ms_score`** = `clip(-(-log10(pvalue)) · logfc, 0, 100)` (df_raw side); FBX side uses the delivered
-  `FBX_MSSCORE.ms_score` (may exceed 100). Both live on the same magnitude scale.
+- **`ms_score`** = `-log10(pvalue) · -logfc`, not clipped (df_raw side); the FBX side uses the delivered
+  `FBX_MSSCORE.ms_score` or the same formula (RDS). Both live on the same raw scale (0 to about 212 now).
 - **Noisy plates** `Plate12/15/23` are dropped from `mscore` (and from `meas` in `get_iface`).
 - **Regenerating the notebook checkpoints:** the reconcile notebook reads `Px_MEASURE/MSCORE/REPORT.parquet`
   written by the `output.*.to_parquet(...)` cell in `MS_Interface.ipynb`; re-run it after any change here so

@@ -128,6 +128,23 @@ Operational rules for the assistant in this project:
 - **Don't `Grep`** file *contents* for compound IDs (`SRB-XXXXXXX-NNN` format). Searching file names / paths is fine.
 - **Don't echo** notebook outputs that render structure thumbnails, top-K SMILES tables, or per-compound logfc.
 - **Don't `Read` Jupyter notebooks (or any file with saved/executed outputs) that may contain structures.** Opening a `.ipynb` returns its cell *outputs* — `df.head()` tables, structure thumbnails, top-K SMILES, per-compound values — which cross the wire even if you only wanted the code. To inspect or edit a notebook, extract **cell sources only** (strip `outputs`) with a small script, or edit by known cell-id; never read the whole notebook blind. Keep notebook outputs cleared before any tooling reads them.
+- **Never clear the outputs of the notebook the user works in.** Those outputs are the user's record
+  of the run, and they are not recoverable once gone. Use the scratch-copy workflow instead:
+  1. `python python/nb_edit.py checkout <nb>.ipynb` — copies to `<nb>.claude.ipynb`, clears the COPY only.
+  2. Read and edit cells in that copy, which carries no outputs and is safe to open.
+  3. `python python/nb_edit.py apply <nb>.ipynb --cell <id>` — writes back ONLY the cells you edited.
+  Name each id you touched. Do NOT use `--all`: it pushes every differing cell, so a cell the user
+  edited in the live notebook after step 1 would be overwritten with your stale copy of it.
+  Check out fresh right before editing, apply straight after, then delete the scratch copy.
+  `checkout` records each cell's source hash, and `apply` REFUSES to write a cell whose live source
+  changed since then — so the user can keep running cells and editing OTHER cells while you work.
+  On a refusal, re-checkout and redo the edit on their version. Never pass `--force` to get past it
+  without asking the user first.
+  Every cell you did not edit keeps its outputs. An edited cell loses only its own, which went stale
+  the moment the source changed. `nb_edit.py cells <nb>` lists ids without reading any output.
+  The helper lives in `ADME_ML/python/nb_edit.py`; copy it in if this repo does not have it yet.
+  CAUTION: `apply` rewrites the live notebook. Ask the user to close it in Jupyter first, or the
+  editor can save its in-memory copy over the change.
 - **Aggregate-only is fine**: gene names (HGNC is public), per-gene R² values, plate IDs, compound counts, model hyperparameters, code, configs.
 - **Public reference SMILES are fine** for unit tests: ethanol (`CCO`), benzene (`c1ccccc1`), aspirin, or anything from RDKit's example data.
 - **Schema-then-synthesize for testing**: to test code against a real file's *shape*, read only its schema — column names and dtypes (`pd.read_csv(path, nrows=0).columns`, `df.dtypes`) — never the values, then **generate synthetic data matching that schema** (random floats, fake `C_001`/`G_001` IDs, public SMILES like `CCO`) and run the test on the synthetic frame. This keeps real values off the wire while still exercising the code. Prefer this over reading rows.
@@ -150,10 +167,25 @@ If a tool would meaningfully accelerate the work but only runs as a hosted API, 
 
 ## Coding Conventions
 
+### Write code the way I write it — read `/home/gtamo/Simplify/rules.md` first
+
+**Before you write any code, read `/home/gtamo/Simplify/rules.md`.** It holds the house style,
+taken from the pairs in `/home/gtamo/Simplify/examples.md`, which also holds a CONFIRMED four-cell
+sequence that is the target shape. In short: one `##` title per cell, a constants block under it, a
+short `#` label above each block, no rationale in comments, no `def` and no `_` names in a cell, at
+most one `print(df.shape)`, a `.head(3)` as the last line, and every cell must re-run safely. Put a
+`#_> type=sample` tag at the end of a line when the line does not show the type of a name. The
+sample holds names and settings only, never a smiles, a compound id, a label or a prediction. The
+explanation is not lost — it moves to the chat reply and to `wiki/wiki.md`.
+
+When I show you a new before/after pair, add it to `examples.md`, write the notes under
+`Xx Notes xX`, and correct `rules.md`. The example always wins over the rule.
+
 ### Do
 
 - **Read before writing** — always read a file before editing it
 - **Check for existing patterns** — match the style already in the codebase
+- **Never re-import** — before adding an import in a notebook cell or script, check the imports already available above (the notebook's import cell / module header); never duplicate one that is already in scope
 - **Write simplified code** — the fewest clear statements: inline single-use intermediates, derive lists directly, collapse verbose literals; no redundant variables or steps. Prefer a vectorized/built-in expression over a hand-rolled helper function when equally clear (e.g. `.str.extract(...).astype(float)` over a custom `apply` function). Simplify before reporting done — readability first (simple ≠ cryptic one-liner).
 - **Keep comments to 1 line** — 2 lines max, and only if really necessary. Applies to inline/block comments (incl. notebook cell-top `##` comments); docstrings are exempt.
 - **Encapsulate state properly** — use classes or function parameters instead of global variables
@@ -174,6 +206,11 @@ If a tool would meaningfully accelerate the work but only runs as a hosted API, 
 - Don't write documentation files unless explicitly requested
 - Don't add error handling, fallbacks, or abstractions for hypothetical future requirements
 - **Don't delete any files or directories without explicit permission** — even if they seem unused or large (like virtualenvs, cache directories, or data files), always ask first before removing them
+- **Don't change or remove anything outside this repository without explicit permission** — this
+  covers system paths (`/etc`, `/usr`, `/opt`, `/lib`), system configuration, shared volumes, and
+  other users' files. Investigate freely, but do not write. Propose the exact command and let the
+  user run it. On a shared machine, assume another person or program depends on any file you did
+  not create.
 
 ---
 

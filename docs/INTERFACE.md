@@ -32,9 +32,14 @@ flowchart TD
 ```
 
 **One dot per gene**, positioned by three axes: **x = SAR predictability (R²)**, **y = OpenTargets
-association**, **z = MS score**. Hovering a dot opens the compound panel (structures only). **Clicking**
+association** (`px.gene_association`: with config `ASSOC_SOURCE: opentarget`, the `px_ms_score_glues` value of a
+validation target, else the RDS `opentarget` table; with `ot_cache`, the max `OT_CACHE` overall_score),
+**z = MS score**. Hovering a dot opens the compound panel (structures only). **Clicking**
 a dot pins the panel and marks the gene with a **green ring**; volcanoes then appear on hovering a
 compound row (WT/MLN/KO stems are linked by a cross-plate hover trace). Esc/✕ unpins and reverts the ring.
+The peek closes only when the pointer leaves the whole panel, and the row of compound cells keeps its width
+at the right edge: the panel is fixed to the right and grows to the left, so the cells stay under the
+pointer (2026-10-23; before, they moved and the peek closed on the way to the next compound).
 
 The whole thing is **static + offline**: one HTML, a deferred `_data.js` sidecar, a folder of SVG
 volcanoes, and thumbnails. No server; it runs from a `file://` double-click.
@@ -48,7 +53,7 @@ Three classes: **`PARAMS`** (reads `config.yaml`), **`DATA`** (loads raw inputs)
 
 | Step | Method | What it produces |
 |---|---|---|
-| Load | `DATA.load_new_df` / `load_old_df` / `load_chemical_lib_df` | `df_raw`, `MS`, `FBX_MEASURE/MSSCORE/REPORT`, `serac_df`, `target2R2_df`, `uc2compound`. Tranches are auto-discovered by their FBX_REPORT; a tranche may **omit a kind** (validation-only: MEASURE+REPORT, no MSSCORE) — `_fbx_csv` returns `None` and `_load_fbx` skips it (with a `> note:` line). A tranche may also **omit the `plate` column** — `_ensure_plate` reconstructs it from the uniquecontrast (`…_complement_Pw144VM_BIND` → `Pw144VMBIND`) |
+| Load | `DATA.load_new_df` / `load_old_df` / `load_chemical_lib_df` | `df_raw`, `MS`, `FBX_MEASURE/MSSCORE/REPORT`, `serac_df`, `target2R2_df`, `uc2compound`. Tranches are auto-discovered by their FBX_REPORT, with one listing per folder (`TRANCHE_CSVS`; `params.dbx_glob` / `params.dbx` stream from Dropbox with rclone on the cluster). With `PX_SOURCE: rds`, `load_rds_fbx` reads the Px database + `PX_ARCHIVE_DIR` instead, and `combine_datasets` takes the plate dates from `PX_DATES`; a tranche may **omit a kind** (validation-only: MEASURE+REPORT, no MSSCORE) — `_fbx_csv` returns `None` and `_load_fbx` skips it (with a `> note:` line). A tranche may also **omit the `plate` column** — `_ensure_plate` reconstructs it from the uniquecontrast (`…_complement_Pw144VM_BIND` → `Pw144VMBIND`) |
 | PNGs (opt-in) | `DATA.download_cdd_pngs` | refreshes `SRB_PNG_DIR` from CDD Vault when `UPDATE_PNGS` is true (resume-safe; no-op otherwise) |
 | Combine | `OUTPUT.combine_datasets` | `measure`, `mscore` (both per-compound, one row per (gene,uniquecontrast)), `report`, `plate2date` — FBX wins on shared uniquecontrasts |
 | Validation lists | `OUTPUT.get_de_validated` | `validated_targets`/`devalidated_targets`, `validated_compounds`/`devalidated_compounds` (FBXO31 ligase-dependent vs not) |
@@ -57,8 +62,10 @@ Three classes: **`PARAMS`** (reads `config.yaml`), **`DATA`** (loads raw inputs)
 
 ### The four render inputs (`get_iface`)
 
-- **`iface_df`** — one row per gene: `R2` (SAR), `association_score` + top `disease_area`
-  (OpenTargets, ranked by `PRIORITY_DISEASE_AREAS`), `ms_score`. Genes with `R2 > PHARMA_R2_CUTOFF`
+- **`iface_df`** — one row per gene: `R2` (SAR), `association_score` (`px.gene_association`) + top
+  `disease_area` (`OT_CACHE` therapeutic areas, ranked by `PRIORITY_DISEASE_AREAS`), `ms_score` + `ms_source` (`px.gene_ms_score`: the
+  validation score of a validation target, else the highest FBX score, else the April-May score; see
+  `docs/data_transform.md`). Genes with `R2 > PHARMA_R2_CUTOFF`
   that are in the pharma/BMS lists get `disease_area = 'pharma'`/`'BMS'`.
 - **`compounds_df`** — one row per (gene, compound, plate) significant-**down** hit, plus report
   metadata, SMILES, `molecule_batch_id`, **validation-stem completion rows** (`is_completion=True`):
@@ -108,7 +115,7 @@ Keyword-only render function (~60 kwargs). Pipeline inside:
 
 | Index | Trace | Notes |
 |---|---|---|
-| `0` | grey backdrop (all genes) | `opacity=0`, `visible=True` — anchors the scene autorange. **Never** in `areaTraces`. |
+| `0` | grey backdrop (all genes) | `opacity=0`, `visible=True` — anchors the scene autorange (x and y always; z only when the z fit is off or no dot shows). **Never** in `areaTraces`. |
 | `1` | area **ring underlay** | larger dot per visible gene in the ring colour, drawn before the fills so the rim = the ring (gl3d caps `marker.line.width`). Repainted by `applyRanges` from the masks. `→ __AREA_RING_TRACE__`. |
 | `2..N+1` | one per `disease_area` + a `control` trace | recorded in `area_trace_indices`; **only these are re-sliced by the sliders**. `showlegend` only in D mode. Fills have `marker.line.width=0` (ring comes from the underlay). |
 | `N+2` | pin **ring underlay** | pin-overlay rings; repainted by `buildPinTrace`. `→ __PIN_RING_TRACE__`. |
@@ -150,12 +157,23 @@ and overlay the ring in the browser:
 Result on real data: 75,780 files / 6.5 GB → **~4,056 files / ~350 MB** (~19× fewer). Synthetic
 fixture: 2,338 cells → **320 base files**.
 
-### ⚠️ The cache is identity-keyed, NOT data-keyed
+### Point colour: `meas.volcano_sig` (since 2026-10-23)
 
-`_volcano_base_cache_fname` hashes `'{version}|{vk}|{xlim0}|{xlim1}|{size_px}|{ext}'` — **not** the
-underlying p-values/logfc. So **changing the data does not invalidate cached bases.** After a data
-change, delete `volcanoes_px/` (bases + `positions.json`) to force a rebuild, or the interface serves
-stale images. `xlim`/`size_px` must match across runs or filenames won't align.
+`build_interface` passes `volcano_sig_col='volcano_sig'`. `px.volcano_colour` sets it in `get_iface`: on an
+experiment whose REPORT names targets (`target`, the validation exports), only a target with
+`adjpval < VOLCANO_TARGET_ADJP` (0.05) colours, at any logfc; every other experiment keeps `significant`
+(adjpval < 0.05 and |logfc| >= 1). This is the rule of the reference validation volcano (user decision). The
+panel hits still use `significant`, so an off-target hit can show as a grey point in a validation volcano.
+
+### The cache is data-keyed (since 2026-10-23)
+
+`_volcano_base_cache_fname` hashes `'{version}|{vk}|{xlim0}|{xlim1}|{size_px}[|y{ymax}][|d{data}]|{ext}'`.
+`data` is `_volcano_data_hash` of the experiment's rows (`genes`, `logfc`, `pvalue`, `significant`; a sum of
+row hashes, so the row order does not change it). A data change thus gives a new filename and a new render;
+the same data stays a cache hit. Before 2026-10-23 the key had no data, and a rebuild kept old images: the
+DG25VDA01WT volcano still showed the p = 0 floor of the old parse after the exact-parse fix. The old files
+stay in `volcanoes_px/` (nothing references them). `xlim`/`size_px` must match across runs or filenames
+won't align.
 
 ### `positions.json` and the base salt `b1`
 
@@ -221,18 +239,27 @@ mask(gene) = soloPins ? isPinned(gene)
              AND (COLOR_MODE≠'V' OR valCatShown[category])   AND not hidden
 ```
 
-**MS (z) slider filters per compound experiment, not the gene max.** The dot's z stays at the gene's
-max MS so genes keep their position under any filter. The z-slider window (`msLo/msHi`, set in
-`applyRanges`) instead filters each compound experiment by its OWN per-(gene,compound,plate) MS score,
-carried in each panel plate-row at **index 8** (`pl[8]`; `null` on completion rows, which bypass it).
-`msOk(pl)` gates every real plate-row inside `visPlates` + `geneHasVisibleCompound` (a hit with **no**
-score — one absent from the `mscore` table — passes ONLY when the MS filter is fully open, so it never
-leaks past a real cutoff and the count reconciles with an `mscore`-based reconcile), so out-of-range
-experiments prune from the compound panel / hover / export like the Plate/Activity ticks, and a gene's
-dot drops when no in-range experiment remains — while its plotted position never moves. The per-entry
-score comes from the **per-compound `mscore` table** (one row per `(genes, uniquecontrast)`, sourced in
-`combine_datasets`); `compounds_df.ms_score` is taken straight from it, and the dot's z is that same
-table's per-gene max — so a gene's largest per-entry MS is *exactly* its plotted z (fully consistent).
+**MS (z) slider filters per compound experiment; the dot positions are fixed.** The dot's z is the gene's
+score from `px.gene_ms_score` (2026-10-26) and never moves. The z-slider window (`msLo/msHi`, set in
+`applyRanges`) filters each compound experiment by its OWN MS score, carried in each panel plate-row at
+**index 8** (`pl[8]`). `msOk(pl)` gates every real plate-row inside `visPlates` + `geneHasVisibleCompound`,
+and a tested-target row (`pl[11]`) opens its stem only when it passes `msOk`. A row with **no** score passes
+ONLY when the MS filter is fully open. Out-of-range experiments prune from the compound panel / hover /
+export like the Plate/Activity ticks, and a gene's dot drops when no in-range experiment remains.
+**The per-experiment score (2026-10-26):** a primary or April-May experiment keeps its own `mscore` value
+(FBX wins on a shared contrast); a validation target's hits and tested-target rows on its own validation
+plates carry its validation score (`px.validation_experiment_scores`); stem completions have none. Because the
+z rule differs from the max of the experiments (an FBX score wins over a higher April-May score; a target sits
+at its validation score), a dot can show while its z is outside the window. *(A gene-only test of z was
+in the code for a few hours on 2026-10-26; the user asked for the per-experiment filter back.)*
+
+**The z axis fits the genes that show (user request 2026-10-26).** `fitZ()` sets `scene.zaxis.range` to
+`[R.z.min − pad·span, top + pad·span]`: `top` is the highest dot that shows (area traces that are not
+`legendonly`, plus the shown pins), `span = top − R.z.min`, and `pad = R.zFitPad` (config `Z_FIT_PAD`). It
+changes `gd.layout` only. `applyRanges` calls it before its `Plotly.redraw`, `redrawPins` calls it through
+`fitZHook`, and the `plotly_restyle` handler (a D-mode legend toggle) redraws only when the range changed.
+When no dot shows, or `zFitPad` is null (also for a log z axis), the axis uses `autorange` over the
+backdrop (all genes). The z values do not change, but the plot stretches when the top changes.
 
 Range sliders snap to a **"nice" step** (`_nice_step`: 1/2/5·10ⁿ, ~100–250 divisions) with the grid ends
 rounded to step multiples, so round handle values land **exactly** — MS step = 1 (so "10" filters at
@@ -276,7 +303,7 @@ rounded to step multiples, so round handle values land **exactly** — MS step =
 
 The template is split across many IIFEs. They communicate through no-op function vars declared
 up-front (`recolor3d`, `setColorModeHook`, `setMode2DHook`, `buildPinTraceHook`,
-`applySessionHook`, `syncPlateUIHook`, …) that each IIFE assigns later. **IIFE order is
+`applySessionHook`, `syncPlateUIHook`, `fitZHook`, …) that each IIFE assigns later. **IIFE order is
 load-bearing** — e.g. the colour block calls `recolor3d`, which the range block assigns.
 
 ---
@@ -305,7 +332,7 @@ reads them. Every active global is both set and read (no orphans). Heavy per-gen
   | 5 | molecule_batch_id | export / volcano-label id |
   | **6** | **is_completion** 0/1 | ride-along non-significant validation-stem row; bypasses the activity filter; **excluded** from counts/export/gene-active test |
   | **7** | **vk** (contrast id) | set **only** on validation-suffix plates; used as `.vcell data-vk` and the `__STEM_TRACE__` key |
-  | 8 | ms_score | per-compound MS score; `null` on completion rows |
+  | 8 | ms_score | per-compound MS score for the MS slider; a validation target's own validation rows carry its validation score; `null` on completion rows |
   | 9 | [fx, fy] | focal-gene ring position on the shared base volcano |
   | 10 | is_primary 0/1 | primary-screen row: the leading cell of its stem |
   | **11** | **is_target** 0/1 | validation-target row: on a ticked plate it opens its stem like a hit (so a negative result shows), and it keeps its gene in the 3D view; still shown as "not significant" |
@@ -356,8 +383,8 @@ tab; the Link button writes the hash with `history.replaceState`, so it does not
 
 ## 7. Invariants & gotchas (read before editing)
 
-- **Volcano cache is identity-keyed, not data-keyed** — data changes need an explicit re-render
-  (§4). `xlim`/`size_px` must match everywhere.
+- **The base-volcano cache is data-keyed** (`_volcano_data_hash` in the filename, 2026-10-23): a data
+  change renders again by itself (§4). `xlim`/`size_px` must match everywhere.
 - **`'v2'` salt** couples the render pass and the `stem_trace` lookup — bump both or neither.
 - **Trace order** (backdrop → colour/control → pin → 3 val-legend) must not change; the JS uses
   fixed indices (`__PIN_TRACE__`, `__VAL_LEGEND_TRACES__`, `areaTraces`).
@@ -413,6 +440,14 @@ tab; the Link button writes the hash with `history.replaceState`, so it does not
   `false` shows only the labels of FBXO31-dependent and pinned genes. The toggle still works in the page.
   `build_interface` passes it as `plot_3d_interface(labels_default_on=)`, which injects `__LABELS_DEFAULT_ON__`.
   The JS starts `hideOtherLabels` and the eye icon from it.
+- **`Z_FIT_PAD`** — the margin above the highest gene that shows, as a part of the z span (default `0.05`).
+  The page sets the z axis top again at each filter change (see `fitZ` in section 5). `null` fits all genes
+  (the backdrop autorange, as before 2026-10-26). `build_interface` passes it as
+  `plot_3d_interface(z_fit_pad=)`, which puts it in `__RANGES__.zFitPad`.
+- **`CONTROLS_ON`** — the state of the "control" compound tickbox (Activity panel) when the page opens.
+  `true`/absent shows the `CONTROLS` compounds (since 2026-10-26; before, the build hid them). `false` hides
+  them until the box is ticked. `build_interface` passes it as `plot_3d_interface(control_default_on=)`, which
+  injects `__CONTROL_DEFAULT_ON__`. A saved session still restores its own state.
 - **`NJOBS`** — parallel workers for the volcano render (the only multiprocessing in the build:
   joblib base render + threaded SVG writes). `0`/blank/`<0` → auto `max(1, CPU-2)`; a positive int →
   exactly that many. `build_interface` passes `resolve_n_jobs(params.NJOBS)` to

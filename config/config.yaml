@@ -16,6 +16,23 @@ SERAC_C:                    # named palette: name -> hex (quote hex; '#' is a YA
   sky_blue: '#A6C8E4'
   paper: '#E3E0DA'
 
+# Dropbox: the DROPBOX_*, PX_2026*, FBX_DIR, VALIDATION_DIR and PX_PARQUET_DIR paths are the laptop's Dropbox paths.
+# The cluster has no Dropbox client: with 'rclone', a path under DROPBOX_LOCAL_ROOT streams from the remote (as MS_ML).
+DROPBOX_BACKEND: rclone            # 'rclone' (the cluster) | 'local' (read every path from the disk: laptop, test fixture)
+DROPBOX_REMOTE: 'dropbox:'         # rclone remote (rclone listremotes); it needs root_namespace = the team namespace
+DROPBOX_LOCAL_ROOT: /mnt/c/Users/gtamo/Serac Biosciences Dropbox/   # removed from a path to get its remote path
+
+## RDS
+# Px data source: 'rds' = the Px database + PX_ARCHIVE_DIR + PX_DATES (no Dropbox read); 'dropbox' = the
+# FBX_DIR / VALIDATION_DIR tranches. px.build_px_archive (one time) writes PX_DATES and the archive.
+PX_SOURCE: rds                 # 'rds' | 'dropbox'
+RDS_HOST: px-seracbio-prod.cfyi0icu0fkt.eu-north-1.rds.amazonaws.com
+RDS_DATABASE: postgres
+RDS_CRED_FILE: ~/.px_db_password   # one line user:password (1Password)
+RDS_CA_BUNDLE: global-bundle.pem   # Amazon RDS CA bundle (repo root)
+PX_DATES: data/PX_dates.csv        # experiment -> compound batch, plate, date (the dates of the last Dropbox build)
+PX_ARCHIVE_DIR: data/px_archive    # the Dropbox FBX rows of the experiments that the database lacks (+ the MS score of the glues-only ones)
+
 # Files
 PATENTS_RAW: /mnt/c/Users/gtamo/Serac Biosciences Dropbox/Serac_team/5_Literature and Patents/0_Companies/Pharma_SmallMolecule_Patents_MASTER.xlsx
 DROPBOX_PROT: /mnt/c/Users/gtamo/Serac Biosciences Dropbox/Serac_team/12_Proteomics/5_Inventory/CDDVault/Proteomics/GiorgioTamo/
@@ -34,9 +51,9 @@ CDD_TOKEN_FILE: ~/.cdd_token     # local file holding the CDD API token on one l
 RAW_PROTEOMICS_PATH: /home/gtamo/MS_ML/data/MS/20260424_Proteomics_Database_CSV_Export.csv
 CLEAN_PROTEOMICS_PATH: /home/gtamo/MS_ML/data/MS/20260429_CDD_MS_SilentActive.csv
 
-PX_20260520_CDDVAULT: /mnt/c/Users/gtamo/Serac Biosciences Dropbox/Serac_team/4_Data_Sciences/15_ML/Daniela/20260519_FBXOscreening/20260520_Proteomics_CDDVault_Export.csv
+PX_20260520_CDDVAULT: data/px_archive/20260520_Proteomics_CDDVault_Export.csv   # local copy of Daniela/20260519_FBXOscreening/ (Dropbox)
 PX_20260520_DB: /mnt/c/Users/gtamo/Serac Biosciences Dropbox/Serac_team/4_Data_Sciences/15_ML/Daniela/20260519_FBXOscreening/20260520_Proteomics_Database_CSV_Export.csv
-PX_20260529_CDDVAULT: /mnt/c/Users/gtamo/Serac Biosciences Dropbox/Serac_team/4_Data_Sciences/15_ML/Daniela/20260529_FBXOscreening/20260529_Proteomics_CDDVault_Export.csv
+PX_20260529_CDDVAULT: data/px_archive/20260529_Proteomics_CDDVault_Export.csv   # local copy of Daniela/20260529_FBXOscreening/ (Dropbox)
 PX_20260529_DB: /mnt/c/Users/gtamo/Serac Biosciences Dropbox/Serac_team/4_Data_Sciences/15_ML/Daniela/20260529_FBXOscreening/20260529_Proteomics_Database_CSV_Export.csv
 PX_SCREEN_LIB: data/MS/20260513_CDD_FBXO31_PxScreen_Source.csv
 
@@ -59,6 +76,7 @@ OT_ROOT: data/external/opentarget
 PHARMA_PATENT_CSV: /home/gtamo/MS_ML/data/patent/20260528_pharma_sm.csv
 BMS_GENES: /home/gtamo/MS_ML/data/patent/BMS_Pipeline_genes.csv
 OT_CACHE: /home/gtamo/MS_ML/output/MS/opentargets_target_disease.parquet
+ASSOC_SOURCE: opentarget            # y-axis association: 'opentarget' -> px_ms_score_glues for a validation target, else the RDS opentarget table (needs RDS_*); 'ot_cache' -> max OT_CACHE overall_score (before 2026-10-26). Disease-area colours: OT_CACHE
 GENE_SAR_OUT: /home/gtamo/Px_interface/output/MS/20260812_geneSAR_R2_full_genome.csv # /home/gtamo/MS_ML/output/MS/20260529_geneSAR_R2_full_genome.csv
 MCS_CSV: output/MS/20260505_target_final_mcs.csv
 ML_MODEL_OUTPUT: output/ML/trained_models/20260617_select_genes # date should match that of last MS tranche
@@ -75,6 +93,7 @@ VALIDATION_PLATE_SUFFIXES:         # plate-name suffixes forming a validation st
 - MLN
 - KO
 - BIND
+VOLCANO_TARGET_ADJP: 0.05          # validation volcano (report targets): a target colours if adjpval < this, any logfc; other genes grey
 FBXO31_INDEPENDENT_TICKED: false   # false -> the "FBXO31 independent" target box starts UNticked (those genes
                                    # hidden on load, still toggle-able); true -> both validation boxes ticked
 ACTIVITY_DEFAULTS: [Single, Low]   # Activity boxes (compound filters) ticked on load; empty -> all ticked
@@ -89,20 +108,21 @@ VALIDATED_TARGET_FILE: # /home/gtamo/Px_interface/data/validated.txt            
                                    # Empty -> keep the list derived from CDD as before.
 GENE_SIZE_BUCKETS: [6, 8, 10, 12, 15, 20]   # 3D dot px by #compounds the gene is significant in: 1,2,3,4,5,>5
 GENE_RING_PX: 2                              # thickness (px) of the dark ring around each gene dot (gl3d caps marker outlines, so the ring is drawn as a larger dot under the fill)
+Z_FIT_PAD: 0.05                              # MS (z) axis top = the highest gene that shows (pins too) + this part of the z span, set again at each filter change; null -> fit all genes
 
 CONTAMINANTS: /home/gtamo/MS_ML/data/MS/20260611_contaminants.csv
-CONTROLS: 
+CONTROLS:
 - SRB-0000692
 - SRB-0000615
+CONTROLS_ON: true                  # control-compound tickbox on load: true -> controls shown; false -> hidden (tick to show)
 
 # disease association research:
-GENE_RESEARCH: /mnt/c/Users/gtamo/Desktop/GT/SERAC/disease_association/20260623_10Kgenes_research.json
+GENE_RESEARCH: data/20260623_10Kgenes_research.json
 
 CHEMLIB_OVERWRITE: false         # true -> fetch newest data from CDD (compound structures)
 UPDATE_PNGS: false               # true -> fetch new/missing PNGs before building (resume-safe: skips existing)
 DFRAW_OVERWRITE: false           # true -> rebuild df_raw + MS from the 3 old proteomics exports, overwrite DFRAW_PATH + MS_PATH
-IFACE_OVERWRITE: false           # true -> rebuild + save the interface inputs; false -> load them from IFACE_DIR + free RAM
-
+IFACE_OVERWRITE: false           # true  -> rebuild + save the interface inputs; false -> load them from IFACE_DIR + free RAM
 
 # Parallelism: workers for the volcano render (joblib base render + threaded SVG writes).
 # 0 (or blank/<0) -> auto = max(1, CPU count - 2); a positive int -> exactly that many workers.
@@ -118,7 +138,7 @@ NJOBS: 16 # 0 -> auto
 FREE_UPSTREAM: true
 
 # Optionally export the combined tables to parquet before they are freed. When true, combine_datasets
-# writes Px_MEASURE/MSCORE/REPORT.parquet to PX_PARQUET_DIR (so you keep the export without holding the
+# writes Px_MEASURE/MSCORE/REPORT.parquet to PX_PARQUET_DIR (so you keep the export without holding the 
 # frames in RAM through the render). Default off — leave off unless you need the parquet dumps.
 EXPORT_COMBINED: false
 PX_PARQUET_DIR: /mnt/c/Users/gtamo/Serac Biosciences Dropbox/Serac_team/4_Data_Sciences/15_ML/Daniela/Px_parquet_from_GT
