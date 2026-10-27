@@ -416,6 +416,12 @@ Add `&Labels=false` to start with the Labels eye shut (only FBXO31-dependent and
 their labels), e.g. `…/Px_interface/#Plate=20261006&Labels=false`; `Labels=true` opens the eye. The
 link wins over the config default (`LABELS_ON`).
 
+Add `&Other=false` to hide the "other" genes, as a click on the "other" legend key does. The "FBXO31
+independent" box starts unticked (`FBXO31_INDEPENDENT_TICKED: false`), so only the FBXO31-dependent genes
+show, e.g. `…/Px_interface/#Plate=validation20261006&Other=false`. `Other=true` shows the "other" genes
+again. The key acts in the V colour mode (the default). The **Link** button writes `other=false` while
+the "other" genes are hidden.
+
 The browser does not send the part after `#` to the server, so the link needs no server change.
 It also works on the Dropbox copy (`Serac_Px_interface.html#Plate=…`). A changed link in an open tab
 applies at once. If no plate matches, the page keeps its default plates and the Session note tells

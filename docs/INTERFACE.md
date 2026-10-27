@@ -378,6 +378,10 @@ block (the stems whose earliest plate date it is); any other entry = a plate nam
 the default plates stay and `#sess-note` names the misses. A key that the hash does not name keeps its
 state (pins stay when only `Plate=` changes). A `hashchange` listener applies a new hash in an open
 tab; the Link button writes the hash with `history.replaceState`, so it does not re-apply.
+`other=false|true` (2026-10-27; `off`/`0`/`no` also hide) sets `valCatShown.rest` through `setOtherHook`
+(range block): the V-mode "other" genes hide or show, and the "other" legend key dims, as on a legend
+click. It acts in V mode only (the mask skips `valCatShown` in D). The Link button writes `other=false`
+while `valCatShown.rest` is false. The `.iface` session does not save `valCatShown`.
 
 ---
 

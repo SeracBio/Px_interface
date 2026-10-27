@@ -836,6 +836,23 @@ class TestRender(unittest.TestCase):
         # the Link button keeps a non-default eye state
         self.assertIn("parts.push('labels=' + !hideOtherLabels)", html)
 
+    def test_other_link_wired(self):
+        """A link #Other=false (also off / 0 / no) hides the V-mode "other" genes, as a click on the "other"
+        legend key does, so only the FBXO31 genes show; #Other=true shows them again (2026-10-27). The link
+        goes through the session apply(), and the Link button writes other=false while they are hidden."""
+        html = open(os.path.join(self.out_dir, 'interfaces', 'Serac_Px_interface.html')).read()
+        # the hash key and its false values
+        self.assertIn("if ('other' in q) sess.other = !/^(false|0|off|no)$/i.test(q.other);", html)
+        # a hash with only this key is a recognised link
+        self.assertIn("'cm', 'labels', 'other'].some(", html)
+        # the session apply sets the category through the hook, before it re-runs the mask
+        self.assertIn('if (typeof s.other === "boolean") setOtherHook(s.other);', html)
+        # the hook is declared before the range block assigns it (a later var would reset it)
+        self.assertLess(html.index('var setOtherHook = function() {};'),
+                        html.index('setOtherHook = function(on) { valCatShown.rest = on; _syncValLegendDim(); };'))
+        # the Link button keeps the hidden state
+        self.assertIn("if (valCatShown.rest === false) parts.push('other=false');", html)
+
     def test_volcanoes_written(self):
         """At least one volcano SVG is rendered into volcanoes_px/."""
         vdir = os.path.join(self.out_dir, 'interfaces', 'volcanoes_px')

@@ -3,8 +3,17 @@ _Durable, aggregate memory of this repo — read at session start. Aggregate onl
 
 ## Where we are now
 - **Focus:** building the per-gene 3D Px interface (`Serac_Px_interface.html`) via `fn.plot_3d_interface`.
-- **The z axis fits the genes that show (2026-10-26, STE): code done, 138 tests OK; needs a page build and a
-  publish.** User request: the top of the MS axis sits a little above the highest gene that shows. Before,
+- **Link key `#Other=false` (2026-10-27, STE): code done, 139 tests OK; needs a page build and a publish.**
+  User request: a link that shows only the FBXO31-dependent genes. `Other=false` (also off/0/no; any case)
+  hides the V-mode "other" genes as the "other" legend click does (`valCatShown.rest`, `setOtherHook` in the
+  range block, the session `apply()`); with `FBXO31_INDEPENDENT_TICKED: false` only the dependent genes stay.
+  `Other=true` shows them; the Link button writes `other=false` while hidden. V mode only (D ignores
+  `valCatShown`); the `.iface` session does not save it. Test `TestRender.test_other_link_wired`. Headless
+  Chrome, synthetic build: 0 "other" dots and the key dimmed with `#Other=false`, Link keeps it, `#Other=true`
+  restores 281 dots, no JS error. The page code changes only: build with `IFACE_OVERWRITE: false`, publish,
+  no prune.
+- **The z axis fits the genes that show (2026-10-26, STE): built and published; the user checked it
+  ("works fantastically well", 2026-10-27).** User request: the top of the MS axis sits a little above the highest gene that shows. Before,
   Plotly fit all 11,342 genes (top 218; EFNA1 211.7, NUDCD2 210.9, LOX 206.8), but the default view
   (validation 20261006) tops at about 93 (built page, scratchpad `page_zrange.py`, counts only). Code: JS
   `fitZ()` in the range block: range = `[R.z.min - pad*span, top + pad*span]`, top = the highest dot that shows
@@ -13,8 +22,7 @@ _Durable, aggregate memory of this repo — read at session start. Aggregate onl
   `Z_FIT_PAD: 0.05` (`null` = all genes, as before). Tests `TestRender.test_z_fit_pad`,
   `TestFilterDefaults.test_z_fit_off_from_config`. Headless Chrome, synthetic build: the range is correct
   after load, ticks, the x slider, a pin (link and search box), the pins toggle and a D-mode legend hide; no
-  JS error; no z value moves. **User step:** build with `IFACE_OVERWRITE: false`, then publish. The page code
-  changes only, so the volcano files stay the same and no prune is necessary.
+  JS error; no z value moves.
 - **New association (y) of a gene dot (2026-10-26, STE): built and published (page 16:22); the user checked
   the page.** User decision: `px_ms_score_glues.associationscore` for a validation target, else the
   RDS `opentarget.associationscore` (the FBX MSSCORE exports and `px_fbx_msscore` via its join hold the same

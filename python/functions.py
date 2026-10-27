@@ -1521,6 +1521,7 @@ _INTERFACE_INJECT = '''
     function valCatOf(g) { return validatedSet[g] ? "dependent" : (devalidatedSet[g] ? "independent" : "rest"); }
     var hideOtherLabels = (window.__LABELS_DEFAULT_ON__ === false);   // Labels eye toggle: true -> only FBXO31-dependent (+ pinned) genes keep labels
     var setLabelsHook = function() {};   // set in the Labels block; puts the eye on (true) / off (false) for a session or link
+    var setOtherHook = function() {};    // set in the range block; shows (true) / hides (false) the V-mode "other" genes for a link
     function valFillOf(g) { return (VCOL[valCatOf(g)] || {}).fill || "#cccccc"; }
     function valRingOf(g) { return (VCOL[valCatOf(g)] || {}).ring || "#333333"; }
     var VAL_CATS = ["dependent", "independent", "rest"];   // same order as VAL_LEGEND_TRACES
@@ -2905,6 +2906,7 @@ _INTERFACE_INJECT = '''
           if (gd.data[ti]) gd.data[ti].visible = (valCatShown[VAL_CATS[i]] === false) ? "legendonly" : true;
         });
       }
+      setOtherHook = function(on) { valCatShown.rest = on; _syncValLegendDim(); };   // the caller re-runs the mask
       if (gd.on) gd.on("plotly_legendclick", function(e) {
         var cat = _valCatOfCurve(e && e.curveNumber); if (!cat) return true;
         valCatShown[cat] = (valCatShown[cat] === false);   // toggle
@@ -3383,6 +3385,7 @@ _INTERFACE_INJECT = '''
         }
         if (s.colorMode === "V" || s.colorMode === "D") setColorModeHook(s.colorMode);
         if (typeof s.labels === "boolean") setLabelsHook(s.labels);
+        if (typeof s.other === "boolean") setOtherHook(s.other);
         syncValLegendFromTicks();                 // restored ticks -> matching V-mode legend keys
         recolor3d();                              // re-run the mask (filters+hidden+ranges) + labels + count
         if (typeof s.mode2d === "boolean") setMode2DHook(s.mode2d);
@@ -3442,6 +3445,7 @@ _INTERFACE_INJECT = '''
         if (soloPins)               parts.push('so=1');   // solo (only-pinned) view
         if (COLOR_MODE === 'D')     parts.push('cm=D');   // colour by disease area (default is V)
         if (hideOtherLabels !== (window.__LABELS_DEFAULT_ON__ === false)) parts.push('labels=' + !hideOtherLabels);   // eye differs from the config default
+        if (valCatShown.rest === false) parts.push('other=false');   // V-mode "other" genes hidden (default is shown)
         return parts.join('&');
       }
 
@@ -3468,7 +3472,7 @@ _INTERFACE_INJECT = '''
         h.split('&').forEach(function(kv) {   // keys ignore case; Plate= / Plates= = p=
           var i = kv.indexOf('='); if (i > 0) q[kv.slice(0, i).toLowerCase().replace(/^plates?$/, 'p')] = kv.slice(i + 1);
         });
-        if (!['p', 'pg', 'pc', 'hg', 'hc', 'sp', 'so', 'cm', 'labels'].some(function(k) { return k in q; })) return null;  // unrecognised -> keep default view
+        if (!['p', 'pg', 'pc', 'hg', 'hc', 'sp', 'so', 'cm', 'labels', 'other'].some(function(k) { return k in q; })) return null;  // unrecognised -> keep default view
         var keep = function(k, cur) { return k in q ? dec(q[k]) : cur.slice(); };   // a key the link omits keeps its state
         var sess = {pinnedGenes: keep('pg', pinnedGenes), pinnedCompounds: keep('pc', pinnedCompounds),
                     hiddenGenes: keep('hg', hiddenGenes), hiddenCompounds: keep('hc', hiddenCompounds)};
@@ -3476,6 +3480,7 @@ _INTERFACE_INJECT = '''
         if ('so' in q) sess.soloPins = q.so === '1';
         if ('cm' in q) sess.colorMode = (q.cm === 'D') ? 'D' : 'V';
         if ('labels' in q) sess.labels = !/^(false|0|off|no)$/i.test(q.labels);   // Labels=false -> eye shut
+        if ('other' in q) sess.other = !/^(false|0|off|no)$/i.test(q.other);      // Other=false -> V-mode "other" genes hidden
         if ('p' in q) {   // exact plate view: only the plates the entries name are ticked on
           var want = {}, miss = [];
           dec(q.p).forEach(function(e) {
