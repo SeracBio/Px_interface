@@ -3,8 +3,8 @@ _Durable, aggregate memory of this repo — read at session start. Aggregate onl
 
 ## Where we are now
 - **Focus:** building the per-gene 3D Px interface (`Serac_Px_interface.html`) via `fn.plot_3d_interface`.
-- **Volcano gene search + PNG download (2026-11-04, STE): code done, 145 tests OK; needs a build and a
-  publish.** User requests: (2) a gene search under a click-pinned ligand that shows any gene on its volcanoes
+- **Volcano gene search + PNG download (2026-11-04, STE): built and published from the notebook; the user
+  checked it ("worked beautifully").** User requests: (2) a gene search under a click-pinned ligand that shows any gene on its volcanoes
   as if significant; (3) a download icon at the top right of each volcano. User choices: the hit look (red
   logfc < 0 / blue > 0 + name; hover = approx. logfc and p; "not measured" note); the pins stay across ligands
   and genes; PNG as shown (title, ring, pins); the extra data is OK. Facts (real `meas.parquet`, counts only):
@@ -21,8 +21,17 @@ _Durable, aggregate memory of this repo — read at session start. Aggregate onl
   files written once), `TestRender.test_volcano_gene_search_files`, `TestPruneVolcanoes.test_prune_gene_search_files`.
   Headless Chrome, synthetic `tmp_vdir` build: the bar shows only after a ligand pin; the pinned focal gene's
   dot sits 0.51 px from its ring; pins stay on the next ligand; PNG 1080x1170 saved; no JS error.
-- **One "validation" dropdown in the Plates filter (2026-11-04, STE): code done, 140 tests OK; needs a page
-  build and a publish.** User request: no dates for validation plates. All stems (real build: 28 stems, 57
+- **Open: a redone experiment (analysis 2026-11-04, from the code of `load_rds_fbx`; no decision yet).** The
+  page changes only after a build with `IFACE_OVERWRITE: true` + publish. A redo under the SAME contrast: the
+  newest insert of each (contrast, gene, pg) row wins, so the volcano, hits, panel and report update; the
+  data-keyed volcano + gpos files render again; `px_ms_score_glues` follows the newest insert per target.
+  Limits: (1) a redo under a NEW contrast is skipped until `PX_DATES` dates it, and the old one stays; (2) a
+  redone glues (validation) experiment keeps the old FBX-export MS score of its hits (the formula runs on the
+  main table only); (3) the per-row rule keeps old rows whose (gene, pg) the new run lacks (did not occur in
+  the 336 past re-uploads: every row had its pair); (4) the plate date stays the `PX_DATES` date. Offered to
+  the user: fix (2) with the formula on the glues rows; fix (3) after a count-only check of how a redo arrives.
+- **One "validation" dropdown in the Plates filter (2026-11-04, STE): built and published; the user checked
+  it ("works").** User request: no dates for validation plates. All stems (real build: 28 stems, 57
   plates, before in 3 date blocks 2026-06-01 / 08-17 / 10-06) sit in one block, in plate-number order (user
   choice; `localeCompare` numeric). User choice: keep the date entries and add `validation` (no date) = all
   validation plates, in `SHOW_PLATE`/`--show_plate` (`resolve_plate_defaults`) and in `#Plate=` (`linkPlates`).
@@ -31,7 +40,7 @@ _Durable, aggregate memory of this repo — read at session start. Aggregate onl
   `TestResolvePlateDefaults.test_validation_ticks_all_validation_plates`, a line in `test_plate_link_wired`.
   Headless Chrome, synthetic `tmp_vdir` build: 1 block, 5 stems in order, `#Plate=validation` ticks all
   and no primary plate, no JS error. Page code + driver only: build with `IFACE_OVERWRITE: false`, publish.
-- **Link key `#Other=false` (2026-10-27, STE): code done, 139 tests OK; needs a page build and a publish.**
+- **Link key `#Other=false` (2026-10-27, STE): published with the later notebook builds (2026-11-03/04).**
   User request: a link that shows only the FBXO31-dependent genes. `Other=false` (also off/0/no; any case)
   hides the V-mode "other" genes as the "other" legend click does (`valCatShown.rest`, `setOtherHook` in the
   range block, the session `apply()`); with `FBXO31_INDEPENDENT_TICKED: false` only the dependent genes stay.
