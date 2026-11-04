@@ -720,6 +720,77 @@ class TestVolcanoDataHash(unittest.TestCase):
         self.assertEqual(name(h['uc1']), name(fn._volcano_data_hash(vsrc, ['uc1'])['uc1']))
 
 
+class TestVolcanoGeneSearch(unittest.TestCase):
+    """The volcano gene search (2026-11-04): the build writes the position of every measured gene in each
+    volcano image, so the page can draw a pinned gene like a hit. The positions must agree with the image."""
+
+    def setUp(self):
+        self.vsrc = pd.DataFrame({
+            'compound': ['A'] * 6 + ['B'] * 3,
+            'genes': ['G1', 'G1', 'G2', 'G3', 'G4', 'G5', 'G1', 'G2', 'G4'],
+            'logfc': [-2.0, -1.0, 0.5, 3.0, -0.2, 1.0, -1.5, 0.2, 2.5],
+            'pvalue': [1e-6, 1e-4, 0.3, 1e-9, 0.8, 0.05, 1e-3, 0.4, 1e-5],
+            'significant': [1, 1, 0, 1, 0, None, 1, 0, 1]})
+
+    def test_positions_match_the_image(self):
+        """Input: experiments A (G1 twice, G5 with no colour value) and B (no G3, G5; a stem y-max of 20).
+        Expected: each gene sits within one quantum of its ring position on the rendered image; G5 (its only
+        row dropped) is not in the index; B's missing genes are 255; the y-max is the image's. Rationale: the
+        dot must hit the grey point."""
+        from python import functions as fn
+        genes, images, ymax, q = fn._volcano_gene_positions(self.vsrc, {'a.svg': 'A', 'b.svg': 'B'},
+                                                            stem_ymax={'B': 20.0})
+        L, B, R, T = fn._VOLCANO_AXRECT
+        for j, (vk, ov) in enumerate([('A', None), ('B', 20.0)]):
+            _svg, geom = fn._volcano_base_svg(self.vsrc.dropna(), vk, key='compound', ymax_override=ov)
+            # the image's y-max
+            self.assertAlmostEqual(ymax[j], geom['ymax'])
+            for g in geom['xy']:
+                fx, fy = fn._ring_frac(geom, g)
+                ax, ay = q[j, genes.index(g)] / 254
+                # x and y agree with the ring position within one quantum
+                self.assertAlmostEqual(L + ax * (R - L), fx, delta=(R - L) / 254)
+                self.assertAlmostEqual(1 - (B + ay * (T - B)), fy, delta=(T - B) / 254)
+        # a row with no colour value is dropped, as in the image, so G5 (no other row) is not in the index
+        self.assertNotIn('G5', genes)
+        # a gene not in B is not measured there
+        self.assertEqual(q[1, genes.index('G3')].tolist(), [255, 255])
+
+    def test_gene_index_only_grows(self):
+        """Input: an index that already holds 'ZZZ'. Expected: the index keeps 'ZZZ' first and adds the new
+        genes sorted at its end. Rationale: a file written earlier must stay valid."""
+        from python import functions as fn
+        genes, *_ = fn._volcano_gene_positions(self.vsrc, {'a.svg': 'A'}, ['ZZZ'])
+        # the old index first, then the new genes sorted
+        self.assertEqual(genes, ['ZZZ', 'G1', 'G2', 'G3', 'G4'])
+
+    def test_files_written_once(self):
+        """Input: two images, then the same call again, then a third image. Expected: one file per image named
+        <hash>.<index id>.js that decodes to the positions; the second call writes nothing; the third writes
+        only the new image. Rationale: a build after a data change writes files for new images only."""
+        import base64, re, tempfile
+        from python import functions as fn
+        d = tempfile.mkdtemp()
+        vs = pd.concat([self.vsrc, self.vsrc.assign(compound='C')])
+        meta = fn._write_volcano_gene_files(d, vs, {'a1.svg': 'A', 'b2.svg': 'B'})
+        path = lambda f: os.path.join(d, 'gpos', f'{f}.{meta["id"]}.js')
+        txt = open(path('a1')).read()
+        row = base64.b64decode(re.search(r'"([A-Za-z0-9+/=]+)"\);', txt).group(1))
+        genes, _, _, q = fn._volcano_gene_positions(vs, {'a1.svg': 'A'}, meta['genes'])
+        # the file holds the image name and the positions of every gene of the index
+        self.assertTrue(txt.startswith('window.__vposAdd && __vposAdd("a1.svg", '))
+        self.assertEqual(row, q[0].tobytes())
+        # the page metadata
+        self.assertEqual(meta['genes'], genes)
+        self.assertEqual(meta['axrect'], list(fn._VOLCANO_AXRECT))
+        t0 = os.path.getmtime(path('a1'))
+        meta2 = fn._write_volcano_gene_files(d, vs, {'a1.svg': 'A', 'b2.svg': 'B', 'c3.svg': 'C'})
+        # the same index; the old file is not written again; the new image gets its file
+        self.assertEqual(meta2['id'], meta['id'])
+        self.assertEqual(os.path.getmtime(path('a1')), t0)
+        self.assertTrue(os.path.exists(path('c3')))
+
+
 class TestRender(unittest.TestCase):
     """End-to-end render: build_interface writes the HTML, data.js and volcano SVGs."""
 
@@ -799,13 +870,18 @@ class TestRender(unittest.TestCase):
         # the removal hook (window load + Plotly quiet) is emitted once
         self.assertEqual(html.count('gd.on("plotly_afterplot", wait)'), 1)
 
-    def test_validation_blocks_by_date_wired(self):
-        """The Plates filter builds one validation block per date (a stem under its earliest plate date)."""
+    def test_one_validation_block_wired(self):
+        """The Plates filter puts all validation stems in ONE block labelled 'validation', with no date
+        (user request 2026-11-04; before, one block per date), and orders the stems by plate number."""
         html = open(os.path.join(self.out_dir, 'interfaces', 'Serac_Px_interface.html')).read()
-        # the per-date grouping and its block builder are emitted
-        self.assertIn('validationBlock(d, valByDate[d])', html)
-        # the block label carries the date
-        self.assertIn('class="pf-date-all">validation \' + label', html)
+        # one block holds every validation stem
+        self.assertIn('var html = valGroups.length ? validationBlock(valGroups) : "";', html)
+        # the per-date grouping is gone
+        self.assertNotIn('valByDate', html)
+        # the block label carries no date
+        self.assertIn('class="pf-date-all">validation\'\n', html)
+        # stems sort by plate number (Pw10 before Pw107)
+        self.assertIn('a.localeCompare(b, undefined, {numeric: true})', html)
 
     def test_plate_link_wired(self):
         """A link #Plate=20261006 / #Plate=validation20261006 selects plates by the SHOW_PLATE rule
@@ -816,6 +892,8 @@ class TestRender(unittest.TestCase):
         self.assertIn(".toLowerCase().replace(/^plates?$/, 'p')", html)
         # the entry rule: an optional validation prefix + a YYYYMMDD or YYYY-MM-DD date (single backslashes in the page)
         self.assertIn(r"match(/^(validation[-_]?)?(\d{4})-?(\d{2})-?(\d{2})$/i)", html)
+        # 'validation' alone names all validation plates (2026-11-04)
+        self.assertIn(r"if (/^validation$/i.test(entry.replace(/[\s+]/g, ''))) return all.filter(isValidationPlate);", html)
         # a link pasted into an open tab applies
         self.assertIn('window.addEventListener("hashchange"', html)
         # the Link button writes the hash without firing hashchange
@@ -1082,6 +1160,31 @@ class TestRender(unittest.TestCase):
         # a legend toggle redraws only when the z range changed
         self.assertIn('if (fitZ()) Plotly.redraw(gd);', html)
 
+    def test_volcano_gene_search_files(self):
+        """The volcano gene search (2026-11-04): data.js carries __VPOS__ (index id, genes, axes rect, x range),
+        every volcano image of the panels has its position file gpos/<hash>.<id>.js, and the page carries the
+        search bar, the position loader and a download icon on each volcano."""
+        import re
+        out = os.path.join(self.out_dir, 'interfaces')
+        js = open(os.path.join(out, 'Serac_Px_interface_data.js')).read()
+        vpos = json.loads(json.loads('"' + re.search(r'window\.__VPOS__ = JSON\.parse\("(.*?)"\);', js, re.S).group(1) + '"'))
+        gc = json.loads(json.loads('"' + re.search(r'__GENE_COMPOUNDS__ = JSON\.parse\("(.*?)"\);', js, re.S).group(1) + '"'))
+        images = {r[2] for es in gc.values() for e in es if isinstance(e[3], list) for r in e[3] if r[2]}
+        # the page metadata: an index with genes, the image geometry
+        self.assertTrue(vpos['id'] and vpos['genes'])
+        self.assertEqual(vpos['xlim'], [-8.0, 8.0])
+        # one position file per volcano image of the panels
+        self.assertGreater(len(images), 0)
+        missing = [f for f in images if not os.path.exists(
+            os.path.join(out, 'volcanoes_px', 'gpos', f'{f[:-4]}.{vpos["id"]}.js'))]
+        self.assertEqual(missing, [])
+        html = open(os.path.join(out, 'Serac_Px_interface.html')).read()
+        # the search bar under the ligand row, and the loader of the position files
+        self.assertIn('id="ifx-vsearch"', html)
+        self.assertIn('window.__vposAdd = function(fn, ymax, b64)', html)
+        # the download icon on each volcano
+        self.assertIn('<span class="vdl" title="Save this volcano as PNG">', html)
+
 
     def test_ms_score_platerows(self):
         """The MS slider filters each compound experiment by its own MS score, and the dot's z stays fixed.
@@ -1320,6 +1423,22 @@ class TestResolvePlateDefaults(unittest.TestCase):
         plates, _ = px.resolve_plate_defaults(p2d, ['20260813'], ('WT', 'KO'))
         # the date block only
         self.assertEqual(plates, ['Pd'])
+
+    def test_validation_ticks_all_validation_plates(self):
+        """'validation' with no date (2026-11-04: the filter shows one validation block) -> every validation
+        plate of every stem and date, and no primary plate; with a date entry too, that date's plates join.
+        'validation20260812' (no space) is the same as 'validation 20260812'."""
+        p2d = {**self.p2d, 'PvWT': '2026-08-12', 'PvKO': '2026-08-13', 'PwWT': '2026-08-13'}
+        plates, blocks = px.resolve_plate_defaults(p2d, ['validation'], ('WT', 'KO'))
+        # all validation plates, nothing else
+        self.assertEqual(plates, ['PvKO', 'PvWT', 'PwWT'])
+        # the entry label
+        self.assertEqual(blocks, ['validation'])
+        # a date entry adds its primary plates
+        self.assertEqual(px.resolve_plate_defaults(p2d, ['Validation', 20260813], ('WT', 'KO'))[0],
+                         ['Pd', 'PvKO', 'PvWT', 'PwWT'])
+        # no space after 'validation' still names the dated stems
+        self.assertEqual(px.resolve_plate_defaults(p2d, ['validation20260812'], ('WT', 'KO'))[0], ['PvKO', 'PvWT'])
 
 
 class TestDownloadCddPngs(unittest.TestCase):
@@ -2203,21 +2322,43 @@ class TestPruneVolcanoes(unittest.TestCase):
     """python/prune_volcanoes.py (2026-10-23), local folder only: it deletes the volcano SVGs that the page does not
     use, and nothing in a dry run or when the page uses a missing file. (The --s3 part uses the publish targets.)"""
 
-    def _run(self, used, files, *flags):
+    def _run(self, used, files, *flags, gid=None, gfiles=()):
+        """Fake build folder; gid writes a __VPOS__ index id into data.js and gfiles go to volcanoes_px/gpos/.
+        Returns (result, volcanoes_px listing) and keeps the gpos listing in self.gleft."""
         import subprocess, tempfile
         tmp = tempfile.TemporaryDirectory()
         d = os.path.join(tmp.name, 'interfaces')
-        os.makedirs(os.path.join(d, 'volcanoes_px'))
+        os.makedirs(os.path.join(d, 'volcanoes_px', 'gpos'))
         with open(os.path.join(d, 'Serac_Px_interface.html'), 'w') as f:
             f.write(f'<html>{used[0]}</html>')
         with open(os.path.join(d, 'Serac_Px_interface_data.js'), 'w') as f:
-            f.write(json.dumps({'pl': used[1:]}))
+            f.write(json.dumps({'pl': used[1:]}) + '\n')
+            if gid:
+                f.write('window.__VPOS__ = JSON.parse(' + json.dumps(json.dumps({'id': gid})) + ');\n')
         for n in files:
             open(os.path.join(d, 'volcanoes_px', n), 'w').close()
+        for n in gfiles:
+            open(os.path.join(d, 'volcanoes_px', 'gpos', n), 'w').close()
         r = subprocess.run([sys.executable, 'python/prune_volcanoes.py', d, *flags], capture_output=True, text=True)
-        left = sorted(os.listdir(os.path.join(d, 'volcanoes_px')))
+        left = sorted(f for f in os.listdir(os.path.join(d, 'volcanoes_px')) if f != 'gpos')
+        self.gleft = sorted(os.listdir(os.path.join(d, 'volcanoes_px', 'gpos')))
         tmp.cleanup()
         return r, left
+
+    def test_prune_gene_search_files(self):
+        """Input: a page that uses a and b, with index id i1; gpos holds a and b with i1, c with i1 (an unused image),
+        a with the old id i0, and genes.json. Expected: --apply deletes the c and i0 files only; a missing i1 file
+        of a used image stops the script. Rationale: each data change leaves position files, as it leaves SVGs."""
+        a, b, c = 'a' * 16, 'b' * 16, 'c' * 16
+        gfiles = [f'{a}.i1.js', f'{b}.i1.js', f'{c}.i1.js', f'{a}.i0.js', 'genes.json']
+        r, _ = self._run([a + '.svg', b + '.svg'], [a + '.svg', b + '.svg'], '--apply', gid='i1', gfiles=gfiles)
+        # only the files of the used images with the page's index id stay (and the build-only index)
+        self.assertEqual(self.gleft, sorted([f'{a}.i1.js', f'{b}.i1.js', 'genes.json']))
+        self.assertIn('local gpos: page uses 2 | folder has 4 | used but missing 0 | not used 2 ', r.stdout)
+        r, _ = self._run([a + '.svg', b + '.svg'], [a + '.svg', b + '.svg'], '--apply', gid='i1', gfiles=gfiles[:1])
+        # a used image without its position file stops the script before any delete
+        self.assertNotEqual(r.returncode, 0)
+        self.assertEqual(self.gleft, [f'{a}.i1.js'])
 
     def test_prune_local(self):
         """Input: a page that uses a and b (one name in the HTML, one in data.js); the folder holds a, b, c and

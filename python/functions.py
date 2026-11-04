@@ -997,6 +997,33 @@ _INTERFACE_INJECT = '''
   #hover-img .volcano .vwrap { position: relative; display: inline-block; }
   #hover-img .volcano .vringsvg { position: absolute; left: 0; top: 0; pointer-events: none;
                                   overflow: visible; z-index: 3; }
+  #hover-img .volcano .vringsvg .vpin-hit { pointer-events: all; }   /* hover a pinned gene -> its values */
+  /* download icon at the top right of each volcano (saves a PNG as shown) */
+  #hover-img .volcano .vdl { position: absolute; top: 3px; right: 3px; z-index: 6; width: 18px; height: 18px;
+                             line-height: 16px; font-size: 12px; text-align: center; cursor: pointer; color: #1D3557;
+                             background: rgba(255,255,255,0.85); border: 1px solid #cdd6e0; border-radius: 3px; }
+  #hover-img .volcano .vdl:hover { background: #eef2f7; }
+  /* volcano gene search: shown while a ligand's volcanoes are click-pinned */
+  #hover-img .vsearch { display: none; align-items: center; gap: 6px; flex-wrap: wrap; margin-top: 6px; }
+  #hover-img .vsearch.on { display: flex; }
+  #hover-img .vs-wrap { position: relative; display: flex; gap: 5px; flex: 0 1 360px; }
+  #hover-img #ifx-vs-in { flex: 1 1 auto; min-width: 0; padding: 3px 6px; font: 12px sans-serif;
+                          border: 1px solid #bbb; border-radius: 4px; }
+  #hover-img .vs-btn { flex: 0 0 auto; padding: 3px 10px; font: 600 11px sans-serif; cursor: pointer; color: #fff;
+                       background: #1D3557; border: none; border-radius: 4px; }
+  #hover-img .vs-btn:hover { background: #16324f; }
+  #hover-img .vs-ac { position: absolute; top: 100%; left: 0; right: 0; z-index: 10001; display: none;
+                      background: #fff; border: 1px solid #bbb; border-top: none; border-radius: 0 0 4px 4px;
+                      max-height: 220px; overflow-y: auto; box-shadow: 0 3px 8px rgba(0,0,0,0.15); text-align: left; }
+  #hover-img .vs-ac .ac-item { padding: 3px 8px; font: 12px sans-serif; cursor: pointer; }
+  #hover-img .vs-ac .ac-item.active, #hover-img .vs-ac .ac-item:hover { background: #e8eef6; }
+  #hover-img .vs-ac .ac-empty { padding: 3px 8px; font: 12px sans-serif; color: #999; }
+  #hover-img .vs-chip { display: inline-flex; align-items: center; gap: 4px; margin: 0 3px 0 0;
+                        padding: 1px 4px 1px 7px; font: 11px sans-serif; background: #fff;
+                        border: 1px solid #1D3557; border-radius: 10px; }
+  #hover-img .vs-x { cursor: pointer; color: #888; font-weight: 700; padding: 0 2px; }
+  #hover-img .vs-x:hover, #hover-img .vs-clear:hover { color: #1D3557; }
+  #hover-img .vs-clear { cursor: pointer; color: #888; font-size: 10px; }
   /* Grouped validation volcanoes: one stem per row, its conditions (WT/MLN/KO) side by side. */
   #hover-img .volcano .vstem-lab { font-weight: 600; color: #1D3557; margin: 8px 0 2px;
                                    text-align: left; }
@@ -1340,6 +1367,14 @@ _INTERFACE_INJECT = '''
     <span class="pg-btn" id="ifx-next" title="next (→)">▶</span>
   </div>
   <div class="row" id="ifx-row"></div>
+  <div class="vsearch" id="ifx-vsearch">
+    <div class="vs-wrap">
+      <input type="text" id="ifx-vs-in" placeholder="search a gene to show in the volcanoes…" autocomplete="off" spellcheck="false">
+      <button class="vs-btn" id="ifx-vs-btn" title="Show this gene in every volcano, like a hit">Pin</button>
+      <div class="vs-ac" id="ifx-vs-ac"></div>
+    </div>
+    <span class="vs-chips" id="ifx-vs-chips"></span>
+  </div>
   <div class="volcano" id="ifx-volcano"></div>
 </div>
 <div id="size-legend"></div>
@@ -1408,7 +1443,7 @@ _INTERFACE_INJECT = '''
     function valSufOf(p)  { var m = _valRe && p.match(_valRe); return m ? m[1].toUpperCase() : ""; }
     function valStemOf(p) { return _valRe ? p.replace(_valRe, "") : p; }
     function valRank(p)   { var r = _valSufRank[valSufOf(p)]; return r === undefined ? 99 : r; }
-    // Group a list of validation plates by stem; stems sorted, member plates ordered WT, MLN, KO.
+    // Group a list of validation plates by stem; stems in plate-number order (Pw10 before Pw107), member plates WT, MLN, KO.
     function validationGroups(list) {
       var groups = {}, gorder = [];
       list.forEach(function(p) {
@@ -1416,7 +1451,7 @@ _INTERFACE_INJECT = '''
         if (!groups[st]) { groups[st] = []; gorder.push(st); }
         groups[st].push(p);
       });
-      gorder.sort(function(a, b) { return a < b ? -1 : (a > b ? 1 : 0); });
+      gorder.sort(function(a, b) { return a.localeCompare(b, undefined, {numeric: true}); });
       return gorder.map(function(st) {
         return {stem: st, plates: groups[st].sort(function(a, b) { return valRank(a) - valRank(b); })};
       });
@@ -1999,6 +2034,7 @@ _INTERFACE_INJECT = '''
         pager.style.display = "none";
       }
       volPinIdx = null;          // re-render (page/plate change) clears the volcano pin
+      syncVolSearch();
       volBox.style.display = "none";
       volBox.innerHTML = "";
     }
@@ -2036,6 +2072,7 @@ _INTERFACE_INJECT = '''
       pinned = false;
       clickedGene = "";   // clear the clicked-gene green ring
       volPinIdx = null;
+      syncVolSearch();
       box.classList.remove("pinned");
       box.style.display = "none";
       volBox.style.display = "none";
@@ -2080,7 +2117,10 @@ _INTERFACE_INJECT = '''
       if (!pl[2]) return '<div class="vmiss">(no volcano)</div>';
       var pos = pl[9];
       var attr = (pos && pos.length === 2) ? ' data-fx="' + pos[0] + '" data-fy="' + pos[1] + '"' : '';
-      return '<div class="vwrap"' + attr + '>' + vimg(pl[2]) + '</div>';
+      var dl = VMODE === "svg" ? '<span class="vdl" title="Save this volcano as PNG"><svg viewBox="0 0 16 16" width="12" height="12">'
+             + '<path d="M8 2v8M4.5 6.5 8 10l3.5-3.5M3 13.5h10" fill="none" stroke="currentColor" stroke-width="1.8" '
+             + 'stroke-linecap="round" stroke-linejoin="round"/></svg></span>' : '';
+      return '<div class="vwrap"' + attr + '>' + vimg(pl[2]) + dl + '</div>';
     }
     function buildVolcanoHtml(cell) {
       var idx = parseInt(cell.getAttribute("data-eidx"), 10);
@@ -2256,33 +2296,226 @@ _INTERFACE_INJECT = '''
       var s = Math.min(w, h), ox = (w - s) / 2, oy = (h - s) / 2;   // square base letterboxed into the box
       return {x: ox + fx * s, y: oy + fy * s, w: w, h: h};
     }
+    // --- volcano gene search (2026-11-04): a gene pinned here shows on every volcano like a hit ---
+    // Positions: <volcano dir>/gpos/<image hash>.<VPOS.id>.js, one per image, loaded by <script> (works on
+    // file:// too) only while a gene is pinned: (axes x, axes y) x 254 per gene of VPOS.genes, 255 = not measured.
+    var VPOS = window.__VPOS__ || null;
+    var vposIdx = {}, vposUp = {}, vposImg = {}, vposWait = {}, volPins = [];   // pins stay across ligands and genes
+    if (VPOS) VPOS.genes.forEach(function(g, i) { vposIdx[g] = i; vposUp[g.toUpperCase()] = g; });
+    var VCOL_DN = "#ff0051", VCOL_UP = "#008bfb";   // the colours of significant points in the volcano images
+    window.__vposAdd = function(fn, ymax, b64) {
+      var s = atob(b64), q = new Uint8Array(s.length);
+      for (var i = 0; i < s.length; i++) q[i] = s.charCodeAt(i);
+      vposImg[fn] = {ymax: ymax, q: q};
+      placeRings();
+    };
+    function loadVpos(fn) {
+      if (vposImg[fn] || vposWait[fn]) return;
+      vposWait[fn] = 1;
+      var s = document.createElement("script");
+      s.src = (VBASE ? VBASE + "/" : "") + "gpos/" + fn.replace(/[.]svg$/, "") + "." + VPOS.id + ".js";
+      document.head.appendChild(s);
+    }
+    // The pinned genes on one image: marks [{g, fx, fy, col, tip}] (fractions of the image) + the genes not
+    // measured there. Empty while the image's positions load.
+    function volPinMarks(fn) {
+      var out = {marks: [], miss: []};
+      if (!VPOS || !volPins.length || !fn) return out;
+      var d = vposImg[fn];
+      if (!d) { loadVpos(fn); return out; }
+      var A = VPOS.axrect, X = VPOS.xlim;
+      volPins.forEach(function(g) {
+        var i = vposIdx[g], ax = 2 * i + 1 < d.q.length ? d.q[2 * i] : 255, ay = d.q[2 * i + 1];
+        if (ax === 255) { out.miss.push(g); return; }
+        var lfc = X[0] + ax / 254 * (X[1] - X[0]), nlp = ay / 254 * d.ymax;
+        var lt = ax === 0 ? "< " + X[0] : (ax === 254 ? "> " + X[1] : "≈ " + lfc.toFixed(1));
+        out.marks.push({g: g, fx: A[0] + ax / 254 * (A[2] - A[0]), fy: 1 - (A[1] + ay / 254 * (A[3] - A[1])),
+                        col: lfc < 0 ? VCOL_DN : VCOL_UP,
+                        tip: g + " · logfc " + lt + " · p ≈ " + Math.pow(10, -nlp).toExponential(1)});
+      });
+      return out;
+    }
+    function svgEl(tag, at) {
+      var e = document.createElementNS(SVGNS, tag);
+      Object.keys(at).forEach(function(k) { e.setAttribute(k, at[k]); });
+      return e;
+    }
+    // The overlay of each volcano: the focal gene's ring + label (pl[9]), then the pinned genes like hits.
     function placeRings() {
       volBox.querySelectorAll(".vwrap").forEach(function(wrap) {
         var obj = wrap.querySelector("object.vobj"); if (!obj) return;
-        var fx = parseFloat(wrap.getAttribute("data-fx")), fy = parseFloat(wrap.getAttribute("data-fy"));
+        var box = ringFor(obj, 0, 0); if (!box) return;
         var svg = wrap.querySelector(":scope > .vringsvg");
-        if (isNaN(fx) || isNaN(fy)) { if (svg) svg.remove(); return; }   // gene absent here -> no ring
-        var p = ringFor(obj, fx, fy); if (!p) return;
-        if (!svg) { svg = document.createElementNS(SVGNS, "svg"); svg.setAttribute("class", "vringsvg"); wrap.appendChild(svg); }
-        svg.setAttribute("width", p.w); svg.setAttribute("height", p.h);
+        if (!svg) { svg = svgEl("svg", {"class": "vringsvg"}); wrap.appendChild(svg); }
+        svg.setAttribute("width", box.w); svg.setAttribute("height", box.h);
         while (svg.firstChild) svg.removeChild(svg.firstChild);
-        var c = document.createElementNS(SVGNS, "circle");
-        c.setAttribute("cx", p.x.toFixed(1)); c.setAttribute("cy", p.y.toFixed(1)); c.setAttribute("r", "6");
-        c.setAttribute("fill", "none"); c.setAttribute("stroke", "#000"); c.setAttribute("stroke-width", "1.5");
-        svg.appendChild(c);
-        var left = fx > 0.7, tx = left ? p.x - 9 : p.x + 9;
-        var ln = document.createElementNS(SVGNS, "line");
-        ln.setAttribute("x1", p.x.toFixed(1)); ln.setAttribute("y1", p.y.toFixed(1));
-        ln.setAttribute("x2", tx.toFixed(1)); ln.setAttribute("y2", (p.y - 6).toFixed(1));
-        ln.setAttribute("stroke", "#000"); ln.setAttribute("stroke-width", "0.7"); svg.appendChild(ln);
-        var t = document.createElementNS(SVGNS, "text");
-        t.setAttribute("x", tx.toFixed(1)); t.setAttribute("y", (p.y - 8).toFixed(1));
-        t.setAttribute("text-anchor", left ? "end" : "start");
-        t.setAttribute("font-size", "11"); t.setAttribute("font-weight", "700"); t.setAttribute("fill", "#000");
-        t.textContent = currentGene;
-        svg.appendChild(t);
+        var fx = parseFloat(wrap.getAttribute("data-fx")), fy = parseFloat(wrap.getAttribute("data-fy"));
+        var ring = !isNaN(fx) && !isNaN(fy);
+        if (ring) {   // gene absent here -> no ring
+          var p = ringFor(obj, fx, fy), left = fx > 0.7, tx = left ? p.x - 9 : p.x + 9;
+          svg.appendChild(svgEl("circle", {cx: p.x.toFixed(1), cy: p.y.toFixed(1), r: 6, fill: "none",
+                                           stroke: "#000", "stroke-width": 1.5}));
+          svg.appendChild(svgEl("line", {x1: p.x.toFixed(1), y1: p.y.toFixed(1), x2: tx.toFixed(1),
+                                         y2: (p.y - 6).toFixed(1), stroke: "#000", "stroke-width": 0.7}));
+          var t = svgEl("text", {x: tx.toFixed(1), y: (p.y - 8).toFixed(1), "text-anchor": left ? "end" : "start",
+                                 "font-size": 11, "font-weight": 700, fill: "#000"});
+          t.textContent = currentGene;
+          svg.appendChild(t);
+        }
+        var pm = volPinMarks(obj.getAttribute("data-vfn"));
+        pm.marks.forEach(function(m) {
+          var q = ringFor(obj, m.fx, m.fy), lft = m.fx > 0.7;
+          svg.appendChild(svgEl("circle", {cx: q.x.toFixed(1), cy: q.y.toFixed(1), r: 4, fill: m.col,
+                                           stroke: "#fff", "stroke-width": 0.8}));
+          if (!(ring && m.g === currentGene)) {   // the focal gene keeps the ring's label only
+            var l = svgEl("text", {x: (lft ? q.x - 6 : q.x + 6).toFixed(1), y: (q.y - 5).toFixed(1),
+                                   "text-anchor": lft ? "end" : "start", "font-size": 10, "font-weight": 700, fill: "#000"});
+            l.textContent = m.g;
+            svg.appendChild(l);
+          }
+          var h = svgEl("circle", {cx: q.x.toFixed(1), cy: q.y.toFixed(1), r: 8, fill: "transparent", "class": "vpin-hit"});
+          var tt = svgEl("title", {});
+          tt.textContent = m.tip;
+          h.appendChild(tt);
+          svg.appendChild(h);
+        });
+        if (pm.miss.length) {
+          var a = ringFor(obj, VPOS.axrect[0], 1 - VPOS.axrect[3]);
+          var n = svgEl("text", {x: (a.x + 4).toFixed(1), y: (a.y + 11).toFixed(1), "font-size": 10,
+                                 "font-style": "italic", fill: "#888"});
+          n.textContent = "not measured: " + pm.miss.join(", ");
+          svg.appendChild(n);
+        }
       });
     }
+    // The search bar (under the ligand row) shows while a ligand's volcanoes are click-pinned.
+    var vsBar = document.getElementById("ifx-vsearch"), vsIn = document.getElementById("ifx-vs-in"),
+        vsAc = document.getElementById("ifx-vs-ac"), vsChips = document.getElementById("ifx-vs-chips");
+    var vsItems = [], vsActive = -1;
+    function syncVolSearch() { if (vsBar) vsBar.classList.toggle("on", !!VPOS && volPinIdx !== null); }
+    function renderVolChips() {
+      vsChips.innerHTML = "";
+      volPins.forEach(function(g) {
+        var ch = document.createElement("span"), x = document.createElement("span");
+        ch.className = "vs-chip"; ch.textContent = g;
+        x.className = "vs-x"; x.textContent = "×"; x.title = "remove"; x.setAttribute("data-g", g);
+        ch.appendChild(x); vsChips.appendChild(ch);
+      });
+      if (volPins.length > 1) {
+        var cl = document.createElement("span");
+        cl.className = "vs-clear"; cl.textContent = "clear";
+        vsChips.appendChild(cl);
+      }
+    }
+    function pinVolGene(g) {
+      if (!g || !(g in vposIdx) || volPins.indexOf(g) !== -1) return;
+      volPins.push(g);
+      renderVolChips(); placeRings();
+    }
+    function vsRender() {
+      var q = (vsIn.value || "").trim().toUpperCase(), pre = [], mid = [];
+      vsAc.innerHTML = ""; vsItems = []; vsActive = -1;
+      if (!q) { vsAc.style.display = "none"; return; }
+      for (var i = 0; i < VPOS.genes.length && pre.length < 12; i++) {   // genes that start with q first
+        var at = VPOS.genes[i].toUpperCase().indexOf(q);
+        if (at === 0) pre.push(VPOS.genes[i]); else if (at > 0 && mid.length < 12) mid.push(VPOS.genes[i]);
+      }
+      var m = pre.concat(mid).slice(0, 12);
+      if (!m.length) { vsAc.innerHTML = '<div class="ac-empty">not measured in any volcano</div>'; vsAc.style.display = "block"; return; }
+      m.forEach(function(g) {
+        var d = document.createElement("div");
+        d.className = "ac-item"; d.textContent = g;
+        d.addEventListener("mousedown", function(e) { e.preventDefault(); pinVolGene(g); vsIn.value = ""; vsRender(); });
+        vsAc.appendChild(d); vsItems.push(d);
+      });
+      vsAc.style.display = "block";
+    }
+    function vsPick() {
+      var q = (vsIn.value || "").trim().toUpperCase();
+      pinVolGene(vsActive >= 0 ? vsItems[vsActive].textContent : (vposUp[q] || (vsItems[0] && vsItems[0].textContent)));
+      vsIn.value = ""; vsRender();
+    }
+    if (vsBar && VPOS) {
+      vsIn.addEventListener("input", vsRender);
+      vsIn.addEventListener("keydown", function(e) {
+        if (e.key === "ArrowDown" || e.key === "ArrowUp") {
+          e.preventDefault();
+          vsActive = e.key === "ArrowDown" ? Math.min(vsActive + 1, vsItems.length - 1) : Math.max(vsActive - 1, 0);
+          vsItems.forEach(function(d, i) { d.className = "ac-item" + (i === vsActive ? " active" : ""); });
+        }
+        else if (e.key === "Enter") { e.preventDefault(); vsPick(); }
+        else if (e.key === "Escape") { vsIn.value = ""; vsRender(); }
+      });
+      document.getElementById("ifx-vs-btn").addEventListener("click", function(e) { e.stopPropagation(); vsPick(); });
+      vsChips.addEventListener("click", function(e) {
+        var x = e.target.closest(".vs-x");
+        if (x) volPins.splice(volPins.indexOf(x.getAttribute("data-g")), 1);
+        else if (e.target.closest(".vs-clear")) volPins.length = 0;
+        else return;
+        renderVolChips(); placeRings();
+      });
+      document.addEventListener("click", function(e) { if (e.target !== vsIn && !vsAc.contains(e.target)) vsAc.style.display = "none"; });
+    }
+    // PNG of one volcano as shown: a title, the image, the ring and the pinned genes (3x the screen size).
+    // A file:// page cannot export a canvas that holds a local image, so it opens the image instead.
+    function volTitle(wrap) {
+      var cell = wrap.closest(".vcell");
+      if (cell) {
+        var lab = cell.parentNode.previousElementSibling;
+        return [(lab && lab.classList.contains("vstem-lab")) ? lab.textContent : currentGene,
+                (cell.querySelector(".vlabel") || {}).textContent || ""];
+      }
+      var prev = wrap.previousElementSibling;
+      return [(prev && prev.classList.contains("vlabel")) ? prev.textContent : currentGene, ""];
+    }
+    function saveVolcanoPng(wrap) {
+      var obj = wrap.querySelector("object.vobj"); if (!obj) return;
+      var url = obj.getAttribute("data"), S = 1080, H = 90, k = S / 360, t = volTitle(wrap), img = new Image();
+      img.onload = function() {
+        var cv = document.createElement("canvas"), c = cv.getContext("2d");
+        cv.width = S; cv.height = S + H;
+        c.fillStyle = "#fff"; c.fillRect(0, 0, cv.width, cv.height);
+        c.fillStyle = "#1D3557"; c.font = "600 30px sans-serif"; c.fillText(t[0], 14, 38, S - 28);
+        c.fillStyle = "#555"; c.font = "26px sans-serif"; c.fillText(t[1], 14, 76, S - 28);
+        c.drawImage(img, 0, H, S, S);
+        var X = function(f) { return f * S; }, Y = function(f) { return H + f * S; };
+        var fx = parseFloat(wrap.getAttribute("data-fx")), fy = parseFloat(wrap.getAttribute("data-fy"));
+        var ring = !isNaN(fx) && !isNaN(fy);
+        if (ring) {
+          var left = fx > 0.7, tx = X(fx) + (left ? -9 : 9) * k;
+          c.strokeStyle = "#000"; c.lineWidth = 1.5 * k;
+          c.beginPath(); c.arc(X(fx), Y(fy), 6 * k, 0, 2 * Math.PI); c.stroke();
+          c.lineWidth = 0.7 * k;
+          c.beginPath(); c.moveTo(X(fx), Y(fy)); c.lineTo(tx, Y(fy) - 6 * k); c.stroke();
+          c.fillStyle = "#000"; c.font = "700 " + (11 * k) + "px sans-serif"; c.textAlign = left ? "end" : "start";
+          c.fillText(currentGene, tx, Y(fy) - 8 * k);
+        }
+        var pm = volPinMarks(obj.getAttribute("data-vfn"));
+        pm.marks.forEach(function(m) {
+          var lft = m.fx > 0.7;
+          c.fillStyle = m.col; c.beginPath(); c.arc(X(m.fx), Y(m.fy), 4 * k, 0, 2 * Math.PI); c.fill();
+          c.strokeStyle = "#fff"; c.lineWidth = 0.8 * k; c.stroke();
+          if (ring && m.g === currentGene) return;   // the focal gene keeps the ring's label only
+          c.fillStyle = "#000"; c.font = "700 " + (10 * k) + "px sans-serif"; c.textAlign = lft ? "end" : "start";
+          c.fillText(m.g, X(m.fx) + (lft ? -6 : 6) * k, Y(m.fy) - 5 * k);
+        });
+        if (pm.miss.length) {
+          c.fillStyle = "#888"; c.font = "italic " + (10 * k) + "px sans-serif"; c.textAlign = "start";
+          c.fillText("not measured: " + pm.miss.join(", "), X(VPOS.axrect[0]) + 4 * k, Y(1 - VPOS.axrect[3]) + 11 * k);
+        }
+        var name = (t[0] + "_" + t[1]).replace(/[^A-Za-z0-9._-]+/g, "_").replace(/^_+|_+$/g, "").slice(0, 120) + ".png";
+        try {
+          cv.toBlob(function(b) { saveBlob(b, name, [{description: "PNG image", accept: {"image/png": [".png"]}}]); }, "image/png");
+        } catch (err) { window.open(url, "_blank"); }
+      };
+      img.onerror = function() { window.open(url, "_blank"); };
+      img.src = url;
+    }
+    volBox.addEventListener("click", function(e) {
+      var b = e.target.closest(".vdl"); if (!b) return;
+      e.stopPropagation();
+      saveVolcanoPng(b.parentNode);
+    });
     window.addEventListener("resize", function() {
       _stems.forEach(function(vstem) { clearTrace(vstem); placeHotspots(vstem); });
       placeRings();
@@ -2326,6 +2559,7 @@ _INTERFACE_INJECT = '''
         markVolPin(cell);
         showVolcano(cell);
       }
+      syncVolSearch();                // the volcano gene search shows while a ligand is pinned
     });
     gd.on("plotly_hover", function(e) {
       if (pinned) return;
@@ -2356,7 +2590,7 @@ _INTERFACE_INJECT = '''
     });
     clo.addEventListener("click", unpin);
     document.addEventListener("keydown", function(e) {
-      if (!pinned) return;
+      if (!pinned || (e.target && e.target.tagName === "INPUT")) return;   // typing in a search box
       if (e.key === "Escape") unpin();
       else if (e.key === "ArrowLeft")  goPage(-1);
       else if (e.key === "ArrowRight") goPage(1);
@@ -2405,7 +2639,7 @@ _INTERFACE_INJECT = '''
       if (!items.length) { if (boxesEl.parentNode) boxesEl.parentNode.style.display = "none"; return false; }
       if (!dates || !Object.keys(dates).length)
         return buildGroup(items, tickedMap, boxesEl, allId, noneId);  // flat fallback
-      // Validation plates are pulled out of their date groups into dedicated validation blocks.
+      // Validation plates are pulled out of their date groups into one validation block.
       var valItems = items.filter(isValidationPlate);
       var byDate = {}, order = [];
       items.filter(function(p) { return !isValidationPlate(p); }).forEach(function(p) {
@@ -2432,10 +2666,10 @@ _INTERFACE_INJECT = '''
         });
         return h + '</div></div>';
       }
-      // Validation block of one date: ONE checkbox per plate stem (name minus the WT/MLN/KO suffix).
+      // The validation block: ONE checkbox per plate stem (name minus the WT/MLN/KO suffix).
       // Ticking a stem toggles all its member plates (its data-plates, ordered WT, MLN, KO). The
       // per-condition side-by-side view lives in the volcano panel, not here.
-      function validationBlock(label, groups) {   // groups = [{stem, plates:[ordered]}, ...]
+      function validationBlock(groups) {   // groups = [{stem, plates:[ordered]}, ...]
         var rows = "", n = 0;
         groups.forEach(function(g) {
           n += g.plates.length;
@@ -2449,20 +2683,14 @@ _INTERFACE_INJECT = '''
         });
         return '<div class="pf-date pf-validation collapsed"><div class="pf-date-head">'
              + '<span class="fp-caret">&#9662;</span>'
-             + '<input type="checkbox" class="pf-date-all">validation ' + label
+             + '<input type="checkbox" class="pf-date-all">validation'
              + ' <span class="pf-date-n">(' + n + ')</span></div>'
              + '<div class="pf-date-boxes pf-val-boxes">' + rows + '</div></div>';
       }
-      var html = "";
-      // Validation blocks at the TOP, one per date (a stem sits under its earliest plate date; plates
-      // unticked unless plate_defaults lists them), set off from the dated plates by a separator (see .pf-validation CSS).
-      var valByDate = {}, valOrder = [];
-      validationGroups(valItems).forEach(function(g) {
-        var d = g.plates.map(function(p) { return dates[p]; }).filter(Boolean).sort()[0] || "(no date)";
-        if (!valByDate[d]) { valByDate[d] = []; valOrder.push(d); }
-        valByDate[d].push(g);
-      });
-      valOrder.sort(dateOrder).forEach(function(d) { html += validationBlock(d, valByDate[d]); });
+      // ONE validation block at the TOP, no dates (2026-11-04; plates unticked unless plate_defaults
+      // lists them), set off from the dated plates by a separator (see .pf-validation CSS).
+      var valGroups = validationGroups(valItems);
+      var html = valGroups.length ? validationBlock(valGroups) : "";
       order.forEach(function(d) { html += dateBlock(d, byDate[d], byDate[d].length); });
       boxesEl.innerHTML = html;
       // A checkbox maps to one or more plates: a normal box → its own value; a validation
@@ -3450,10 +3678,11 @@ _INTERFACE_INJECT = '''
       }
 
       // Plates that one link entry names, by the SHOW_PLATE rule: YYYYMMDD (or YYYY-MM-DD) = the date block
-      // (its non-validation plates); validationYYYYMMDD = the validation block (the stems whose earliest
-      // plate date it is, as the Plates filter groups them); any other entry = that plate name.
+      // (its non-validation plates); validationYYYYMMDD = the validation stems whose earliest plate date it
+      // is; validation = all validation plates; any other entry = that plate name.
       function linkPlates(entry) {
         var dates = window.__PLATE_DATES__ || {}, all = Object.keys(ticked);
+        if (/^validation$/i.test(entry.replace(/[\\s+]/g, ''))) return all.filter(isValidationPlate);
         var m = entry.replace(/[\\s+]/g, '').match(/^(validation[-_]?)?(\\d{4})-?(\\d{2})-?(\\d{2})$/i);
         if (!m) return Object.prototype.hasOwnProperty.call(ticked, entry) ? [entry] : [];
         var d = m[2] + '-' + m[3] + '-' + m[4], first = {};
@@ -3605,6 +3834,7 @@ def plot_3d_interface(
     volcano_significant=False,
     volcano_sig_col='significant',
     volcano_dir=None,
+    volcano_gene_search=False,   # write every gene's position in every volcano (volcano_dir/gpos/) for the volcano gene search
     html_path=None,
     height=900,
     width=1500,
@@ -3771,6 +4001,7 @@ def plot_3d_interface(
     _volcano_base = ''
     ring_pos = {}   # {volcano filename: [fx, fy, aspect]} for the cross-plate trace line (see render pass)
     stem_trace = {}   # {contrast(vk): {gene: [fx, fy, aspect, isHitHere]}} — hover-any-gene trace across a stem
+    image_vk = {}     # {base image filename: vk} from the render pass, for the volcano gene search
     # Precomputed panels (compound blobs + plate/activity lists + thumb/volcano modes) can be
     # passed in to SKIP the expensive build below — the referenced thumbnail/volcano files must
     # already exist on disk (written by the run that produced the panels). Cache via return_panels.
@@ -4230,6 +4461,7 @@ def plot_3d_interface(
 
                 # fill each plate-row: shared base filename (pl[2]) + focal-gene ring position (pl[9])
                 _have_base = written_ok | {vk for vk in task_vks if _bfname(vk) in _existing}
+                image_vk = {_bfname(vk): str(vk) for vk in task_vks if vk in _have_base}
                 for vk, lst in task_vks.items():
                     _bfn = _bfname(vk)
                     _pmap = positions.get(vk, {})
@@ -4498,6 +4730,30 @@ def plot_3d_interface(
         if stem_trace:
             print(f'> stem trace: {sum(len(v) for v in stem_trace.values()):,} gene positions '
                   f'across {len(stem_trace):,} validation contrasts')
+    # volcano gene search (2026-11-04): every measured gene's position in each volcano image of the page, on
+    # both paths. A cached panel build has no render pass, so image_vk.json (or the render names) maps the images.
+    vpos = None
+    if (volcano_gene_search and have_compounds and _volcano_base and volcano_dir and volcano_significant
+            and volcano_source is not None):
+        import json as _json
+        if _vsrc is None:
+            _vsrc = (volcano_source.drop(columns=['compound'], errors='ignore')
+                     .rename(columns={volcano_key: 'compound'}) if volcano_key != 'compound' else volcano_source)
+        _scol = volcano_sig_col if volcano_sig_col in _vsrc.columns else 'significant'
+        _ymx = _stem_shared_ymax(compounds_df, _vsrc, plate_validation_suffixes)
+        _files = {r[2] for es in custom.values() for e in es
+                  if isinstance(e, list) and len(e) > 3 and isinstance(e[3], list) for r in e[3] if r[2]}
+        _ivk_path = os.path.join(volcano_dir, 'image_vk.json')
+        if not _files <= set(image_vk) and os.path.exists(_ivk_path):
+            with open(_ivk_path) as _fh:
+                image_vk = _json.load(_fh)
+        if not _files <= set(image_vk):
+            image_vk = _volcano_image_vk(compounds_df[volcano_key].dropna(), _vsrc, sig_col=_scol,
+                                         xlim=volcano_xlim, size_px=volcano_size_px, stem_ymax=_ymx)
+        with open(_ivk_path, 'w') as _fh:
+            _json.dump(image_vk, _fh)
+        vpos = _write_volcano_gene_files(volcano_dir, _vsrc, {f: image_vk[f] for f in _files if f in image_vk},
+                                         sig_col=_scol, xlim=volcano_xlim, stem_ymax=_ymx)
     # gene → marker size (px) by how many DISTINCT compounds the gene is a significant hit
     # in — a grand total across all plates/activities, so it's a fixed per-gene property, NOT
     # filter-reactive. Counts 1..N-1 and >N-1 map to size_buckets; a gene with 0 hits (rare,
@@ -4973,6 +5229,7 @@ def plot_3d_interface(
                           else ('path' if (volcano_dir and html_path) else 'b64')) + ';\n'
             'window.__VOLCANO_BASE__ = ' + _json.dumps(_volcano_base) + ';\n'
             'window.__STEM_TRACE__ = ' + _jsp(stem_trace) + ';\n'   # {vk: {gene: [fx,fy,aspect,isHit]}} for the hover trace (http + file://)
+            'window.__VPOS__ = ' + (_jsp(vpos) if vpos else 'null') + ';\n'   # volcano gene search: {id, genes, axrect, xlim}
             'window.__THUMB_MODE__ = ' + _json.dumps('path' if _thumb_ext else 'b64') + ';\n'
             'window.__THUMB_DIR__ = ' + _json.dumps(_thumb_rel) + ';\n'
             'window.__GENE_RESEARCH__ = ' + _jsp(gene_research or {}) + ';\n'
@@ -6260,6 +6517,87 @@ def _volcano_base_cache_fname(vk, xlim, size_px, ext='.svg', version='b1', ymax=
     _d = f'|d{data}' if data is not None else ''
     s = f'{version}|{vk}|{xlim[0]}|{xlim[1]}|{size_px}{_y}{_d}|{ext}'
     return hashlib.md5(s.encode()).hexdigest()[:16] + ext
+
+
+def _volcano_image_vk(vks, vsrc, *, sig_col='significant', xlim=(-8.0, 8.0), size_px=350, stem_ymax=None):
+    """``{base image filename: vk}`` with the names of the render pass (data hash + stem y-max), for a build
+    that loads its panels from the cache: a plain plate-row does not carry its vk (pl[7] is empty there)."""
+    vks = sorted({str(v) for v in vks})
+    vhash = _volcano_data_hash(vsrc, vks, sig_col=sig_col)
+    return {_volcano_base_cache_fname(vk, xlim, size_px, '.svg', ymax=(stem_ymax or {}).get(vk),
+                                      data=vhash.get(vk)): vk for vk in vks}
+
+
+def _volcano_gene_positions(vsrc, image_vk, genes=(), *, sig_col='significant', xlim=(-8.0, 8.0), stem_ymax=None):
+    """
+    Where EVERY measured gene sits in each volcano image, for the volcano gene search (2026-11-04). The rows
+    and the scale are those of :func:`_volcano_base_svg`: a row with no gene, logfc, p-value or colour value
+    is dropped, a gene gets its mean logfc and its min p, and the y-max of an image is
+    max(1, 1.05 x its top -log10 p), or its stem override (``stem_ymax``) when that is higher.
+
+    :param DataFrame vsrc: the volcano source, with the experiment (vk) in a ``'compound'`` column
+    :param dict image_vk: ``{base image filename: vk}`` of the images to do
+    :param list genes: the gene index so far; the genes it lacks are added at its end (sorted), so a file
+        written earlier stays valid (a gene past its length is not measured in that image)
+    :return tuple: ``(genes, images, ymax, q)``: the gene index, the sorted image names, the y-max of each
+        image, and a uint8 array ``[image, gene, 2]`` of the point's axes fractions (logfc over ``xlim``,
+        -log10 p over [0, y-max], each clipped to [0, 1]) x 254; 255 = not measured in that image.
+    """
+    images = sorted(image_vk)
+    vks = [str(image_vk[f]) for f in images]
+    sub = vsrc.loc[vsrc['compound'].isin(set(vks)), ['compound', 'genes', 'logfc', 'pvalue', sig_col]].dropna()
+    names = sub['genes'].astype(str)
+    genes = list(genes) + sorted(set(names.unique()) - set(genes))
+    ng = len(genes)
+    key = (pd.Categorical(sub['compound'].astype(str), categories=vks).codes.astype(np.int64) * ng
+           + pd.Categorical(names, categories=genes).codes)
+    agg = (pd.DataFrame({'k': key, 'logfc': sub['logfc'].to_numpy(float), 'p': sub['pvalue'].to_numpy(float)})
+           .groupby('k').agg(logfc=('logfc', 'mean'), p=('p', 'min')))
+    ii, gi = np.divmod(agg.index.to_numpy(), ng)
+    nlp = -np.log10(np.clip(agg['p'].to_numpy(), 1e-300, None))
+    own = pd.Series(nlp * 1.05).groupby(ii).max().reindex(range(len(images))).fillna(1.0).clip(lower=1.0)
+    ymax = np.maximum(own.to_numpy(), [float((stem_ymax or {}).get(v, 0.0)) for v in vks])
+    q = np.full((len(images), ng, 2), 255, np.uint8)
+    q[ii, gi, 0] = np.rint(np.clip((agg['logfc'].to_numpy() - xlim[0]) / (xlim[1] - xlim[0]), 0, 1) * 254)
+    q[ii, gi, 1] = np.rint(np.clip(nlp / ymax[ii], 0, 1) * 254)
+    return genes, images, ymax, q
+
+
+def _write_volcano_gene_files(volcano_dir, vsrc, image_vk, *, sig_col='significant', xlim=(-8.0, 8.0),
+                              stem_ymax=None):
+    """
+    Write the files of the volcano gene search (2026-11-04) and return the page metadata (``__VPOS__``).
+    ``<volcano_dir>/gpos/<image hash>.<index id>.js`` holds the position of every gene of the index in that
+    image, as ``__vposAdd(image name, y-max, base64 of its [gene, 2] uint8 row)``; the page loads it only
+    when a gene is pinned in the volcano search. Only images that have no file yet are computed, so a build
+    after a data change writes files for the new images only. ``gpos/genes.json`` (build-only) keeps the
+    gene index ``{id, genes}``; genes are only added at its end, and a new index gets a new id (new names).
+    :return dict: ``{id, genes, axrect, xlim}`` for window.__VPOS__
+    """
+    import base64, json as _json, uuid
+    out = os.path.join(volcano_dir, 'gpos')
+    os.makedirs(out, exist_ok=True)
+    idx_path = os.path.join(out, 'genes.json')
+    idx = {'id': uuid.uuid4().hex[:8], 'genes': []}
+    if os.path.exists(idx_path):
+        with open(idx_path) as fh:
+            idx = _json.load(fh)
+    fname = lambda f: f'{os.path.splitext(f)[0]}.{idx["id"]}.js'
+    have = set(os.listdir(out))
+    todo = {f: vk for f, vk in image_vk.items() if fname(f) not in have}
+    if todo:
+        idx['genes'], images, ymax, q = _volcano_gene_positions(vsrc, todo, idx['genes'], sig_col=sig_col,
+                                                                xlim=xlim, stem_ymax=stem_ymax)
+        with open(idx_path + '.tmp', 'w') as fh:   # the index first: a file never points past a saved index
+            _json.dump(idx, fh)
+        os.replace(idx_path + '.tmp', idx_path)
+        for f, y, row in zip(images, ymax, q):
+            with open(os.path.join(out, fname(f)), 'w', encoding='utf-8') as fh:
+                fh.write(f'window.__vposAdd && __vposAdd({_json.dumps(f)}, {float(y):.4f}, '
+                         f'"{base64.b64encode(row.tobytes()).decode()}");\n')
+    print(f'> volcano gene search: {len(idx["genes"]):,} genes x {len(image_vk):,} volcanoes '
+          f'({len(todo):,} file(s) written, {len(image_vk) - len(todo):,} cached) -> {out}')
+    return {'id': idx['id'], 'genes': idx['genes'], 'axrect': list(_VOLCANO_AXRECT), 'xlim': [float(x) for x in xlim]}
 
 
 def recompute_volcanoes(volcano_source, pairs, volcano_dir, *,

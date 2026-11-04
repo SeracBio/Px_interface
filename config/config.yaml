@@ -66,9 +66,9 @@ VALIDATION_DIR: /mnt/c/Users/gtamo/Serac Biosciences Dropbox/Serac_team/4_Data_S
 # A contrast in several tranches keeps the newest copy. A per-target MSSCORE (no contrast) is skipped.
 PLATE_DATE_OVERRIDES: {}              # plate -> 'YYYY-MM-DD' for plates absent from source exports
                                       # (Pw58/60/61/62 now resolve via the 0520 DB export -> 2026-05-20)
-SHOW_PLATE: [validation 20261006]     # Plates-filter blocks that open ticked: a date (YYYYMMDD) ticks that date's plates;
-                                      # "validation YYYYMMDD" ticks the stems of that validation block (validation plates
-                                      # stay unticked unless named). Empty -> latest date only. 2026-08 builds: [20260812,
+SHOW_PLATE: [validation 20261006]     # Plates that open ticked: a date (YYYYMMDD) ticks that date's plates; "validation"
+                                      # ticks all validation plates; "validation YYYYMMDD" ticks the validation stems first dated then
+                                      # (validation plates stay unticked unless named). Empty -> latest date only. 2026-08 builds: [20260812,
                                       # 20260813, 20260814]. Override at the CLI: --show_plate "20260812, validation 20261006"
 
 
@@ -109,6 +109,7 @@ VALIDATED_TARGET_FILE: # /home/gtamo/Px_interface/data/validated.txt            
 GENE_SIZE_BUCKETS: [6, 8, 10, 12, 15, 20]   # 3D dot px by #compounds the gene is significant in: 1,2,3,4,5,>5
 GENE_RING_PX: 2                              # thickness (px) of the dark ring around each gene dot (gl3d caps marker outlines, so the ring is drawn as a larger dot under the fill)
 Z_FIT_PAD: 0.05                              # MS (z) axis top = the highest gene that shows (pins too) + this part of the z span, set again at each filter change; null -> fit all genes
+VOLCANO_GENE_SEARCH: true                    # write every gene's position in every volcano (volcanoes_px/gpos/, ~250 MB, one file per volcano) for the gene search under a pinned ligand; false -> no search
 
 CONTAMINANTS: /home/gtamo/MS_ML/data/MS/20260611_contaminants.csv
 CONTROLS:

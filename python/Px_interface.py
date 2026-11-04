@@ -188,26 +188,27 @@ def resolve_n_jobs(njobs):
 def resolve_plate_defaults(plate2date, show_plate=None, validation_suffixes=()):
     """
     Which plates to default-tick in the interface's Plates filter. show_plate (config SHOW_PLATE /
-    --show_plate) names blocks of that filter: 'YYYYMMDD' ticks the plates of that date block, and
-    'validation YYYYMMDD' ticks the stems of that validation block. A validation plate (its name ends
-    in a validation suffix) is in the block 'validation <earliest date of its stem>', as the filter
-    shows it, so a date entry never ticks it. Empty/None -> the single latest date block only
-    (previous default). YYYYMMDD is normalised to the YYYY-MM-DD form plate2date stores, so it
-    matches regardless of the source (FBX folder name or df_raw export).
+    --show_plate) names plates of that filter: 'YYYYMMDD' ticks the plates of that date block,
+    'validation YYYYMMDD' ticks the validation stems whose earliest plate date it is, and 'validation'
+    ticks all validation plates (the filter shows them in one validation block, 2026-11-04). A
+    validation plate (its name ends in a validation suffix) never ticks from a date entry. Empty/None
+    -> the single latest date block only (previous default). YYYYMMDD is normalised to the YYYY-MM-DD
+    form plate2date stores, so it matches regardless of the source (FBX folder name or df_raw export).
     param dict plate2date: {plate -> 'YYYY-MM-DD'}
-    param list show_plate: 'YYYYMMDD' / 'validation YYYYMMDD' strings or YYYYMMDD ints (None/[] -> latest)
+    param list show_plate: 'YYYYMMDD' / 'validation YYYYMMDD' / 'validation' strings or YYYYMMDD ints (None/[] -> latest)
     param list validation_suffixes: validation plate-name suffixes (config VALIDATION_PLATE_SUFFIXES)
-    return tuple: (sorted plate names to tick, sorted block labels selected, e.g. 'validation 2026-10-06')
+    return tuple: (sorted plate names to tick, sorted entries selected, e.g. 'validation 2026-10-06')
     """
-    show = [re.fullmatch(r'(validation\s+)?(.+)', str(e).strip(), re.I).groups()
+    show = [re.fullmatch(r'(validation)?\s*(.*)', str(e).strip(), re.I).groups()
             for e in (show_plate or []) if str(e).strip()]
-    blocks = ({('validation ' if v else '') + pd.to_datetime(d).strftime('%Y-%m-%d') for v, d in show}
+    blocks = ({(('validation ' if v else '') + pd.to_datetime(d).strftime('%Y-%m-%d')) if d else 'validation'
+               for v, d in show}
               if show else {max(plate2date.values())})
     vre = re.compile('(' + '|'.join(map(str, validation_suffixes)) + ')$', re.I) if validation_suffixes else None
     stem = pd.Series({p: vre.sub('', p) for p in plate2date if vre and vre.search(p)}, dtype=object)
     first = pd.Series(plate2date, dtype=object)[stem.index].groupby(stem).transform('min')   # stem -> earliest date
     block = {**plate2date, **('validation ' + first).to_dict()}
-    return sorted(p for p, b in block.items() if b in blocks), sorted(blocks)
+    return sorted(p for p, b in block.items() if b in blocks or ('validation' in blocks and p in stem.index)), sorted(blocks)
 
 
 def resolve_output_dir(output_dir, params):
@@ -1147,6 +1148,7 @@ class OUTPUT():
             validation_defaults=_val_defaults,  # None -> all ticked; FBXO31_INDEPENDENT_TICKED=false -> only dependent
             volcano_significant=True, volcano_sig_col='volcano_sig',  # targets-only colour on validation volcanoes
             volcano_dir=os.path.join(output_dir, 'interfaces', 'volcanoes_px'),
+            volcano_gene_search=getattr(params, 'VOLCANO_GENE_SEARCH', True),  # every gene's volcano position (gpos/) for the volcano gene search
             volcano_n_jobs=resolve_n_jobs(getattr(params, 'NJOBS', 0)),  # config NJOBS (0 -> CPUs-2) for the volcano render
             volcano_xlim=(-8, 8), volcano_size_px=350,
             disease_area_colors=DISEASE_AREA_COLORS, nb_display=False,

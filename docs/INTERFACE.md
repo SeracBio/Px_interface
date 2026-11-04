@@ -216,6 +216,25 @@ screen"*, styled `.vprimary`). Because that cell carries `data-vk` (`pl[7]`) it 
 primary cell visible **whenever its validation stem is** (bypassing its own dated-plate tick); if no
 stem is visible it falls back to a normal stacked volcano.
 
+### Volcano gene search files (`gpos/`, 2026-11-04)
+
+The search draws ANY measured gene on a volcano, but the base image holds the not-significant points as one
+raster. So the build writes the position of every gene in every volcano image of the page:
+
+- **`_volcano_gene_positions(vsrc, image_vk, genes)`** — the rows and scale of `_volcano_base_svg` (rows with
+  a missing gene / logfc / p / colour value dropped, mean logfc and min p per gene, y-max = max(1, 1.05 × top
+  -log10 p) or the stem override). Returns uint8 axes fractions × 254 per (image, gene); 255 = not measured.
+  `TestVolcanoGeneSearch` checks them against `_ring_frac` on rendered images (within one quantum).
+- **`_write_volcano_gene_files`** — one file per image, `volcanoes_px/gpos/<image hash>.<index id>.js`:
+  `__vposAdd(image name, y-max, base64 of [gene, 2])`. Only images without a file are computed, so a build
+  after a data change writes files for the new images only. `gpos/genes.json` (build-only, not published:
+  `PUBLISH_EXCLUDE` `volcanoes_px/*.json`) is the gene index `{id, genes}`: genes are only added at its end,
+  so old files stay valid (a gene past a file's length is not measured there); a new index gets a new id.
+- **The image → vk map.** A plain plate-row has no vk (`pl[7]` is empty), so the render pass records
+  `image_vk` and the step saves `volcanoes_px/image_vk.json`. A build that loads the panels from the cache
+  reads that file, or names the images again with `_volcano_image_vk` (data hash + stem y-max).
+- `prune_volcanoes.py` also deletes the gpos files that the page does not use (other images, other id).
+
 ---
 
 ## 5. The client (`_INTERFACE_INJECT`, functions.py:1263-3513)
@@ -264,6 +283,23 @@ backdrop (all genes). The z values do not change, but the plot stretches when th
 Range sliders snap to a **"nice" step** (`_nice_step`: 1/2/5·10ⁿ, ~100–250 divisions) with the grid ends
 rounded to step multiples, so round handle values land **exactly** — MS step = 1 (so "10" filters at
 10.0, not ~9.4), association/SAR step = 0.005 (so 0.6 is exact). Set in `_axis_cfg` (`__RANGES__`).
+
+### Volcano gene search + PNG download (2026-11-04)
+
+- **Search bar** `#ifx-vsearch` (under the ligand row) shows while a ligand is click-pinned
+  (`syncVolSearch` after each `volPinIdx` change). `vsRender` autocompletes over `__VPOS__.genes`
+  (prefix matches first); `pinVolGene` adds to `volPins`, which stays across ligands and genes.
+- **Positions load lazily**: `volPinMarks(image)` asks `loadVpos`, which adds a `<script>` for
+  `gpos/<hash>.<id>.js` (works on `file://`, unlike `fetch`); `window.__vposAdd` decodes it and calls
+  `placeRings` again.
+- **`placeRings`** draws, on each `.vwrap` overlay, the focal ring (`pl[9]`), then each pinned gene as a hit:
+  a dot in the colour of a significant point (`#ff0051` logfc < 0, `#008bfb` > 0) + its name (the focal gene
+  keeps only the ring's label), a `.vpin-hit` circle with a `<title>` (≈ logfc, ≈ p from the quantised
+  position and the image's y-max), and "not measured: …" for genes the image lacks.
+- **Download** `.vdl` (top right of each `.vwrap`): `saveVolcanoPng` draws the title (`volTitle`: the stem
+  label + the cell label), the base image, the ring and the pins on a 1080 px canvas, then `saveBlob`.
+  On `file://` the canvas is tainted, so it opens the image instead.
+- The document key handler ignores keys typed in an `<input>` (no paging while typing in a search box).
 
 ### Feature blocks (all piggyback on `applyRanges`)
 
@@ -374,7 +410,8 @@ shut; applied through `setLabelsHook`). Keys ignore case, and `Plate=` / `Plates
 The Link button writes `labels=` only when the eye differs from the config default (`LABELS_ON`).
 A `p=` entry follows the `SHOW_PLATE` rule (`linkPlates`): `YYYYMMDD` or `YYYY-MM-DD` = the date block
 (its non-validation plates); `validationYYYYMMDD` (also with a space, `-` or `_`) = the validation
-block (the stems whose earliest plate date it is); any other entry = a plate name. If no entry matches,
+stems whose earliest plate date it is; `validation` = all validation plates (2026-11-04); any other entry
+= a plate name. If no entry matches,
 the default plates stay and `#sess-note` names the misses. A key that the hash does not name keeps its
 state (pins stay when only `Plate=` changes). A `hashchange` listener applies a new hash in an open
 tab; the Link button writes the hash with `history.replaceState`, so it does not re-apply.
@@ -418,9 +455,11 @@ while `valCatShown.rest` is false. The `.iface` session does not save `valCatSho
   `GENE_RING_PX` (ring rim thickness in px; underlay dot = fill + 2×this).
 - **`SHOW_PLATE` / `--show_plate`** — which blocks of the Plates filter open default-ticked.
   Config `SHOW_PLATE: [20260812, validation 20261006]`, or CLI `--show_plate "20260812, validation 20261006"`
-  (overrides the config). A date (`YYYYMMDD`) ticks the plates of that date block. `validation YYYYMMDD` ticks
-  all stems of that validation block. A validation stem is in the block of its earliest plate date, as the filter
-  shows it. A date entry never ticks a validation plate. Empty/absent → the single **latest** date only.
+  (overrides the config). A date (`YYYYMMDD`) ticks the plates of that date block. `validation` ticks all
+  validation plates. `validation YYYYMMDD` ticks the stems whose earliest plate date it is. The filter shows all
+  validation stems in ONE "validation" block with no dates, in plate-number order (`validationGroups`,
+  `localeCompare` numeric; 2026-11-04, before: one block per date). A date entry never ticks a validation
+  plate. Empty/absent → the single **latest** date only.
   `build_interface` resolves it via `resolve_plate_defaults(plate2date, SHOW_PLATE, VALIDATION_PLATE_SUFFIXES)`
   (normalises YYYYMMDD → the `YYYY-MM-DD` form `plate2date` stores) and passes the result as
   `plot_3d_interface(plate_defaults=)`. The JS ticks a plate when `plate_defaults` lists it. With no list, all
@@ -448,6 +487,9 @@ while `valCatShown.rest` is false. The `.iface` session does not save `valCatSho
   The page sets the z axis top again at each filter change (see `fitZ` in section 5). `null` fits all genes
   (the backdrop autorange, as before 2026-10-26). `build_interface` passes it as
   `plot_3d_interface(z_fit_pad=)`, which puts it in `__RANGES__.zFitPad`.
+- **`VOLCANO_GENE_SEARCH`** — `true`/absent: the build writes the volcano gene-search files (`gpos/`, about
+  250 MB on real data) and `__VPOS__ = {id, genes, axrect, xlim}`; `false`: `__VPOS__ = null` and no search
+  bar. `build_interface` passes it as `plot_3d_interface(volcano_gene_search=)`.
 - **`CONTROLS_ON`** — the state of the "control" compound tickbox (Activity panel) when the page opens.
   `true`/absent shows the `CONTROLS` compounds (since 2026-10-26; before, the build hid them). `false` hides
   them until the box is ticked. `build_interface` passes it as `plot_3d_interface(control_default_on=)`, which

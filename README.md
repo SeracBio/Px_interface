@@ -41,7 +41,7 @@ python python/Px_interface.py
 |---|---|---|
 | `--config` | `config/config.yaml` | path to the YAML config |
 | `--output_dir` | `output` | base dir for the HTML + volcanoes (`interfaces/` is created under it), or the config `PUBLISH_URL` to build and publish to AWS (see "Publish the interface") |
-| `--show_plate` | config `SHOW_PLATE` | Plates-filter blocks that start ticked, comma-separated: a date (`YYYYMMDD`) or `validation YYYYMMDD` |
+| `--show_plate` | config `SHOW_PLATE` | Plates that start ticked, comma-separated: a date (`YYYYMMDD`), `validation` (all validation plates) or `validation YYYYMMDD` |
 
 Four config flags set what the CLI rebuilds (the notebook uses the same flags):
 
@@ -63,7 +63,8 @@ The build reads two kinds of tranche folders (date-named subfolders, `YYYYMMDD�
   gets the date of its folder. If two folders hold the same plate, the later folder gives the date.
 - **`VALIDATION_DIR`** — validation exports (`*_REPORT.csv`, `*_MEASURE.csv`, with the plate in the
   contrast name). A folder date goes only to plates that have no date yet, so re-runs and primary-screen
-  references keep their first date. The Plates filter shows one validation block per date.
+  references keep their first date. The Plates filter shows all validation stems in one "validation"
+  dropdown, in plate-number order, with no dates (2026-11-04).
 
 If a contrast is in more than one folder, the build keeps the rows of the newest folder. It skips a
 per-target MSSCORE (no contrast column) and drops a contrast with no plate in the file or in its name.
@@ -233,6 +234,15 @@ python python/Px_interface.py --config config/config.yaml \
   --output_dir "https://advantedge.seracbio.com/Px_interface/"
 ```
 
+**AWS from the notebook** (2026-11-03). In `vignettes/MS_Interface.ipynb`, the publish cell after the build cell
+calls the same `publish_interface`. It pushes `OUTPUT_DIR/interfaces`, so keep `OUTPUT_DIR` equal to
+`PUBLISH_STAGE_DIR`. The kernel keeps the data:
+
+- After a change to the page code only, run the build cell and the publish cell again.
+- After a change to the data code (for example the MS score rule), run the data and output cells again first.
+
+"Run All" also runs the publish cell.
+
 **Dropbox ML folder (two commands).** The cluster has no Dropbox folder to write into. Build into the local
 `output` folder, then copy `output/interfaces` to Dropbox with rclone (quote the path: it contains spaces):
 
@@ -254,8 +264,9 @@ On a laptop with the Dropbox client, one command does the same: set `--output_di
 `".../Serac Biosciences Dropbox/Serac_team/4_Data_Sciences/15_ML"`.
 
 **Remove the unused volcano images (after a publish with new data).** The volcano file names carry a hash of
-their data (2026-10-23), so each data change renders new files and leaves the old ones. The publish never
-deletes. After the new page works, remove the old files with `python/prune_volcanoes.py`:
+their data (2026-10-23), so each data change renders new files and leaves the old ones. The same applies to
+the gene-search position files in `volcanoes_px/gpos/` (2026-11-04). The publish never deletes. After the new
+page works, remove the old files with `python/prune_volcanoes.py`:
 
 ```bash
 python python/prune_volcanoes.py output/interfaces --s3            # dry run: counts only
@@ -408,7 +419,8 @@ between entries:
 | Link | Plates ticked |
 |---|---|
 | `…/Px_interface/#Plate=20261006` | the date block 2026-10-06 (primary plates) |
-| `…/Px_interface/#Plate=validation20261006` | the validation block 2026-10-06 |
+| `…/Px_interface/#Plate=validation` | all validation plates |
+| `…/Px_interface/#Plate=validation20261006` | the validation stems first dated 2026-10-06 |
 | `…/Px_interface/#Plate=20261006,validation20261006` | both blocks |
 | `…/Px_interface/#Plate=Pw50,Pw63` | these plates only |
 
@@ -421,6 +433,23 @@ independent" box starts unticked (`FBXO31_INDEPENDENT_TICKED: false`), so only t
 show, e.g. `…/Px_interface/#Plate=validation20261006&Other=false`. `Other=true` shows the "other" genes
 again. The key acts in the V colour mode (the default). The **Link** button writes `other=false` while
 the "other" genes are hidden.
+
+**Find a gene in the volcanoes** (2026-11-04). Click a ligand image in the compound panel to pin its
+volcanoes. A search box then shows under the ligand row:
+
+1. Type a gene name, then push Enter (or click a suggestion, or **Pin**).
+2. The gene shows on every volcano like a hit: a red dot (logfc < 0) or a blue dot (logfc > 0), with its name.
+3. Hover the dot to see its logfc and p-value. The values are approximate (logfc to about ±0.03), because
+   the files keep 1 byte for each axis.
+4. Remove a gene with its ×, or remove all with **clear**.
+
+The pinned genes stay when you pin another ligand or another gene. A volcano that does not measure a pinned
+gene shows "not measured: …". The build writes one small position file per volcano
+(`volcanoes_px/gpos/`, about 250 MB for the 7,200 volcanoes) when config `VOLCANO_GENE_SEARCH: true`.
+
+**Save a volcano.** The icon at the top right of each volcano saves a PNG of it as shown: a title (gene,
+compound, plate, condition), the ring and the pinned genes. On the Dropbox copy (`file://`), the browser
+does not let the page make the PNG, so the icon opens the volcano image instead.
 
 The browser does not send the part after `#` to the server, so the link needs no server change.
 It also works on the Dropbox copy (`Serac_Px_interface.html#Plate=…`). A changed link in an open tab

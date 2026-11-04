@@ -1,10 +1,12 @@
 """Delete the volcano SVGs that the page does not use (2026-10-23: the names carry a data hash, so each data change
-leaves the old files). The local folder; with --s3 also the published copies: S3 (<PUBLISH_S3_PREFIX>volcanoes_px/)
+leaves the old files), and the gene-search position files of the volcano gene search that it does not use
+(volcanoes_px/gpos/<image hash>.<index id>.js, 2026-11-04: the page uses the file of each image it uses, with the
+index id of __VPOS__). The local folder; with --s3 also the published copies: S3 (<PUBLISH_S3_PREFIX>volcanoes_px/)
 and the box web folder. Dry run unless --apply. Prints counts only.
 Usage: python python/prune_volcanoes.py output/interfaces [--s3] [--apply] [--config config/config.yaml]
 Stops if the page is older than python/functions.py (built before the data-keyed names), if the page uses a file
 that the local folder or S3 lacks, or if S3 or the box holds another data.js (the published page is not this one)."""
-import argparse, os, re, sys
+import argparse, json, os, re, sys
 
 ap = argparse.ArgumentParser(description='Delete the volcano SVGs that the page does not use.')
 ap.add_argument('interfaces', help='the build folder that holds the page, e.g. output/interfaces')
@@ -21,21 +23,32 @@ vdir = os.path.join(d, 'volcanoes_px')
 page = [os.path.join(d, f) for f in ('Serac_Px_interface.html', 'Serac_Px_interface_data.js')]
 if min(os.path.getmtime(f) for f in page) < os.path.getmtime(os.path.join(repo, 'python', 'functions.py')):
     sys.exit('stop: the page is older than python/functions.py; run the new build first')
-used = set()
-for f in page:
-    used |= set(re.findall(r'[0-9a-f]{16}\.svg', open(f, encoding='utf-8').read()))
+texts = [open(f, encoding='utf-8').read() for f in page]
+used = set(re.findall(r'[0-9a-f]{16}\.svg', texts[0] + texts[1]))
+m = re.search(r'window\.__VPOS__ = JSON\.parse\("(.*?)"\);', texts[1], re.S)
+gid = json.loads(json.loads('"' + m.group(1) + '"'))['id'] if m else None
+g_used = {f'{f[:-4]}.{gid}.js' for f in used} if gid else set()
 
 # 1. the local folder
+gdir = os.path.join(vdir, 'gpos')
 have = {f for f in os.listdir(vdir) if f.endswith('.svg')}
+g_have = {f for f in os.listdir(gdir) if f.endswith('.js')} if os.path.isdir(gdir) else set()
 missing, old = used - have, sorted(have - used)
+g_missing, g_old = g_used - g_have, sorted(g_have - g_used)
 print(f'local: page uses {len(used):,} svg | folder has {len(have):,} | used but missing {len(missing):,} | '
       f'not used {len(old):,} ({sum(os.path.getsize(os.path.join(vdir, f)) for f in old) / 1e6:.0f} MB)')
-if missing:
+if g_used or g_have:
+    print(f'local gpos: page uses {len(g_used):,} | folder has {len(g_have):,} | used but missing {len(g_missing):,} | '
+          f'not used {len(g_old):,} ({sum(os.path.getsize(os.path.join(gdir, f)) for f in g_old) / 1e6:.0f} MB)')
+if missing or g_missing:
     sys.exit('stop: the page uses files that the folder lacks; check the build first')
 if args.apply:
     for f in old:
         os.remove(os.path.join(vdir, f))
-    print(f'local: deleted {len(old):,} files; {len(have) - len(old):,} remain')
+    for f in g_old:
+        os.remove(os.path.join(gdir, f))
+    print(f'local: deleted {len(old) + len(g_old):,} files; {len(have) - len(old):,} svg and '
+          f'{len(g_have) - len(g_old):,} gpos files remain')
 if not args.s3:
     if not args.apply:
         print('dry run: add --apply to delete')
@@ -59,14 +72,20 @@ if inv['Status'] != 'Success' or len(out) < 2:
 box_size, box_n = int(out[0]), int(out[1])
 if box_size != size:
     sys.exit('stop: the box holds another data.js; publish this page first')
-keys = [o['Key'] for pg in s3.get_paginator('list_objects_v2').paginate(Bucket=bucket, Prefix=prefix + 'volcanoes_px/')
-        for o in pg.get('Contents', []) if o['Key'].endswith('.svg')]
-names = {k.rsplit('/', 1)[1] for k in keys}
+all_keys = [o['Key'] for pg in s3.get_paginator('list_objects_v2').paginate(Bucket=bucket, Prefix=prefix + 'volcanoes_px/')
+            for o in pg.get('Contents', [])]
+keys = [k for k in all_keys if k.endswith('.svg')]
+g_keys = [k for k in all_keys if k.startswith(prefix + 'volcanoes_px/gpos/') and k.endswith('.js')]
+names, g_names = {k.rsplit('/', 1)[1] for k in keys}, {k.rsplit('/', 1)[1] for k in g_keys}
 s3_old = sorted(k for k in keys if k.rsplit('/', 1)[1] not in used)
+s3_g_old = sorted(k for k in g_keys if k.rsplit('/', 1)[1] not in g_used)
 print(f'S3: {len(names):,} svg | used but missing {len(used - names):,} | not used {len(s3_old):,}')
+if g_used or g_keys:
+    print(f'S3 gpos: {len(g_names):,} files | used but missing {len(g_used - g_names):,} | not used {len(s3_g_old):,}')
 print(f'box: {box_n:,} svg | not used about {box_n - len(used):,}')
-if used - names:
+if used - names or g_used - g_names:
     sys.exit('stop: S3 lacks files that the page uses; publish this page first')
+s3_old += s3_g_old
 if not args.apply:
     print('dry run: add --apply to delete')
     sys.exit()

@@ -3,6 +3,34 @@ _Durable, aggregate memory of this repo — read at session start. Aggregate onl
 
 ## Where we are now
 - **Focus:** building the per-gene 3D Px interface (`Serac_Px_interface.html`) via `fn.plot_3d_interface`.
+- **Volcano gene search + PNG download (2026-11-04, STE): code done, 145 tests OK; needs a build and a
+  publish.** User requests: (2) a gene search under a click-pinned ligand that shows any gene on its volcanoes
+  as if significant; (3) a download icon at the top right of each volcano. User choices: the hit look (red
+  logfc < 0 / blue > 0 + name; hover = approx. logfc and p; "not measured" note); the pins stay across ligands
+  and genes; PNG as shown (title, ring, pins); the extra data is OK. Facts (real `meas.parquet`, counts only):
+  80.2 M rows, 9,074 contrasts, 13,265 distinct genes, median 8,394 rows per contrast; the page uses 7,171
+  volcano images. Design: the base image rasterises the grey cloud, so the build writes one position file per
+  image, `volcanoes_px/gpos/<hash>.<index id>.js` (uint8 axes x/y per gene of an only-growing index
+  `gpos/genes.json`, 255 = not measured; ~35 KB each, ~250 MB in all), computed only for images without a
+  file; the page loads a file by `<script>` only while a gene is pinned (`__VPOS__ = {id, genes, axrect, xlim}`).
+  A plain plate-row has no vk (`pl[7]` empty), so the image→vk map comes from the render pass and
+  `volcanoes_px/image_vk.json`, or `_volcano_image_vk` on a cached panel build. Config `VOLCANO_GENE_SEARCH`
+  (default true). `prune_volcanoes.py` also deletes unused gpos files (local + S3; the box sync follows). PNG:
+  canvas 1080 px + title, `saveBlob`; on `file://` the canvas is tainted, so the icon opens the image. Tests:
+  `TestVolcanoGeneSearch` (positions = `_ring_frac` on rendered images within one quantum; index only grows;
+  files written once), `TestRender.test_volcano_gene_search_files`, `TestPruneVolcanoes.test_prune_gene_search_files`.
+  Headless Chrome, synthetic `tmp_vdir` build: the bar shows only after a ligand pin; the pinned focal gene's
+  dot sits 0.51 px from its ring; pins stay on the next ligand; PNG 1080x1170 saved; no JS error.
+- **One "validation" dropdown in the Plates filter (2026-11-04, STE): code done, 140 tests OK; needs a page
+  build and a publish.** User request: no dates for validation plates. All stems (real build: 28 stems, 57
+  plates, before in 3 date blocks 2026-06-01 / 08-17 / 10-06) sit in one block, in plate-number order (user
+  choice; `localeCompare` numeric). User choice: keep the date entries and add `validation` (no date) = all
+  validation plates, in `SHOW_PLATE`/`--show_plate` (`resolve_plate_defaults`) and in `#Plate=` (`linkPlates`).
+  `validation YYYYMMDD` still ticks the stems first dated then (the dropdown box shows partly ticked).
+  Tests: `test_one_validation_block_wired` (replaces `test_validation_blocks_by_date_wired`),
+  `TestResolvePlateDefaults.test_validation_ticks_all_validation_plates`, a line in `test_plate_link_wired`.
+  Headless Chrome, synthetic `tmp_vdir` build: 1 block, 5 stems in order, `#Plate=validation` ticks all
+  and no primary plate, no JS error. Page code + driver only: build with `IFACE_OVERWRITE: false`, publish.
 - **Link key `#Other=false` (2026-10-27, STE): code done, 139 tests OK; needs a page build and a publish.**
   User request: a link that shows only the FBXO31-dependent genes. `Other=false` (also off/0/no; any case)
   hides the V-mode "other" genes as the "other" legend click does (`valCatShown.rest`, `setOtherHook` in the
@@ -421,8 +449,8 @@ data shares the namespace); no real PNGs so thumbnails are RDKit-rendered from `
     contrast in several tranches keeps only the NEWEST tranche's rows (all three FBX tables; read newest-first
     with a seen-set). (3) An MSSCORE without `uniquecontrast` is skipped with a note. (4) A row with no plate
     in the file or the name is dropped at load with a note (it crashed `_stem_shared_ymax`: float plate).
-    (5) The Plates filter shows one "validation <date>" block per date; a stem sits under its earliest plate
-    date. Keep `Data_Prototype/20260817` in place: it gives the …VM plates 2026-08-17 (FBX last-wins over the
+    (5) The Plates filter showed one "validation <date>" block per date (a stem under its earliest plate
+    date) until 2026-11-04; now ONE "validation" block (see "Where we are now"). Keep `Data_Prototype/20260817` in place: it gives the …VM plates 2026-08-17 (FBX last-wins over the
     2026-06-01 Pw105VM WT/KO); without it they keep 2026-06-01. Tests: `TestValidationDir` (7) +
     `test_validation_blocks_by_date_wired`; fixture `make_synthetic.add_validation_dir`.
 - **`plate_dates=` →** Plates filter renders **nested-by-date** (collapsible per-date sub-blocks,
@@ -908,6 +936,11 @@ and a *merged* cluster means either a <55px (tight, good) gap or an overlap (loo
 - Local-only data policy (see CLAUDE.md): chemistry data never leaves the machine.
 - AWS access (user decision, 2026-10-26): no SSO + MFA. The shared 1Password password plus the VPN into the VPC
   is enough.
+- Publish paths (user decision, 2026-11-03): `px.publish_interface` pushes the interface, from the CLI
+  (`--output_dir <PUBLISH_URL>`) or from the publish cell `5b1e9c4a` of `vignettes/MS_Interface.ipynb` (after
+  the build cell `dad5785b`; import cell `056e1d60` imports `aws_publish_targets, publish_interface`). The
+  CLAUDE.md rule "only the CLI makes this push" now names both paths. Notebook risk: a stale kernel can publish
+  a page from data that older code built, so run the data and output cells again after a data-code change.
 
 ## Log
 - 2026-06-23 — repo created: copied `functions.py`/`config.yaml`/`CLAUDE.md` + the notebook from
