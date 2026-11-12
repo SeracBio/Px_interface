@@ -930,17 +930,72 @@ _INTERFACE_INJECT = '''
   .plotly-graph-div, .js-plotly-plot {
     width: 96vw !important; height: 94vh !important; margin: 0 auto !important;
   }
-  #hover-img { position: fixed; top: 12px; right: 12px; z-index: 9999;
+  #hover-img { position: fixed; top: calc(var(--tabh) + 12px); right: 12px; z-index: 9999;
                background: white; border: 1px solid #bbb; padding: 6px;
                border-radius: 6px; box-shadow: 0 2px 8px rgba(0,0,0,0.15);
                display: none; font: 11px sans-serif; color: #333;
-               max-height: 92vh; overflow-y: auto; max-width: 96vw;
+               max-height: calc(92vh - var(--tabh)); overflow-y: auto; max-width: 96vw;
                user-select: text; }
   #hover-img.pinned { border-color: #1D3557; border-width: 2px; padding: 5px;
                       box-shadow: 0 4px 14px rgba(0,0,0,0.25); }
-  #ifx-dev { position: fixed; top: 6px; left: 50%; transform: translateX(-50%); z-index: 9998;
-             background: #d9480f; color: white; font: bold 12px sans-serif; letter-spacing: 1px;
-             padding: 2px 10px; border-radius: 4px; pointer-events: none; }
+  /* Tabs (2026-11-12): Explorer (the plot and its panels) and Compound (the tested-target table). The bar
+     height moves the Explorer down; the Compound view covers the Explorer, which stays drawn below it. */
+  :root { --tabh: 32px; }
+  #ifx-tabs { position: fixed; top: 0; left: 0; right: 0; height: var(--tabh); box-sizing: border-box;
+              z-index: 10003; display: flex; align-items: flex-end; gap: 4px; padding: 0 12px;
+              background: #fff; border-bottom: 1px solid #cdd6e0; font: 600 12px sans-serif; }
+  #ifx-tabs .tab { padding: 6px 16px; color: #1D3557; cursor: pointer; user-select: none;
+                   border: 1px solid transparent; border-bottom: none; border-radius: 6px 6px 0 0; }
+  #ifx-tabs .tab:hover { background: #eef2f7; }
+  #ifx-tabs .tab.on { background: #fff; border-color: #cdd6e0; margin-bottom: -1px; padding-bottom: 7px; }
+  #ifx-dev { align-self: center; margin-left: auto; background: #d9480f; color: white;
+             font: bold 12px sans-serif; letter-spacing: 1px; padding: 2px 10px; border-radius: 4px;
+             pointer-events: none; }
+  #cmp-view { position: fixed; top: var(--tabh); left: 0; right: 0; bottom: 0; z-index: 10002;
+              display: none; flex-direction: column; background: #fff; font: 12px sans-serif; color: #333; }
+  body.tab-cmp #cmp-view { display: flex; }
+  #cmp-view .cmp-bar { flex: 0 0 auto; display: flex; flex-direction: column; gap: 6px;
+                       padding: 8px 12px; border-bottom: 1px solid #e3e8ef; }
+  #cmp-view .cmp-line { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+  #cmp-view .cmp-filters { font-size: 11px; }
+  #cmp-view .cmp-filters label { cursor: pointer; white-space: nowrap; }
+  #cmp-view .cmp-filters input { margin: 0 4px 0 0; vertical-align: -2px; }
+  #cmp-view .cmp-flab { font-weight: 700; color: #1D3557; margin-left: 6px; }
+  #cmp-view .cmp-flab:first-child { margin-left: 0; }
+  #cmp-view .cmp-an span { color: #1D3557; cursor: pointer; font-size: 10px; }
+  #cmp-view .cmp-an span:hover { text-decoration: underline; }
+  #cmp-acts { display: inline-flex; gap: 10px; flex-wrap: wrap; }
+  #cmp-view .cmp-pager { display: inline-flex; align-items: center; gap: 8px; margin-left: auto; }
+  #cmp-view .pg-btn { cursor: pointer; user-select: none; font-size: 13px; color: #1D3557; padding: 0 8px;
+                      border-radius: 4px; border: 1px solid #cdd6e0; line-height: 1.6; }
+  #cmp-view .pg-btn:hover { background: #eef2f7; }
+  #cmp-view .pg-btn.disabled { color: #ccc; border-color: #eee; cursor: default; background: none; }
+  #cmp-page { font-size: 11px; color: #555; min-width: 110px; text-align: center; }
+  #cmp-scroll { flex: 1 1 auto; overflow: auto; }
+  #cmp-search { flex: 0 1 420px; padding: 4px 8px; font: 12px sans-serif; border: 1px solid #bbb; border-radius: 4px; }
+  #cmp-count { color: #555; font-size: 11px; }
+  #cmp-table { border-collapse: collapse; margin: 0 12px 24px; min-width: 760px; }
+  #cmp-table th { position: sticky; top: 0; z-index: 2; background: #f3f6fb; color: #1D3557; text-align: left;
+                  padding: 6px 10px; border-bottom: 1px solid #cdd6e0; cursor: pointer; user-select: none;
+                  white-space: nowrap; }
+  #cmp-table th:hover { background: #e8eef6; }
+  #cmp-table th .srt { color: #1D3557; font-size: 9px; padding-left: 4px; }
+  #cmp-table td { padding: 5px 10px; border-bottom: 1px solid #eef1f5; vertical-align: middle; }
+  #cmp-table td.st, #cmp-table th.st { text-align: center; }
+  #cmp-table tr.cmp-row:hover td { background: #f8fafc; }
+  #cmp-table tr.cmp-row.open td { background: #f3f6fb; }
+  #cmp-table td.cmp-arw { width: 14px; padding-right: 0; cursor: pointer; }
+  #cmp-view .fp-caret { display: inline-block; width: 10px; color: #1D3557; transition: transform .12s; }
+  #cmp-table tr.cmp-row:not(.open) .fp-caret { transform: rotate(-90deg); }
+  #cmp-table .st-y { color: #2b9348; font-weight: 700; font-size: 14px; }
+  #cmp-table .st-n { color: #d62828; font-weight: 700; font-size: 14px; }
+  #cmp-table tr.cmp-detail > td { padding: 4px 10px 12px 34px; background: #fff; }
+  #cmp-view .volcano { margin-top: 6px; text-align: left; }
+  #cmp-view .cmp-none { color: #999; font-style: italic; padding: 6px 2px; }
+  #cmp-img { position: fixed; display: none; z-index: 5; background: #fff; border: 1px solid #cdd6e0; border-radius: 4px;
+             padding: 4px; box-shadow: 0 2px 8px rgba(0,0,0,.18); pointer-events: none; }
+  #cmp-img img { display: block; max-width: 320px; max-height: 240px; }
+  #cmp-img .noimg { color: #999; font-style: italic; padding: 8px 12px; }
   /* The panel is fixed to the right edge and grows to the left when volcanoes open: keep the row at its own
      width on the right, so the compound cells stay under the pointer (2026-10-23). */
   #hover-img .row { display: flex; flex-direction: row; gap: 6px;
@@ -988,78 +1043,78 @@ _INTERFACE_INJECT = '''
                               text-align: center; }
   #hover-img .empty { color: #999; font-style: italic; padding: 6px 2px; }
   #hover-img .volcano { display: none; margin-top: 6px; text-align: center; }
-  #hover-img .volcano .vlabel { font-size: 10px; color: #555; margin: 4px 0 2px 0; }
-  #hover-img .volcano .vmiss { color: #bbb; font-style: italic; font-size: 10px; }
-  #hover-img .volcano img { max-width: 100%; height: auto;
+  :is(#hover-img, #cmp-view) .volcano .vlabel { font-size: 10px; color: #555; margin: 4px 0 2px 0; }
+  :is(#hover-img, #cmp-view) .volcano .vmiss { color: #bbb; font-style: italic; font-size: 10px; }
+  :is(#hover-img, #cmp-view) .volcano img { max-width: 100%; height: auto;
                             border: 1px solid #eee; border-radius: 4px; }
   /* interactive SVG volcano (hover a significant point -> gene-name tooltip) */
-  #hover-img .volcano .vobj { width: 360px; height: 360px; max-width: 100%;
+  :is(#hover-img, #cmp-view) .volcano .vobj { width: 360px; height: 360px; max-width: 100%;
                               border: 1px solid #eee; border-radius: 4px; display: block;
                               margin: 0 auto; }
   /* focal-gene ring drawn client-side over the shared per-experiment base volcano */
-  #hover-img .volcano .vwrap { position: relative; display: inline-block; }
-  #hover-img .volcano .vringsvg { position: absolute; left: 0; top: 0; pointer-events: none;
+  :is(#hover-img, #cmp-view) .volcano .vwrap { position: relative; display: inline-block; }
+  :is(#hover-img, #cmp-view) .volcano .vringsvg { position: absolute; left: 0; top: 0; pointer-events: none;
                                   overflow: visible; z-index: 3; }
-  #hover-img .volcano .vringsvg .vpin-hit { pointer-events: all; }   /* hover a pinned gene -> its values */
+  :is(#hover-img, #cmp-view) .volcano .vringsvg .vpin-hit { pointer-events: all; }   /* hover a pinned gene -> its values */
   /* download icon at the top right of each volcano (saves a PNG as shown) */
-  #hover-img .volcano .vdl { position: absolute; top: 3px; right: 3px; z-index: 6; width: 18px; height: 18px;
+  :is(#hover-img, #cmp-view) .volcano .vdl { position: absolute; top: 3px; right: 3px; z-index: 6; width: 18px; height: 18px;
                              line-height: 16px; font-size: 12px; text-align: center; cursor: pointer; color: #1D3557;
                              background: rgba(255,255,255,0.85); border: 1px solid #cdd6e0; border-radius: 3px; }
-  #hover-img .volcano .vdl:hover { background: #eef2f7; }
+  :is(#hover-img, #cmp-view) .volcano .vdl:hover { background: #eef2f7; }
   /* volcano gene search: shown while a ligand's volcanoes are click-pinned */
-  #hover-img .vsearch { display: none; align-items: center; gap: 6px; flex-wrap: wrap; margin-top: 6px; }
-  #hover-img .vsearch.on { display: flex; }
-  #hover-img .vs-wrap { position: relative; display: flex; gap: 5px; flex: 0 1 360px; }
-  #hover-img #ifx-vs-in { flex: 1 1 auto; min-width: 0; padding: 3px 6px; font: 12px sans-serif;
+  :is(#hover-img, #cmp-view) .vsearch { display: none; align-items: center; gap: 6px; flex-wrap: wrap; margin-top: 6px; }
+  :is(#hover-img, #cmp-view) .vsearch.on { display: flex; }
+  :is(#hover-img, #cmp-view) .vs-wrap { position: relative; display: flex; gap: 5px; flex: 0 1 360px; }
+  :is(#hover-img, #cmp-view) .vs-in { flex: 1 1 auto; min-width: 0; padding: 3px 6px; font: 12px sans-serif;
                           border: 1px solid #bbb; border-radius: 4px; }
-  #hover-img .vs-btn { flex: 0 0 auto; padding: 3px 10px; font: 600 11px sans-serif; cursor: pointer; color: #fff;
+  :is(#hover-img, #cmp-view) .vs-btn { flex: 0 0 auto; padding: 3px 10px; font: 600 11px sans-serif; cursor: pointer; color: #fff;
                        background: #1D3557; border: none; border-radius: 4px; }
-  #hover-img .vs-btn:hover { background: #16324f; }
-  #hover-img .vs-ac { position: absolute; top: 100%; left: 0; right: 0; z-index: 10001; display: none;
+  :is(#hover-img, #cmp-view) .vs-btn:hover { background: #16324f; }
+  :is(#hover-img, #cmp-view) .vs-ac { position: absolute; top: 100%; left: 0; right: 0; z-index: 10001; display: none;
                       background: #fff; border: 1px solid #bbb; border-top: none; border-radius: 0 0 4px 4px;
                       max-height: 220px; overflow-y: auto; box-shadow: 0 3px 8px rgba(0,0,0,0.15); text-align: left; }
-  #hover-img .vs-ac .ac-item { padding: 3px 8px; font: 12px sans-serif; cursor: pointer; }
-  #hover-img .vs-ac .ac-item.active, #hover-img .vs-ac .ac-item:hover { background: #e8eef6; }
-  #hover-img .vs-ac .ac-empty { padding: 3px 8px; font: 12px sans-serif; color: #999; }
-  #hover-img .vs-chip { display: inline-flex; align-items: center; gap: 4px; margin: 0 3px 0 0;
+  :is(#hover-img, #cmp-view) .vs-ac .ac-item { padding: 3px 8px; font: 12px sans-serif; cursor: pointer; }
+  :is(#hover-img, #cmp-view) .vs-ac .ac-item.active, :is(#hover-img, #cmp-view) .vs-ac .ac-item:hover { background: #e8eef6; }
+  :is(#hover-img, #cmp-view) .vs-ac .ac-empty { padding: 3px 8px; font: 12px sans-serif; color: #999; }
+  :is(#hover-img, #cmp-view) .vs-chip { display: inline-flex; align-items: center; gap: 4px; margin: 0 3px 0 0;
                         padding: 1px 4px 1px 7px; font: 11px sans-serif; background: #fff;
                         border: 1px solid #1D3557; border-radius: 10px; }
-  #hover-img .vs-x { cursor: pointer; color: #888; font-weight: 700; padding: 0 2px; }
-  #hover-img .vs-x:hover, #hover-img .vs-clear:hover { color: #1D3557; }
-  #hover-img .vs-clear { cursor: pointer; color: #888; font-size: 10px; }
+  :is(#hover-img, #cmp-view) .vs-x { cursor: pointer; color: #888; font-weight: 700; padding: 0 2px; }
+  :is(#hover-img, #cmp-view) .vs-x:hover, :is(#hover-img, #cmp-view) .vs-clear:hover { color: #1D3557; }
+  :is(#hover-img, #cmp-view) .vs-clear { cursor: pointer; color: #888; font-size: 10px; }
   /* Grouped validation volcanoes: one stem per row, its conditions (WT/MLN/KO) side by side. */
-  #hover-img .volcano .vstem-lab { font-weight: 600; color: #1D3557; margin: 8px 0 2px;
+  :is(#hover-img, #cmp-view) .volcano .vstem-lab { font-weight: 600; color: #1D3557; margin: 8px 0 2px;
                                    text-align: left; }
-  #hover-img .volcano .vstem { display: flex; flex-direction: row; gap: 8px;
+  :is(#hover-img, #cmp-view) .volcano .vstem { display: flex; flex-direction: row; gap: 8px;
                                align-items: flex-start; flex-wrap: nowrap; overflow-x: auto;
                                padding-bottom: 4px; position: relative; }
-  #hover-img .volcano .vstem .vcell { flex: 0 0 auto; text-align: center; }
-  #hover-img .volcano .vstem .vcell .vlabel { text-align: center; }
-  #hover-img .volcano .vstem .vcell.vcomp { opacity: 0.85; }
+  :is(#hover-img, #cmp-view) .volcano .vstem .vcell { flex: 0 0 auto; text-align: center; }
+  :is(#hover-img, #cmp-view) .volcano .vstem .vcell .vlabel { text-align: center; }
+  :is(#hover-img, #cmp-view) .volcano .vstem .vcell.vcomp { opacity: 0.85; }
   /* broad primary-screen volcano prepended to a stem: set off by a left rule + a tinted label */
-  #hover-img .volcano .vstem .vcell.vprimary { border-left: 2px solid #1D6FB8; padding-left: 6px; margin-left: 2px; }
-  #hover-img .volcano .vstem .vcell.vprimary .vlabel { color: #1D6FB8; font-weight: 700; }
+  :is(#hover-img, #cmp-view) .volcano .vstem .vcell.vprimary { border-left: 2px solid #1D6FB8; padding-left: 6px; margin-left: 2px; }
+  :is(#hover-img, #cmp-view) .volcano .vstem .vcell.vprimary .vlabel { color: #1D6FB8; font-weight: 700; }
   /* overlay tracing the hovered gene's marker across a stem's WT/MLN/KO volcanoes */
-  #hover-img .volcano .vstem .vstem-trace { position: absolute; left: 0; top: 0;
+  :is(#hover-img, #cmp-view) .volcano .vstem .vstem-trace { position: absolute; left: 0; top: 0;
                                             pointer-events: none; overflow: visible; z-index: 4; }
   /* invisible hover-targets over each significant-down gene point (drive the trace on hover) */
-  #hover-img .volcano .vstem .vhot { position: absolute; width: 14px; height: 14px;
+  :is(#hover-img, #cmp-view) .volcano .vstem .vhot { position: absolute; width: 14px; height: 14px;
                                      border-radius: 50%; cursor: pointer; z-index: 5; }
-  #hover-img .volcano .vstem .vhot:hover { box-shadow: 0 0 0 2px #1D6FB8 inset; }
-  #hover-img .volcano .vns { color: #b8860b; font-style: italic; }
+  :is(#hover-img, #cmp-view) .volcano .vstem .vhot:hover { box-shadow: 0 0 0 2px #1D6FB8 inset; }
+  :is(#hover-img, #cmp-view) .volcano .vns { color: #b8860b; font-style: italic; }
   /* Pin the Plotly plot to a bounded box to the RIGHT of the filter panel and ABOVE the
      range panel, instead of letting the responsive plot fill the whole window. This makes
      the plot fit + stay centred on ANY viewport (incl. short laptop screens) — a window-
      filling plot overflowed vertically on short viewports. left clears the 415px panel;
      bottom clears the range panel. Plotly (responsive) resizes to fill this box. */
   .plotly-graph-div { position: fixed !important; left: 455px !important; right: 8px !important;
-                      top: 8px !important; bottom: 205px !important;
+                      top: calc(var(--tabh) + 8px) !important; bottom: 205px !important;
                       width: auto !important; height: auto !important; }
   /* Plate filter — tick boxes choosing which plates' compounds + volcanoes show. */
-  #filter-panel { position: fixed; top: 12px; left: 12px; z-index: 9998;
+  #filter-panel { position: fixed; top: calc(var(--tabh) + 12px); left: 12px; z-index: 9998;
                   background: white; border: 1px solid #bbb; border-radius: 6px;
                   padding: 6px 8px; box-shadow: 0 2px 8px rgba(0,0,0,0.12);
-                  font: 11px sans-serif; color: #333; max-height: 80vh; width: 415px;
+                  font: 11px sans-serif; color: #333; max-height: calc(80vh - var(--tabh)); width: 415px;
                   overflow-y: auto; display: none; user-select: none; }
   #filter-panel .fp-group + .fp-group { margin-top: 8px; }
   /* section labels grouping the filters (Compound filters / Target filters) */
@@ -1204,7 +1259,7 @@ _INTERFACE_INJECT = '''
   #sess-save-btn:hover, #sess-load-btn:hover { background: #16324f; }
   #sess-note { margin-top: 5px; font: 11px sans-serif; color: #2A9D8F; word-break: break-all; }
   #size-legend {           /* docked just above the top-right gene legend (positioned in JS) */
-    position: fixed; top: 64px; right: 18px; z-index: 9998;
+    position: fixed; top: calc(var(--tabh) + 64px); right: 18px; z-index: 9998;
     background: white; border: 1px solid #bbb; padding: 6px 8px;
     border-radius: 6px; box-shadow: 0 2px 8px rgba(0,0,0,0.12);
     font: 11px sans-serif; color: #333; user-select: none;
@@ -1277,6 +1332,31 @@ _INTERFACE_INJECT = '''
                            font-weight: 400; }
   #range-panel .rp-reset:hover { text-decoration: underline; }
 </style>
+<div id="ifx-tabs">
+  <div class="tab on" data-tab="explorer">Explorer</div>
+  <div class="tab" data-tab="compound" title="One row per Molecule-Batch ID and gene: the significant hits and the tested targets">Compound</div>
+</div>
+<div id="cmp-view">
+  <div class="cmp-bar">
+    <div class="cmp-line">
+      <input type="search" id="cmp-search" placeholder="search a Molecule-Batch ID or a gene…" autocomplete="off" spellcheck="false">
+      <span id="cmp-count"></span>
+      <span class="cmp-pager"><span class="pg-btn" id="cmp-prev" title="previous page">◀</span><span id="cmp-page"></span><span class="pg-btn" id="cmp-next" title="next page">▶</span></span>
+    </div>
+    <div class="cmp-line cmp-filters">
+      <span class="cmp-flab">Plates</span>
+      <label title="the rows whose gene went down significantly in a primary-screen experiment of the batch; an open row shows the primary-screen volcanoes"><input type="checkbox" id="cmp-prim" checked>primary</label>
+      <label title="the rows whose gene went down significantly in a validation experiment (WT, KO, MLN, BIND) of the batch, and the tested targets; an open row shows these volcanoes"><input type="checkbox" id="cmp-val" checked>validation</label>
+      <span class="cmp-flab cmp-dv">Compounds</span>
+      <label class="cmp-dv" title="the compounds of the devalidated list (the Explorer Validation filter); untick to hide their rows"><input type="checkbox" id="cmp-dv" checked>devalidated</label>
+      <span class="cmp-flab" title="the number of genes that an experiment significantly down-modulated, in buckets; a row shows when one of its hits (or tested-target experiments) on a ticked plate kind has a ticked level">Activity</span>
+      <span class="cmp-an"><span data-a="all">all</span> / <span data-a="none">none</span></span>
+      <span id="cmp-acts"></span>
+    </div>
+  </div>
+  <div id="cmp-scroll"><table id="cmp-table"><thead></thead><tbody></tbody></table></div>
+  <div id="cmp-img"></div>
+</div>
 <div id="filter-panel">
   <div class="fp-section fp-collap" id="sec-search"><span class="fp-caret">&#9662;</span>PIN/HIDE</div>
   <div class="fp-group" id="search-group">
@@ -1372,7 +1452,7 @@ _INTERFACE_INJECT = '''
   <div class="row" id="ifx-row"></div>
   <div class="vsearch" id="ifx-vsearch">
     <div class="vs-wrap">
-      <input type="text" id="ifx-vs-in" placeholder="search a gene to show in the volcanoes…" autocomplete="off" spellcheck="false">
+      <input type="text" id="ifx-vs-in" class="vs-in" placeholder="search a gene to show in the volcanoes…" autocomplete="off" spellcheck="false">
       <button class="vs-btn" id="ifx-vs-btn" title="Show this gene in every volcano, like a hit">Pin</button>
       <div class="vs-ac" id="ifx-vs-ac"></div>
     </div>
@@ -1408,6 +1488,7 @@ _INTERFACE_INJECT = '''
 </div>
 <script>
   document.addEventListener("DOMContentLoaded", function() {
+    var TABH  = (document.getElementById("ifx-tabs") || {}).offsetHeight || 0;   // the tab bar moves the Explorer down
     var box   = document.getElementById("hover-img");
     var row   = document.getElementById("ifx-row");
     var gn    = document.getElementById("ifx-gene");
@@ -1641,10 +1722,10 @@ _INTERFACE_INJECT = '''
         // size box never runs off the right edge of the window.
         var left = Math.min(r.left, window.innerWidth - sizeEl.offsetWidth - 12);
         sizeEl.style.left = Math.max(8, left) + "px";
-        sizeEl.style.top = Math.max(8, r.top - sizeEl.offsetHeight - 8) + "px";
+        sizeEl.style.top = Math.max(TABH + 8, r.top - sizeEl.offsetHeight - 8) + "px";
         sizeEl.style.right = "auto";
       } else {   // legend not drawn yet — fall back to fixed top-right
-        sizeEl.style.top = "64px"; sizeEl.style.right = "18px"; sizeEl.style.left = "auto";
+        sizeEl.style.top = (TABH + 64) + "px"; sizeEl.style.right = "18px"; sizeEl.style.left = "auto";
       }
     }
     positionSizeLegend();
@@ -2116,23 +2197,21 @@ _INTERFACE_INJECT = '''
     }
     // Volcano element = the shared per-experiment base <object> wrapped so the focal-gene ring
     // (pl[9] = [fx,fy], drawn client-side by placeRings) can be overlaid on top. '' -> no volcano.
-    function volEl(pl) {
+    function volEl(pl, gene) {
       if (!pl[2]) return '<div class="vmiss">(no volcano)</div>';
       var pos = pl[9];
       var attr = (pos && pos.length === 2) ? ' data-fx="' + pos[0] + '" data-fy="' + pos[1] + '"' : '';
       var dl = VMODE === "svg" ? '<span class="vdl" title="Save this volcano as PNG"><svg viewBox="0 0 16 16" width="12" height="12">'
              + '<path d="M8 2v8M4.5 6.5 8 10l3.5-3.5M3 13.5h10" fill="none" stroke="currentColor" stroke-width="1.8" '
              + 'stroke-linecap="round" stroke-linejoin="round"/></svg></span>' : '';
-      return '<div class="vwrap"' + attr + '>' + vimg(pl[2]) + dl + '</div>';
+      return '<div class="vwrap" data-g="' + rbEsc(gene) + '"' + attr + '>' + vimg(pl[2]) + dl + '</div>';
     }
-    function buildVolcanoHtml(cell) {
-      var idx = parseInt(cell.getAttribute("data-eidx"), 10);
-      var t = fullArr[idx];
-      if (!t) return "";
-      var cmp = cell.getAttribute("data-cmp") || "";
+    // The volcanoes of entry t for `gene`: the plate-rows vps grouped into validation stems (the primary screen
+    // first), then the other plates stacked. The Explorer passes the visible rows, the Compound tab the rows of
+    // the ticked plate kinds.
+    function volcanoHtml(t, vps, gene, cmp) {
       var html = "";
       if (isPaged(t)) {
-        var vps = visPlates(t);
         if (!vps.length) return "";
         // Validation plates: group by stem, conditions side by side (WT/MLN/KO) so the gene's
         // location can be compared across the same plate's conditions at a glance. The compound's
@@ -2148,7 +2227,7 @@ _INTERFACE_INJECT = '''
           var lbl = lead ? 'primary screen' : (valSufOf(pl[0]) || pl[0]);
           return '<div class="vcell' + (pl[6] ? ' vcomp' : '') + (lead ? ' vprimary' : '') + '" data-vk="' + (pl[7] || '') + '">'
                + '<div class="vlabel">' + lbl + ' (logfc ' + pl[1] + ')' + act + ns + '</div>'
-               + volEl(pl) + '</div>';
+               + volEl(pl, gene) + '</div>';
         }
         var groups = {}, gorder = [];
         valRows.forEach(function(pl) {
@@ -2159,7 +2238,7 @@ _INTERFACE_INJECT = '''
         gorder.sort(function(a, b) { return a < b ? -1 : (a > b ? 1 : 0); });
         gorder.forEach(function(st) {
           groups[st].sort(function(a, b) { return valRank(a[0]) - valRank(b[0]); });
-          html += '<div class="vstem-lab">' + currentGene + ' · ' + (groups[st][0][5] || cmp)
+          html += '<div class="vstem-lab">' + gene + ' · ' + (groups[st][0][5] || cmp)
                 + ' · ' + st + '</div><div class="vstem">';
           primaryRows.forEach(function(pl) { html += vcell(pl, true); });   // primary screen first
           groups[st].forEach(function(pl) { html += vcell(pl, false); });
@@ -2172,24 +2251,34 @@ _INTERFACE_INJECT = '''
           var act = pl[3] ? ' · ' + pl[3] : '';
           var ng = pl[4] ? ' (' + pl[4] + ' genes)' : '';
           var cid = pl[5] || cmp;   // MoleculeBatchID (per plate) when available, else compound
-          html += '<div class="vlabel">' + currentGene + ' · ' + cid + ' · '
-                + pl[0] + act + ' (logfc ' + pl[1] + ')' + ng + '</div>';
-          html += volEl(pl);
+          html += '<div class="vlabel">' + gene + ' · ' + cid + ' · '
+                + pl[0] + act + ' (logfc ' + pl[1] + ')' + ng
+                + (pl[6] ? ' <span class="vns">not significant</span>' : '') + '</div>';
+          html += volEl(pl, gene);
         });
       } else {
         if (!t[3]) return "";
-        html = '<div class="vlabel">' + currentGene + ' · ' + cmp + '</div>' + vimg(t[3]);
+        html = '<div class="vlabel">' + gene + ' · ' + cmp + '</div>' + vimg(t[3]);
       }
       return html;
+    }
+    function buildVolcanoHtml(cell) {
+      var t = fullArr[parseInt(cell.getAttribute("data-eidx"), 10)];
+      if (!t) return "";
+      return volcanoHtml(t, isPaged(t) ? visPlates(t) : null, currentGene, cell.getAttribute("data-cmp") || "");
     }
     function showVolcano(cell) {
       var html = buildVolcanoHtml(cell);
       if (!html) { volBox.style.display = "none"; return; }
       volBox.innerHTML = html;
       volBox.style.display = "block";
-      traceStems();
+      wireVolcanoes(volBox);
+    }
+    // After the volcanoes under root are in the page: the stem hover-trace, the rings and the pins (again as each SVG loads).
+    function wireVolcanoes(root) {
+      traceStems(root);
       placeRings();
-      volBox.querySelectorAll("object.vobj").forEach(function(o) { o.addEventListener("load", placeRings); });
+      root.querySelectorAll("object.vobj").forEach(function(o) { o.addEventListener("load", placeRings); });
       setTimeout(placeRings, 200);
     }
     // Hover-any-gene trace across a WT/MLN/KO stem. Every significant-down gene point in a
@@ -2199,7 +2288,6 @@ _INTERFACE_INJECT = '''
     // contrast id), so it works over http AND file:// (no reading into the <object> SVG).
     var SVGNS = "http://www.w3.org/2000/svg";
     var STEM_TRACE = window.__STEM_TRACE__ || {};
-    var _stems = [];   // .vstem elements currently shown (re-laid-out on resize)
 
     // (fx, fy) fraction of a volcano image -> position within the vstem content box, accounting
     // for the SVG letterboxing (preserveAspectRatio "meet") into the fixed <object> box.
@@ -2279,12 +2367,11 @@ _INTERFACE_INJECT = '''
         });
       });
     }
-    function refreshStems() { _stems.forEach(placeHotspots); }
-    function traceStems() {
-      _stems = Array.prototype.slice.call(volBox.querySelectorAll(".vstem"));
-      _stems.forEach(placeHotspots);
+    function refreshStems() { document.querySelectorAll(".vstem").forEach(placeHotspots); }   // the Explorer + the open table rows
+    function traceStems(root) {
+      refreshStems();
       // <object> SVGs need layout before their rects are valid — re-place as they load + a few passes
-      volBox.querySelectorAll("object.vobj").forEach(function(obj) {
+      root.querySelectorAll("object.vobj").forEach(function(obj) {
         obj.addEventListener("load", refreshStems);
       });
       setTimeout(refreshStems, 150);
@@ -2345,7 +2432,7 @@ _INTERFACE_INJECT = '''
     }
     // The overlay of each volcano: the focal gene's ring + label (pl[9]), then the pinned genes like hits.
     function placeRings() {
-      volBox.querySelectorAll(".vwrap").forEach(function(wrap) {
+      document.querySelectorAll(".vwrap").forEach(function(wrap) {
         var obj = wrap.querySelector("object.vobj"); if (!obj) return;
         var box = ringFor(obj, 0, 0); if (!box) return;
         var svg = wrap.querySelector(":scope > .vringsvg");
@@ -2353,7 +2440,7 @@ _INTERFACE_INJECT = '''
         svg.setAttribute("width", box.w); svg.setAttribute("height", box.h);
         while (svg.firstChild) svg.removeChild(svg.firstChild);
         var fx = parseFloat(wrap.getAttribute("data-fx")), fy = parseFloat(wrap.getAttribute("data-fy"));
-        var ring = !isNaN(fx) && !isNaN(fy);
+        var ring = !isNaN(fx) && !isNaN(fy), fg = wrap.getAttribute("data-g") || currentGene;
         if (ring) {   // gene absent here -> no ring
           var p = ringFor(obj, fx, fy), left = fx > 0.7, tx = left ? p.x - 9 : p.x + 9;
           svg.appendChild(svgEl("circle", {cx: p.x.toFixed(1), cy: p.y.toFixed(1), r: 6, fill: "none",
@@ -2362,7 +2449,7 @@ _INTERFACE_INJECT = '''
                                          y2: (p.y - 6).toFixed(1), stroke: "#000", "stroke-width": 0.7}));
           var t = svgEl("text", {x: tx.toFixed(1), y: (p.y - 8).toFixed(1), "text-anchor": left ? "end" : "start",
                                  "font-size": 11, "font-weight": 700, fill: "#000"});
-          t.textContent = currentGene;
+          t.textContent = fg;
           svg.appendChild(t);
         }
         var pm = volPinMarks(obj.getAttribute("data-vfn"));
@@ -2370,7 +2457,7 @@ _INTERFACE_INJECT = '''
           var q = ringFor(obj, m.fx, m.fy), lft = m.fx > 0.7;
           svg.appendChild(svgEl("circle", {cx: q.x.toFixed(1), cy: q.y.toFixed(1), r: 4, fill: m.col,
                                            stroke: "#fff", "stroke-width": 0.8}));
-          if (!(ring && m.g === currentGene)) {   // the focal gene keeps the ring's label only
+          if (!(ring && m.g === fg)) {   // the focal gene keeps the ring's label only
             var l = svgEl("text", {x: (lft ? q.x - 6 : q.x + 6).toFixed(1), y: (q.y - 5).toFixed(1),
                                    "text-anchor": lft ? "end" : "start", "font-size": 10, "font-weight": 700, fill: "#000"});
             l.textContent = m.g;
@@ -2391,73 +2478,89 @@ _INTERFACE_INJECT = '''
         }
       });
     }
-    // The search bar (under the ligand row) shows while a ligand's volcanoes are click-pinned.
-    var vsBar = document.getElementById("ifx-vsearch"), vsIn = document.getElementById("ifx-vs-in"),
-        vsAc = document.getElementById("ifx-vs-ac"), vsChips = document.getElementById("ifx-vs-chips");
-    var vsItems = [], vsActive = -1;
+    // The search bars: the Explorer's (under the ligand row, shown while a ligand's volcanoes are click-pinned) and one
+    // in each open row of the Compound tab. Each bar has its own input and list; all bars share the pins (volPins).
+    var vsBar = document.getElementById("ifx-vsearch");
     function syncVolSearch() { if (vsBar) vsBar.classList.toggle("on", !!VPOS && volPinIdx !== null); }
     function renderVolChips() {
-      vsChips.innerHTML = "";
-      volPins.forEach(function(g) {
-        var ch = document.createElement("span"), x = document.createElement("span");
-        ch.className = "vs-chip"; ch.textContent = g;
-        x.className = "vs-x"; x.textContent = "×"; x.title = "remove"; x.setAttribute("data-g", g);
-        ch.appendChild(x); vsChips.appendChild(ch);
+      document.querySelectorAll(".vs-chips").forEach(function(box) {
+        box.innerHTML = "";
+        volPins.forEach(function(g) {
+          var ch = document.createElement("span"), x = document.createElement("span");
+          ch.className = "vs-chip"; ch.textContent = g;
+          x.className = "vs-x"; x.textContent = "×"; x.title = "remove"; x.setAttribute("data-g", g);
+          ch.appendChild(x); box.appendChild(ch);
+        });
+        if (volPins.length > 1) {
+          var cl = document.createElement("span");
+          cl.className = "vs-clear"; cl.textContent = "clear";
+          box.appendChild(cl);
+        }
       });
-      if (volPins.length > 1) {
-        var cl = document.createElement("span");
-        cl.className = "vs-clear"; cl.textContent = "clear";
-        vsChips.appendChild(cl);
-      }
     }
     function pinVolGene(g) {
       if (!g || !(g in vposIdx) || volPins.indexOf(g) !== -1) return;
       volPins.push(g);
       renderVolChips(); placeRings();
     }
-    function vsRender() {
-      var q = (vsIn.value || "").trim().toUpperCase(), pre = [], mid = [];
-      vsAc.innerHTML = ""; vsItems = []; vsActive = -1;
-      if (!q) { vsAc.style.display = "none"; return; }
-      for (var i = 0; i < VPOS.genes.length && pre.length < 12; i++) {   // genes that start with q first
-        var at = VPOS.genes[i].toUpperCase().indexOf(q);
-        if (at === 0) pre.push(VPOS.genes[i]); else if (at > 0 && mid.length < 12) mid.push(VPOS.genes[i]);
+    function wireVolSearch(bar) {
+      var inp = bar.querySelector(".vs-in"), ac = bar.querySelector(".vs-ac"), items = [], active = -1;
+      function show() {
+        var q = (inp.value || "").trim().toUpperCase(), pre = [], mid = [];
+        ac.innerHTML = ""; items = []; active = -1;
+        if (!q) { ac.style.display = "none"; return; }
+        for (var i = 0; i < VPOS.genes.length && pre.length < 12; i++) {   // genes that start with q first
+          var at = VPOS.genes[i].toUpperCase().indexOf(q);
+          if (at === 0) pre.push(VPOS.genes[i]); else if (at > 0 && mid.length < 12) mid.push(VPOS.genes[i]);
+        }
+        var m = pre.concat(mid).slice(0, 12);
+        if (!m.length) { ac.innerHTML = '<div class="ac-empty">not measured in any volcano</div>'; ac.style.display = "block"; return; }
+        m.forEach(function(g) {
+          var d = document.createElement("div");
+          d.className = "ac-item"; d.textContent = g;
+          d.addEventListener("mousedown", function(e) { e.preventDefault(); pinVolGene(g); inp.value = ""; show(); });
+          ac.appendChild(d); items.push(d);
+        });
+        ac.style.display = "block";
       }
-      var m = pre.concat(mid).slice(0, 12);
-      if (!m.length) { vsAc.innerHTML = '<div class="ac-empty">not measured in any volcano</div>'; vsAc.style.display = "block"; return; }
-      m.forEach(function(g) {
-        var d = document.createElement("div");
-        d.className = "ac-item"; d.textContent = g;
-        d.addEventListener("mousedown", function(e) { e.preventDefault(); pinVolGene(g); vsIn.value = ""; vsRender(); });
-        vsAc.appendChild(d); vsItems.push(d);
-      });
-      vsAc.style.display = "block";
-    }
-    function vsPick() {
-      var q = (vsIn.value || "").trim().toUpperCase();
-      pinVolGene(vsActive >= 0 ? vsItems[vsActive].textContent : (vposUp[q] || (vsItems[0] && vsItems[0].textContent)));
-      vsIn.value = ""; vsRender();
-    }
-    if (vsBar && VPOS) {
-      vsIn.addEventListener("input", vsRender);
-      vsIn.addEventListener("keydown", function(e) {
+      function pick() {
+        var q = (inp.value || "").trim().toUpperCase();
+        pinVolGene(active >= 0 ? items[active].textContent : (vposUp[q] || (items[0] && items[0].textContent)));
+        inp.value = ""; show();
+      }
+      inp.addEventListener("input", show);
+      inp.addEventListener("keydown", function(e) {
         if (e.key === "ArrowDown" || e.key === "ArrowUp") {
           e.preventDefault();
-          vsActive = e.key === "ArrowDown" ? Math.min(vsActive + 1, vsItems.length - 1) : Math.max(vsActive - 1, 0);
-          vsItems.forEach(function(d, i) { d.className = "ac-item" + (i === vsActive ? " active" : ""); });
+          active = e.key === "ArrowDown" ? Math.min(active + 1, items.length - 1) : Math.max(active - 1, 0);
+          items.forEach(function(d, i) { d.className = "ac-item" + (i === active ? " active" : ""); });
         }
-        else if (e.key === "Enter") { e.preventDefault(); vsPick(); }
-        else if (e.key === "Escape") { vsIn.value = ""; vsRender(); }
+        else if (e.key === "Enter") { e.preventDefault(); pick(); }
+        else if (e.key === "Escape") { inp.value = ""; show(); }
       });
-      document.getElementById("ifx-vs-btn").addEventListener("click", function(e) { e.stopPropagation(); vsPick(); });
-      vsChips.addEventListener("click", function(e) {
+      bar.querySelector(".vs-btn").addEventListener("click", function(e) { e.stopPropagation(); pick(); });
+      bar.querySelector(".vs-chips").addEventListener("click", function(e) {
         var x = e.target.closest(".vs-x");
         if (x) volPins.splice(volPins.indexOf(x.getAttribute("data-g")), 1);
         else if (e.target.closest(".vs-clear")) volPins.length = 0;
         else return;
         renderVolChips(); placeRings();
       });
-      document.addEventListener("click", function(e) { if (e.target !== vsIn && !vsAc.contains(e.target)) vsAc.style.display = "none"; });
+    }
+    // A search bar for an open row of the Compound tab (the Explorer's bar is in the page markup).
+    function vsearchHtml() {
+      return '<div class="vsearch on"><div class="vs-wrap">'
+           + '<input type="text" class="vs-in" placeholder="search a gene to show in the volcanoes…" autocomplete="off" spellcheck="false">'
+           + '<button class="vs-btn" title="Show this gene in every volcano, like a hit">Pin</button><div class="vs-ac"></div></div>'
+           + '<span class="vs-chips"></span></div>';
+    }
+    if (VPOS) {
+      if (vsBar) wireVolSearch(vsBar);
+      document.addEventListener("click", function(e) {   // a click outside a bar's input and list closes the list
+        document.querySelectorAll(".vs-ac").forEach(function(ac) {
+          if (e.target !== ac.parentNode.querySelector(".vs-in") && !ac.contains(e.target)) ac.style.display = "none";
+        });
+      });
     }
     // PNG of one volcano as shown: a title, the image, the ring and the pinned genes (3x the screen size).
     // A file:// page cannot export a canvas that holds a local image, so it opens the image instead.
@@ -2465,11 +2568,11 @@ _INTERFACE_INJECT = '''
       var cell = wrap.closest(".vcell");
       if (cell) {
         var lab = cell.parentNode.previousElementSibling;
-        return [(lab && lab.classList.contains("vstem-lab")) ? lab.textContent : currentGene,
+        return [(lab && lab.classList.contains("vstem-lab")) ? lab.textContent : (wrap.getAttribute("data-g") || currentGene),
                 (cell.querySelector(".vlabel") || {}).textContent || ""];
       }
       var prev = wrap.previousElementSibling;
-      return [(prev && prev.classList.contains("vlabel")) ? prev.textContent : currentGene, ""];
+      return [(prev && prev.classList.contains("vlabel")) ? prev.textContent : (wrap.getAttribute("data-g") || currentGene), ""];
     }
     function saveVolcanoPng(wrap) {
       var obj = wrap.querySelector("object.vobj"); if (!obj) return;
@@ -2483,7 +2586,7 @@ _INTERFACE_INJECT = '''
         c.drawImage(img, 0, H, S, S);
         var X = function(f) { return f * S; }, Y = function(f) { return H + f * S; };
         var fx = parseFloat(wrap.getAttribute("data-fx")), fy = parseFloat(wrap.getAttribute("data-fy"));
-        var ring = !isNaN(fx) && !isNaN(fy);
+        var ring = !isNaN(fx) && !isNaN(fy), fg = wrap.getAttribute("data-g") || currentGene;
         if (ring) {
           var left = fx > 0.7, tx = X(fx) + (left ? -9 : 9) * k;
           c.strokeStyle = "#000"; c.lineWidth = 1.5 * k;
@@ -2491,14 +2594,14 @@ _INTERFACE_INJECT = '''
           c.lineWidth = 0.7 * k;
           c.beginPath(); c.moveTo(X(fx), Y(fy)); c.lineTo(tx, Y(fy) - 6 * k); c.stroke();
           c.fillStyle = "#000"; c.font = "700 " + (11 * k) + "px sans-serif"; c.textAlign = left ? "end" : "start";
-          c.fillText(currentGene, tx, Y(fy) - 8 * k);
+          c.fillText(fg, tx, Y(fy) - 8 * k);
         }
         var pm = volPinMarks(obj.getAttribute("data-vfn"));
         pm.marks.forEach(function(m) {
           var lft = m.fx > 0.7;
           c.fillStyle = m.col; c.beginPath(); c.arc(X(m.fx), Y(m.fy), 4 * k, 0, 2 * Math.PI); c.fill();
           c.strokeStyle = "#fff"; c.lineWidth = 0.8 * k; c.stroke();
-          if (ring && m.g === currentGene) return;   // the focal gene keeps the ring's label only
+          if (ring && m.g === fg) return;   // the focal gene keeps the ring's label only
           c.fillStyle = "#000"; c.font = "700 " + (10 * k) + "px sans-serif"; c.textAlign = lft ? "end" : "start";
           c.fillText(m.g, X(m.fx) + (lft ? -6 : 6) * k, Y(m.fy) - 5 * k);
         });
@@ -2514,13 +2617,243 @@ _INTERFACE_INJECT = '''
       img.onerror = function() { window.open(url, "_blank"); };
       img.src = url;
     }
-    volBox.addEventListener("click", function(e) {
-      var b = e.target.closest(".vdl"); if (!b) return;
-      e.stopPropagation();
-      saveVolcanoPng(b.parentNode);
+    [volBox, document.getElementById("cmp-view")].forEach(function(el) {
+      if (el) el.addEventListener("click", function(e) {
+        var b = e.target.closest(".vdl"); if (!b) return;
+        e.stopPropagation();
+        saveVolcanoPng(b.parentNode);
+      });
     });
+    // --- Compound tab (2026-11-12) ---
+    // Rows: the tested targets of the validation reports (__COMPOUND_TABLE__.rows, listed first), then every
+    // significant (down) pair of the panel data; one row per (Molecule-Batch ID, gene), the compound id where the
+    // data has no batch id. Status bits: Primary = an experiment on a primary-screen plate (any batch); each other
+    // column = a validation plate with that suffix (same batch). Plates boxes (2026-11-12): aP / aV = the activity
+    // bits of the batch's hits on primary / validation plates and of its tested-target experiments.
+    var CT = window.__COMPOUND_TABLE__ || {cols: [], rows: [], page: 100}, CT_NOLVL = 1 << 30;
+    var cmpHead = document.querySelector("#cmp-table thead"), cmpBody = document.querySelector("#cmp-table tbody"),
+        cmpSearch = document.getElementById("cmp-search"), cmpCount = document.getElementById("cmp-count"),
+        cmpPage = document.getElementById("cmp-page"), cmpPrev = document.getElementById("cmp-prev"),
+        cmpNext = document.getElementById("cmp-next"), cmpActs = document.getElementById("cmp-acts"),
+        cmpPrim = document.getElementById("cmp-prim"), cmpVal = document.getElementById("cmp-val"),
+        cmpDv = document.getElementById("cmp-dv"),
+        cmpScroll = document.getElementById("cmp-scroll"), cmpImg = document.getElementById("cmp-img");
+    if (!Object.keys(cmpDevalidatedSet).length)   // no devalidated compound in the page: no box
+      document.querySelectorAll("#cmp-view .cmp-dv").forEach(function(el) { el.style.display = "none"; });
+    var ctRows = null, ctOrderDef = null, ctKeys = {}, ctLast = null, ctSort = {k: null, dir: 1}, ctOpen = {}, ctCarry = "",
+        ctDrawn = false, ctPage = 0, ctSpan = CT.cols.length + 4, ctSize = Math.max(1, CT.page || 100), ctTimer = null,
+        ctThumb = {};
+    var ctLevels = (window.__ACTIVITIES__ || []).slice(), ctLevelIdx = {}, ctTicked = {};
+    ctLevels.forEach(function(a, i) { ctLevelIdx[a] = i; });
+    function ctLevelBit(a) {   // the bit of an activity level (CT_NOLVL: no level); a level outside __ACTIVITIES__ gets the next bit
+      if (!a) return CT_NOLVL;
+      if (!(a in ctLevelIdx)) ctLevelIdx[a] = ctLevels.push(a) - 1;
+      return 1 << ctLevelIdx[a];
+    }
+    function ctBuild() {
+      var prim = -1, suf = {}, at = {};
+      CT.cols.forEach(function(c, j) { var C = String(c).toUpperCase(); if (C === "PRIMARY") prim = j; else suf[C] = j; });
+      ctRows = CT.rows.map(function(r) { return {mbid: r[0], gene: r[1], cmp: r[2], t: null, st: 0, aP: 0, aV: 0, tgt: 1}; });
+      ctRows.forEach(function(r, i) { at[r.mbid + "|" + r.gene] = i; });
+      Object.keys(GENE_COMPOUNDS).forEach(function(g) {
+        GENE_COMPOUNDS[g].forEach(function(t) {
+          if (!t || t[0] === "__META__" || !isPaged(t)) return;
+          if (t[1] && !ctThumb[t[0]]) ctThumb[t[0]] = t[1];
+          var by = {}, pbit = 0;
+          t[3].forEach(function(pl) {
+            var k = pl[5] || t[0], b = by[k] || (by[k] = {st: 0, aP: 0, aV: 0, hit: 0}), sx = valSufOf(pl[0]),
+                v = isValidationPlate(pl[0]);
+            if (!v) { if (prim >= 0) pbit = 1 << prim; }
+            else if (sx in suf) b.st |= 1 << suf[sx];
+            if (!pl[6]) { b.hit = 1; if (v) b.aV |= ctLevelBit(pl[3]); else b.aP |= ctLevelBit(pl[3]); }
+            else if (pl[11] && v) b.aV |= ctLevelBit(pl[3]);
+          });
+          Object.keys(by).forEach(function(k) {
+            var b = by[k], i = at[k + "|" + g];
+            if (i === undefined) {
+              if (!b.hit) return;
+              i = at[k + "|" + g] = ctRows.length;
+              ctRows.push({mbid: k, gene: g, cmp: t[0], t: null, st: 0, aP: 0, aV: 0, tgt: 0});
+            }
+            var r = ctRows[i];
+            r.t = t; r.st |= b.st | pbit; r.aP |= b.aP; r.aV |= b.aV;
+          });
+        });
+      });
+      ctRows.forEach(function(r, i) {   // a tested target with no experiment in the page stays a validation row
+        r.i = i; r.txt = (r.mbid + " " + r.gene).toUpperCase();
+        if (r.tgt && !r.aV) r.aV = CT_NOLVL;
+        r.dv = cmpDevalidatedSet[r.cmp] ? 1 : 0;
+      });
+      var key = ctRows.map(function(r) { return r.mbid + "|" + r.gene; }), rest = [];
+      for (var i = CT.rows.length; i < ctRows.length; i++) rest.push(i);
+      rest.sort(function(x, y) { return key[x] < key[y] ? -1 : (key[x] > key[y] ? 1 : 0); });
+      ctOrderDef = ctRows.slice(0, CT.rows.length).map(function(r) { return r.i; }).concat(rest);
+      cmpHead.innerHTML = '<tr><th class="cmp-arw"></th><th data-k="mbid">Molecule-Batch ID</th><th data-k="gene">gene</th>'
+        + CT.cols.map(function(c, j) { return '<th class="st" data-k="' + j + '">' + rbEsc(c) + '</th>'; }).join('')
+        + '<th data-k="comment">Comment</th></tr>';
+      var def = window.__ACTIVITY_DEFAULTS__;   // the Activity and devalidated boxes start as in the Explorer
+      ctLevels.forEach(function(a) { ctTicked[a] = !def || def.indexOf(a) >= 0; });
+      cmpDv.checked = !cmpValDefaults || cmpValDefaults.indexOf(cmpValLabelNo) >= 0;
+      cmpActs.innerHTML = ctLevels.map(function(a) {
+        return '<label><input type="checkbox" value="' + rbEsc(a) + '"' + (ctTicked[a] ? ' checked' : '') + '>' + rbEsc(a) + '</label>';
+      }).join('');
+    }
+    function ctTextOrder(k) {   // the row indexes in the natural order of column k, then of the other text column (cached)
+      if (ctKeys[k]) return ctKeys[k];
+      var pad = function(s) { return String(s).toUpperCase().replace(/[0-9]+/g, function(m) { return ("0000000000" + m).slice(-10); }); };
+      var key = ctRows.map(function(r) { return pad(r[k]) + "|" + pad(k === "mbid" ? r.gene : r.mbid); });
+      var o = ctRows.map(function(r) { return r.i; });
+      o.sort(function(x, y) { return key[x] < key[y] ? -1 : (key[x] > key[y] ? 1 : x - y); });
+      return (ctKeys[k] = o);
+    }
+    function ctVisible() {   // the rows that pass the boxes and hold every search word, in the sort order
+      var words = (cmpSearch.value || "").toUpperCase().split(/[ ,;]+/).filter(Boolean), tick = CT_NOLVL, out = [], hidden = 0;
+      ctLevels.forEach(function(a, i) { if (ctTicked[a]) tick |= 1 << i; });
+      var k = ctSort.k, txt = k === "mbid" || k === "gene", order = txt ? ctTextOrder(k) : ctOrderDef;
+      var mP = cmpPrim.checked ? tick : 0, mV = cmpVal.checked ? tick : 0, wD = cmpDv.checked;
+      for (var n = 0; n < order.length; n++) {
+        var r = ctRows[txt && ctSort.dir < 0 ? order[order.length - 1 - n] : order[n]], ok = true;
+        for (var w = 0; w < words.length && ok; w++) ok = r.txt.indexOf(words[w]) >= 0;
+        if (!ok) continue;
+        if (((r.aP & mP) || (r.aV & mV)) && (wD || !r.dv)) out.push(r); else hidden++;
+      }
+      if (k !== null && !txt && k !== "comment") {   // a status column: the ticks first (a second click: last)
+        var bit = 1 << +k, y = out.filter(function(r) { return r.st & bit; }), x = out.filter(function(r) { return !(r.st & bit); });
+        out = ctSort.dir > 0 ? y.concat(x) : x.concat(y);
+      }
+      return {rows: out, hidden: hidden};
+    }
+    function ctDetailHtml(r) {   // the volcanoes of the ticked plate kinds
+      var wP = cmpPrim.checked, wV = cmpVal.checked;
+      var vps = r.t ? r.t[3].filter(function(pl) { return isValidationPlate(pl[0]) ? wV : wP; }) : [];
+      var v = vps.length ? volcanoHtml(r.t, vps, r.gene, r.cmp) : "";
+      return '<tr class="cmp-detail" data-i="' + r.i + '"><td colspan="' + ctSpan + '">'
+           + (v ? (VPOS ? vsearchHtml() : '') + '<div class="volcano">' + v + '</div>'
+                : '<div class="cmp-none">no volcano of this compound for this gene on the ticked plates</div>')
+           + '</td></tr>';
+    }
+    function ctImgHtml(c) {   // the structure image of compound c, as in the Explorer cells
+      var v = ctThumb[c];
+      if (!v) return '<div class="noimg">(no structure)</div>';
+      return '<img src="' + ((window.__THUMB_MODE__ || "b64") === "path" ? (window.__THUMB_DIR__ || "srb_png") + '/' + v + '.png'
+                                                                         : 'data:image/png;base64,' + v) + '" draggable="false"/>';
+    }
+    function ctWireDetail(tr) {
+      var bar = tr.querySelector(".vsearch");
+      if (bar) { wireVolSearch(bar); renderVolChips(); }
+      wireVolcanoes(tr);
+    }
+    function ctRender(keepPage) {   // keepPage: a page change only (the same rows)
+      if (!keepPage || !ctLast) { ctLast = ctVisible(); ctPage = 0; }
+      var rows = ctLast.rows, pages = Math.max(1, Math.ceil(rows.length / ctSize)), html = "";
+      ctPage = Math.min(Math.max(0, ctPage), pages - 1);
+      rows.slice(ctPage * ctSize, (ctPage + 1) * ctSize).forEach(function(r) {
+        html += '<tr class="cmp-row' + (ctOpen[r.i] ? ' open' : '') + '" data-i="' + r.i + '">'
+              + '<td class="cmp-arw" title="show the volcanoes"><span class="fp-caret">&#9662;</span></td>'
+              + '<td class="cmp-mb">' + rbEsc(r.mbid) + '</td><td>' + rbEsc(r.gene) + '</td>'
+              + CT.cols.map(function(c, j) {
+                  return '<td class="st">' + (r.st & (1 << j) ? '<span class="st-y" title="present">&#10003;</span>'
+                                                               : '<span class="st-n" title="not present">&#10007;</span>') + '</td>';
+                }).join('')
+              + '<td class="cmt"></td></tr>'
+              + (ctOpen[r.i] ? ctDetailHtml(r) : '');
+      });
+      cmpBody.innerHTML = html || '<tr><td colspan="' + ctSpan + '" class="cmp-none">'
+        + (ctRows.length ? 'no row passes the search and the boxes' : 'no rows in this build') + '</td></tr>';
+      cmpCount.textContent = rows.length.toLocaleString() + ' rows'
+        + (ctLast.hidden ? ' · ' + ctLast.hidden.toLocaleString() + ' hidden by the boxes' : '');
+      cmpPage.textContent = 'page ' + (ctPage + 1).toLocaleString() + ' / ' + pages.toLocaleString();
+      cmpPrev.classList.toggle("disabled", ctPage === 0);
+      cmpNext.classList.toggle("disabled", ctPage >= pages - 1);
+      cmpHead.querySelectorAll("th[data-k]").forEach(function(th) {
+        var old = th.querySelector(".srt"); if (old) old.remove();
+        if (th.getAttribute("data-k") === String(ctSort.k))
+          th.insertAdjacentHTML("beforeend", '<span class="srt">' + (ctSort.dir > 0 ? '&#9650;' : '&#9660;') + '</span>');
+      });
+      cmpScroll.scrollTop = 0;
+      cmpImg.style.display = "none";
+      cmpBody.querySelectorAll("tr.cmp-detail").forEach(ctWireDetail);
+      ctDrawn = true;
+    }
+    function ctToggle(tr) {
+      var i = +tr.getAttribute("data-i"), next = tr.nextElementSibling;
+      if (ctOpen[i]) {
+        delete ctOpen[i]; tr.classList.remove("open");
+        if (next && next.classList.contains("cmp-detail")) next.remove();
+      } else {
+        ctOpen[i] = 1; tr.classList.add("open");
+        tr.insertAdjacentHTML("afterend", ctDetailHtml(ctRows[i]));
+        ctWireDetail(tr.nextElementSibling);
+      }
+    }
+    cmpHead.addEventListener("click", function(e) {
+      var th = e.target.closest("th[data-k]"); if (!th) return;
+      var k = th.getAttribute("data-k");
+      ctSort = {k: k, dir: ctSort.k === k ? -ctSort.dir : 1};
+      ctRender();
+    });
+    cmpBody.addEventListener("click", function(e) {
+      var a = e.target.closest("td.cmp-arw"); if (a) ctToggle(a.parentNode);
+    });
+    cmpBody.addEventListener("mouseover", function(e) {   // the structure image next to the Molecule-Batch ID
+      var td = e.target.closest("td.cmp-mb"); if (!td) return;
+      var b = td.getBoundingClientRect();
+      cmpImg.innerHTML = ctImgHtml(ctRows[+td.parentNode.getAttribute("data-i")].cmp);
+      cmpImg.style.left = (b.right + 8) + "px";
+      cmpImg.style.top = Math.max(4, Math.min(b.top - 4, window.innerHeight - 260)) + "px";
+      cmpImg.style.display = "block";
+    });
+    cmpBody.addEventListener("mouseout", function(e) {
+      var td = e.target.closest("td.cmp-mb");
+      if (td && !td.contains(e.relatedTarget)) cmpImg.style.display = "none";
+    });
+    cmpScroll.addEventListener("scroll", function() { cmpImg.style.display = "none"; });
+    cmpSearch.addEventListener("input", function() { clearTimeout(ctTimer); ctTimer = setTimeout(function() { ctRender(); }, 150); });
+    cmpActs.addEventListener("change", function(e) {
+      if (e.target.type !== "checkbox") return;
+      ctTicked[e.target.value] = e.target.checked; ctRender();
+    });
+    document.querySelector("#cmp-view .cmp-an").addEventListener("click", function(e) {
+      var a = e.target.getAttribute("data-a"); if (!a) return;
+      ctLevels.forEach(function(l) { ctTicked[l] = a === "all"; });
+      cmpActs.querySelectorAll("input").forEach(function(b) { b.checked = a === "all"; });
+      ctRender();
+    });
+    [cmpPrim, cmpVal, cmpDv].forEach(function(b) { b.addEventListener("change", function() { ctRender(); }); });
+    cmpPrev.addEventListener("click", function() { if (ctPage > 0) { ctPage--; ctRender(true); } });
+    cmpNext.addEventListener("click", function() { ctPage++; ctRender(true); });
+    // Tabs: the Compound view covers the Explorer, which keeps its state. A compound click-pinned in the Explorer
+    // opens in the Compound tab: the search holds its id and the pinned gene, and its rows for that gene open.
+    var tabEls = document.querySelectorAll("#ifx-tabs .tab");
+    function showTab(name) {
+      var cmp = name === "compound";
+      document.body.classList.toggle("tab-cmp", cmp);
+      tabEls.forEach(function(el) { el.classList.toggle("on", el.getAttribute("data-tab") === name); });
+      if (!cmp) return;
+      if (ctRows) ctShow();
+      else { cmpCount.textContent = "building the table…"; setTimeout(ctShow, 30); }   // paint the tab first
+    }
+    function ctShow() {
+      if (!ctRows) ctBuild();
+      var t = volPinIdx !== null && fullArr ? fullArr[volPinIdx] : null, key = t ? t[0] + "|" + currentGene : "";
+      if (key && key !== ctCarry) {
+        ctCarry = key; cmpSearch.value = t[0] + " " + currentGene; ctOpen = {};
+        ctRows.forEach(function(r) { if (r.cmp === t[0] && r.gene === currentGene) ctOpen[r.i] = 1; });
+        ctRender();
+      }
+      else if (!ctDrawn) ctRender();
+      else { placeRings(); refreshStems(); }   // the open rows were hidden: place their rings and hover points again
+    }
+    tabEls.forEach(function(el) { el.addEventListener("click", function() { showTab(el.getAttribute("data-tab")); }); });
+    function tabFromHash() {   // #Tab=Compound (alone or with the other link keys) opens that tab
+      var m = /(?:^#|&)tab=([a-z]+)/i.exec(location.hash || "");
+      if (m) showTab(m[1].toLowerCase() === "compound" ? "compound" : "explorer");
+    }
+    tabFromHash();
+    window.addEventListener("hashchange", tabFromHash);
     window.addEventListener("resize", function() {
-      _stems.forEach(function(vstem) { clearTrace(vstem); placeHotspots(vstem); });
+      document.querySelectorAll(".vstem").forEach(function(vstem) { clearTrace(vstem); placeHotspots(vstem); });
       placeRings();
     });
     function markVolPin(cell) {
@@ -2593,7 +2926,7 @@ _INTERFACE_INJECT = '''
     });
     clo.addEventListener("click", unpin);
     document.addEventListener("keydown", function(e) {
-      if (!pinned || (e.target && e.target.tagName === "INPUT")) return;   // typing in a search box
+      if (!pinned || (e.target && e.target.tagName === "INPUT") || document.body.classList.contains("tab-cmp")) return;   // typing, or the Compound tab
       if (e.key === "Escape") unpin();
       else if (e.key === "ArrowLeft")  goPage(-1);
       else if (e.key === "ArrowRight") goPage(1);
@@ -3286,7 +3619,7 @@ _INTERFACE_INJECT = '''
           toggleEl.style.left = r.left + "px";
           toggleEl.style.right = "auto";
         } else {                                 // legend not drawn yet — fall back to top-right
-          toggleEl.style.top = "64px"; toggleEl.style.right = "18px"; toggleEl.style.left = "auto";
+          toggleEl.style.top = (TABH + 64) + "px"; toggleEl.style.right = "18px"; toggleEl.style.left = "auto";
         }
       }
       function refreshToggle() {
@@ -3754,7 +4087,7 @@ _INTERFACE_INJECT = '''
     document.title = "DEV - " + (document.title || "Serac Px interface");
     var t = document.createElement("div");
     t.id = "ifx-dev"; t.textContent = "DEV"; t.title = "Dev site: not the production interface";
-    document.body.appendChild(t);
+    (document.getElementById("ifx-tabs") || document.body).appendChild(t);
   });
 
   // Loading screen (_LOADING_INJECT): remove it when the page has loaded and Plotly has drawn nothing
@@ -3825,6 +4158,9 @@ def plot_3d_interface(
     range_defaults=None,
     z_fit_pad=None,   # with range_sliders: z axis top = the highest shown gene + this part of the z span; None -> all genes
     dev_path=None,    # URL path of the dev site (e.g. '/dev/Px_interface/'): the page shows a DEV tag there only
+    compound_table=None,   # Compound tab rows: df (molecule_batch_id, gene, compound); None -> an empty table
+    compound_table_columns=('Primary', 'WT', 'KO', 'MLN', 'BIND', 'UBI'),   # Compound tab status columns, in order
+    compound_table_page_size=100,   # Compound tab: rows per page
     activity_defaults=None,
     control_genes=(),
     control_compounds=(),
@@ -5211,6 +5547,9 @@ def plot_3d_interface(
             for _c, _sub in compounds_df.groupby('compound'):
                 _compound_genes[str(_c)] = sorted({str(g) for g in _sub['gene']})
         _all_compounds = sorted(_compound_genes)
+        # Compound tab: [Molecule-Batch ID, gene, compound] per tested target; the page computes the status columns
+        _ct_rows = ([] if compound_table is None else
+                    compound_table[['molecule_batch_id', 'gene', 'compound']].astype(str).values.tolist())
         data_js = (
             'window.__GENE_COMPOUNDS__ = ' + _jsp(custom if have_compounds else {}) + ';\n'
             'window.__PAGE_SIZE__ = ' + str(int(page_size)) + ';\n'
@@ -5245,6 +5584,8 @@ def plot_3d_interface(
             'window.__STEM_TRACE__ = ' + _jsp(stem_trace) + ';\n'   # {vk: {gene: [fx,fy,aspect,isHit]}} for the hover trace (http + file://)
             'window.__VPOS__ = ' + (_jsp(vpos) if vpos else 'null') + ';\n'   # volcano gene search: {id, genes, axrect, xlim}
             'window.__DEV_PATH__ = ' + _json.dumps(dev_path or '') + ';\n'   # the same build shows a DEV tag under this path
+            'window.__COMPOUND_TABLE__ = ' + _jsp({'cols': [str(c) for c in compound_table_columns], 'rows': _ct_rows,
+                                                   'page': int(compound_table_page_size)}) + ';\n'
             'window.__THUMB_MODE__ = ' + _json.dumps('path' if _thumb_ext else 'b64') + ';\n'
             'window.__THUMB_DIR__ = ' + _json.dumps(_thumb_rel) + ';\n'
             'window.__GENE_RESEARCH__ = ' + _jsp(gene_research or {}) + ';\n'

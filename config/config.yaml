@@ -93,6 +93,11 @@ VALIDATION_PLATE_SUFFIXES:         # plate-name suffixes forming a validation st
 - MLN
 - KO
 - BIND
+# Compound tab (2026-11-12): the status columns, in this order. Primary = a primary-screen experiment of the
+# compound for the gene; each other name = a validation plate with that suffix (same batch). A suffix that is
+# not in VALIDATION_PLATE_SUFFIXES (UBI for now) shows a red cross until its plates exist and you add it there.
+COMPOUND_TABLE_COLUMNS: [Primary, WT, KO, MLN, BIND, UBI]
+COMPOUND_TABLE_PAGE_SIZE: 100        # Compound tab: rows per page
 VOLCANO_TARGET_ADJP: 0.05          # validation volcano (report targets): a target colours if adjpval < this, any logfc; other genes grey
 FBXO31_INDEPENDENT_TICKED: false   # false -> the "FBXO31 independent" target box starts UNticked (those genes
                                    # hidden on load, still toggle-able); true -> both validation boxes ticked

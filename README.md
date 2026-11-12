@@ -484,6 +484,56 @@ gene shows "not measured: …". The build writes one small position file per vol
 compound, plate, condition), the ring and the pinned genes. On the Dropbox copy (`file://`), the browser
 does not let the page make the PNG, so the icon opens the volcano image instead.
 
+**Tabs: Explorer and Compound** (2026-11-12). The bar at the
+top of the page has two tabs. A click changes the view immediately; each tab keeps its state. Explorer is the plot
+with its panels. Compound is a table with one row per Molecule-Batch ID and gene:
+
+- **Tested targets** (listed first): each gene that the validation reports of the batch name as the target.
+- **Significant pairs**: each gene that an experiment of the batch significantly down-modulated (the hits of the
+  Explorer panel; about 374,000 rows). Where the data has no batch ID, the row shows the compound ID.
+
+| Column | A green tick means | A red cross means |
+|---|---|---|
+| Primary | the compound has an experiment on a primary-screen plate for the gene (any batch) | no such experiment |
+| WT, KO, MLN, BIND | the same batch has a validation plate with that suffix for the gene | no such plate |
+| UBI | (no UBI plates yet) | always, for now |
+| Comment | (empty until its database table exists) | |
+
+The filter area above the table:
+
+- **Plates**: tick "primary", "validation" or both. "primary" shows the rows whose gene went down significantly
+  in a primary-screen experiment of the batch. "validation" shows the rows whose gene went down significantly in
+  a WT, KO, MLN or BIND experiment of the batch, and all tested targets. An open row shows only the volcanoes of
+  the ticked plates: "validation" alone shows no primary-screen volcano (Explorer adds one to each validation
+  stem). The status columns do not change.
+- **Compounds: devalidated**: untick it to hide the rows of the compounds in the devalidated list (the
+  compounds that Explorer calls "FBXO31 independent"). It starts as the Explorer Validation filter, which is
+  ticked by default. The box does not show when the page has no devalidated compound.
+- **Activity**: the levels of the Explorer Activity filter, ticked as in Explorer at load (config
+  `ACTIVITY_DEFAULTS`). A row shows when one of its hits on a ticked plate kind has a ticked level. For
+  "validation", the experiments of a tested target also count. As in Explorer, a condition where the gene is not
+  significant does not count. A hit with no activity level always passes. "all" and "none" tick or clear all
+  boxes.
+- **Search**: the table keeps the rows that hold each word, for example `-002 BTK` (batch 002, gene BTK).
+- **Pages**: 100 rows per page (config `COMPOUND_TABLE_PAGE_SIZE`), with ◀ and ▶. The count shows the rows that
+  pass, and the rows that the boxes hide.
+
+- Click a column title to sort the table. Click it again to reverse the order. The first sort of a text column
+  takes about 0.5 s on the full table.
+- Click the arrow at the left of a row to show the volcanoes of the compound for the gene on the ticked
+  plates. A search bar under the arrow works as in Explorer: the pinned genes show in every open volcano and in
+  Explorer.
+- Point at a Molecule-Batch ID to see the structure of the compound (the same image as in Explorer).
+- To open a compound from Explorer, click-pin it in the compound panel, then click the Compound tab. The
+  search then holds the compound and the gene, and their rows are open.
+- A link with `#Tab=Compound` opens the Compound tab, e.g. `…/Px_interface/#Tab=Compound`.
+
+Config `COMPOUND_TABLE_COLUMNS` sets the status columns and their order. When UBI plates exist, add `UBI`
+also to `VALIDATION_PLATE_SUFFIXES`. The "in process" status (a yellow hourglass) will come from a database
+table later. The page builds the significant rows from the panel data when the tab opens (about 1 s on the full
+data), so they need no extra download. The tested targets need a build with `IFACE_OVERWRITE: true` once, which
+writes `IFACE_DIR/compound_table.parquet`.
+
 The browser does not send the part after `#` to the server, so the link needs no server change.
 It also works on the Dropbox copy (`Serac_Px_interface.html#Plate=…`). A changed link in an open tab
 applies at once. If no plate matches, the page keeps its default plates and the Session note tells

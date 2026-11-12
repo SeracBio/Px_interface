@@ -111,6 +111,21 @@ def validation_target_rows(report, compounds_df, meas):
     t['logfc'] = [lf.get((g, u)) for g, u in zip(t['gene'], t['uniquecontrast'])]
     return t.dropna(subset=['logfc']).drop(columns='target').reset_index(drop=True)   # unmeasured gene -> no row
 
+def tested_target_pairs(report, mbid_of):
+    """
+    The rows of the Compound tab (user decision 2026-11-12): one per (Molecule-Batch ID, gene) that a
+    validation report names as a target (`target`, ';'-separated). The page computes the status columns.
+    param df report: per-contrast REPORT of the validation plates (uniquecontrast, compound, target)
+    param Series mbid_of: uniquecontrast -> Molecule-Batch ID (a contrast without one gives no row)
+    return df: molecule_batch_id, gene, compound (unique, sorted)
+    """
+    t = (report.loc[report['target'].notna(), ['uniquecontrast', 'compound', 'target']].astype(str)
+         .assign(gene=lambda d: d['target'].str.split(';')).explode('gene'))
+    t['gene'] = t['gene'].str.strip()
+    t['molecule_batch_id'] = t['uniquecontrast'].map(mbid_of)
+    return (t[t['gene'].ne('') & t['molecule_batch_id'].notna()][['molecule_batch_id', 'gene', 'compound']]
+            .drop_duplicates().sort_values(['molecule_batch_id', 'gene']).reset_index(drop=True))
+
 def gene_ms_score(mscore, val_ms):
     """
     The MS score of each gene dot (user decision 2026-10-26), on the raw scale: the validation score of a
@@ -630,6 +645,7 @@ class OUTPUT():
         self.iface_df = None
         self.compounds_df = None
         self.meas = None
+        self.compound_table = None   # Compound tab rows (molecule_batch_id, gene, compound)
 
     def combine_datasets(self, data, params):
         """
@@ -817,7 +833,7 @@ class OUTPUT():
         ##   report / plate2date) and SAVE the four to IFACE_DIR. IFACE_OVERWRITE=False -> LOAD them and
         ##   free the heavy upstream frames, so you can skip the combine + build cells (10-15, 21) and run
         ##   only: config + the small param cells (contaminants / targets / research) + this + the render.
-        _IFACE_KEYS = ['iface_df', 'compounds_df', 'meas', 'plate2date']
+        _IFACE_KEYS = ['iface_df', 'compounds_df', 'meas', 'compound_table', 'plate2date']
 
         if params.IFACE_OVERWRITE:
             DROP_PLATES = ['Plate12', 'Plate15', 'Plate23']
@@ -1048,14 +1064,22 @@ class OUTPUT():
             print(f'> compounds_df: {len(compounds_df):,} (gene,compound,plate) rows across '
                 f'{compounds_df["gene"].nunique():,} genes, {compounds_df["uniquecontrast"].nunique():,} volcanoes to render')
 
-            # --- save the four render inputs ---
+            # --- Compound tab: the tested targets of the validation reports, with the batch ids of the panel rows ---
+            _mb = (compounds_df.dropna(subset=['molecule_batch_id']).drop_duplicates('uniquecontrast')
+                   .set_index('uniquecontrast')['molecule_batch_id'])
+            compound_table = tested_target_pairs(rep[rep['plate'].isin(_val_plates)], _mb)
+            print(f'> Compound tab: {len(compound_table):,} tested-target rows '
+                  f'({compound_table["molecule_batch_id"].nunique():,} molecule batches)')
+
+            # --- save the render inputs ---
             os.makedirs(params.IFACE_DIR, exist_ok=True)
             iface_df.to_parquet(os.path.join(params.IFACE_DIR, 'iface_df.parquet'))
             compounds_df.to_parquet(os.path.join(params.IFACE_DIR, 'compounds_df.parquet'))
             meas.to_parquet(os.path.join(params.IFACE_DIR, 'meas.parquet'))
+            compound_table.to_parquet(os.path.join(params.IFACE_DIR, 'compound_table.parquet'))
             with open(os.path.join(params.IFACE_DIR, 'plate2date.json'), 'w') as _fh:
                 json.dump(self.plate2date, _fh)
-            self.iface_df, self.compounds_df, self.meas = iface_df, compounds_df, meas
+            self.iface_df, self.compounds_df, self.meas, self.compound_table = iface_df, compounds_df, meas, compound_table
             print(f'> saved interface inputs -> {params.IFACE_DIR}/ ({", ".join(_IFACE_KEYS)})')
             # free df_raw now (FBX_* + MS were freed at the end of combine) — absorbed into the render
             # inputs and unused past here. self.measure/mscore/report were already freed above once their
@@ -1072,6 +1096,11 @@ class OUTPUT():
             self.iface_df     = pd.read_parquet(os.path.join(params.IFACE_DIR, 'iface_df.parquet'))
             self.compounds_df = pd.read_parquet(os.path.join(params.IFACE_DIR, 'compounds_df.parquet'))
             self.meas         = pd.read_parquet(os.path.join(params.IFACE_DIR, 'meas.parquet'))
+            _ct = os.path.join(params.IFACE_DIR, 'compound_table.parquet')
+            self.compound_table = pd.read_parquet(_ct) if os.path.exists(_ct) else None
+            if self.compound_table is None:
+                print('> no compound_table.parquet (a checkpoint from before 2026-11-12): the Compound tab is empty '
+                      'until a build with IFACE_OVERWRITE=true')
             with open(os.path.join(params.IFACE_DIR, 'plate2date.json')) as _fh:
                 self.plate2date = json.load(_fh)
             print(f'> loaded interface inputs from {params.IFACE_DIR}/ | iface_df {self.iface_df.shape}, '
@@ -1180,6 +1209,9 @@ class OUTPUT():
             ring_px=getattr(params, 'GENE_RING_PX', 4),   # thickness (px) of the dark ring drawn around each gene dot
             z_fit_pad=getattr(params, 'Z_FIT_PAD', 0.05),  # MS axis top = the highest shown gene + this part of the span (config Z_FIT_PAD)
             dev_path=re.sub(r'^https?://[^/]+', '', getattr(params, 'PUBLISH_DEV_URL', '') or '') or None,  # DEV tag under this URL path
+            compound_table=self.compound_table,  # Compound tab rows: the tested targets of the validation reports
+            compound_table_columns=getattr(params, 'COMPOUND_TABLE_COLUMNS', ['Primary', 'WT', 'KO', 'MLN', 'BIND', 'UBI']),
+            compound_table_page_size=getattr(params, 'COMPOUND_TABLE_PAGE_SIZE', 100),   # Compound tab rows per page
             html_path=os.path.join(output_dir, 'interfaces', 'Serac_Px_interface.html'), # 20260612_3d_interface_PX_R2_assoc_ms.html
         )
 

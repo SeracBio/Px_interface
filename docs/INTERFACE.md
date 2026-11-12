@@ -57,10 +57,10 @@ Three classes: **`PARAMS`** (reads `config.yaml`), **`DATA`** (loads raw inputs)
 | PNGs (opt-in) | `DATA.download_cdd_pngs` | refreshes `SRB_PNG_DIR` from CDD Vault when `UPDATE_PNGS` is true (resume-safe; no-op otherwise) |
 | Combine | `OUTPUT.combine_datasets` | `measure`, `mscore` (both per-compound, one row per (gene,uniquecontrast)), `report`, `plate2date` — FBX wins on shared uniquecontrasts |
 | Validation lists | `OUTPUT.get_de_validated` | `validated_targets`/`devalidated_targets`, `validated_compounds`/`devalidated_compounds` (FBXO31 ligase-dependent vs not) |
-| Render inputs | `OUTPUT.get_iface` | **the four render inputs** — `iface_df`, `compounds_df`, `meas`, `plate2date` |
+| Render inputs | `OUTPUT.get_iface` | **the render inputs** — `iface_df`, `compounds_df`, `meas`, `compound_table`, `plate2date` |
 | Render | `OUTPUT.build_interface` | delegates to `plot_3d_interface`; owns colour dicts + the panels.json cache |
 
-### The four render inputs (`get_iface`)
+### The render inputs (`get_iface`)
 
 - **`iface_df`** — one row per gene: `R2` (SAR), `association_score` (`px.gene_association`) + top
   `disease_area` (`OT_CACHE` therapeutic areas, ranked by `PRIORITY_DISEASE_AREAS`), `ms_score` + `ms_source` (`px.gene_ms_score`: the
@@ -83,6 +83,11 @@ Three classes: **`PARAMS`** (reads `config.yaml`), **`DATA`** (loads raw inputs)
   These rows also have `is_completion=True` (not a hit: no export, no dot size, no MS-slider filter).
 - **`meas`** — the volcano source (unified `measure`, noisy plates dropped, 0.0 p-values floored).
 - **`plate2date`** — `{plate: date}` for the date-nested Plates filter.
+- **`compound_table`** (2026-11-12) — the rows of the Compound tab: one per (`molecule_batch_id`, gene) that
+  a validation report names in `target` (`tested_target_pairs`, on the validation plates only). The batch id
+  comes from the `compounds_df` rows of the contrast, so a contrast with no panel row gives no row. Saved as
+  `compound_table.parquet`; a checkpoint from before 2026-11-12 has none, so the tab stays empty until a build
+  with `IFACE_OVERWRITE: true`.
 
 ### `IFACE_OVERWRITE` (the big switch)
 
@@ -299,7 +304,68 @@ rounded to step multiples, so round handle values land **exactly** — MS step =
 - **Download** `.vdl` (top right of each `.vwrap`): `saveVolcanoPng` draws the title (`volTitle`: the stem
   label + the cell label), the base image, the ring and the pins on a 1080 px canvas, then `saveBlob`.
   On `file://` the canvas is tainted, so it opens the image instead.
-- The document key handler ignores keys typed in an `<input>` (no paging while typing in a search box).
+- The document key handler ignores keys typed in an `<input>` (no paging while typing in a search box), and all
+  keys while the Compound tab shows.
+- **Shared volcano code (2026-11-12).** `volcanoHtml(t, vps, gene, cmp)` builds the stems and the stacked
+  plates; the Explorer passes `visPlates(t)` (through `buildVolcanoHtml`), the Compound tab all of `t[3]`.
+  Each `.vwrap` carries its focal gene (`data-g`), which `placeRings` and the PNG use for the ring label.
+  `placeRings` and `refreshStems` work on every `.vwrap` / `.vstem` in the page; a hidden one has no size,
+  so it is skipped. `wireVolcanoes(root)` starts the hover trace and the rings of new volcanoes.
+  `wireVolSearch(bar)` wires one search bar (its own input and list); all bars share `volPins`, and
+  `renderVolChips` fills every `.vs-chips`. The CSS selectors are `:is(#hover-img, #cmp-view) …`, which keeps
+  the specificity of `#hover-img …`.
+
+### Tabs and the Compound tab (2026-11-12)
+
+- **Tab bar** `#ifx-tabs` (height `--tabh`, 32 px): "Explorer" and "Compound"; the DEV tag sits at its
+  right. The fixed Explorer parts (plot, filter panel, compound panel, size legend, pin toggle) start
+  `--tabh` lower (`TABH` in JS for the two fallback positions). `showTab(name)` sets `body.tab-cmp`; the
+  Compound view `#cmp-view` (z-index 10002) then covers the Explorer, which keeps its state and its WebGL
+  scene. `#Tab=Compound` in the hash (alone or with the other keys) opens the tab at load and on `hashchange`.
+- **Rows** (`ctBuild`, once, on the first open; about 1 s and 80 MB on the full data). First the tested targets
+  of `__COMPOUND_TABLE__ = {cols, rows: [[mbid, gene, compound]], page}`, then every significant pair of the panel
+  data: for each entry of `GENE_COMPOUNDS[gene]`, its plate rows grouped by batch key `pl[5] || t[0]` (the compound
+  id where the data has no batch id); a batch with a hit row (`!pl[6]`, significant down) gives a row. A tested
+  target takes its entry the same way. Per row, bit masks: `st` = the status columns (`Primary` = any row on a
+  non-validation plate, any batch; the first version used only the attached primary `pl[10]`; each other column =
+  a validation plate with that suffix and the same batch key); `aP` / `aV` = the activity levels of the batch's
+  hit rows on primary / validation plates (`ctLevelBit`: the `__ACTIVITIES__` order, then any other level;
+  `CT_NOLVL`, bit 30, for a hit with no level). `aV` also takes the levels of the batch's tested-target rows
+  (`pl[11]` on a validation plate); a tested target with neither gets `aV = CT_NOLVL`. A ride-along row (`pl[6]`,
+  the stem completion or the attached primary) sets only `st`, as in the Explorer's `visPlates`. Thus a tick
+  always has its volcano in the open row. A suffix that is not in `__VALIDATION_SUFFIXES__` (UBI for now) never
+  matches, so it shows a red cross. Default order (`ctOrderDef`): the tested targets in their build order, then
+  the other rows by `mbid|gene` (code-unit order, fast). `ctThumb[compound]` = the first image key `t[1]`.
+- **Filter area** (2026-11-12): the Plates boxes `#cmp-prim` / `#cmp-val` (they replace the Rows boxes
+  "tested targets" / "significant pairs", user decision 2026-11-12) and the Activity boxes `#cmp-acts` (start as
+  `__ACTIVITY_DEFAULTS__`) with "all" / "none": `ctVisible` keeps a row when `(aP & mP) || (aV & mV)`, where
+  `mP` / `mV` = the ticked level bits plus `CT_NOLVL` when its Plates box is ticked, else 0, and when the
+  devalidated box `#cmp-dv` is ticked or `r.dv` is 0 (`r.dv` = the compound is in `cmpDevalidatedSet`, the
+  Explorer set from `__DEVALIDATED_COMPOUNDS__`; user request 2026-11-12). `#cmp-dv` starts as the Explorer
+  "No" box (`__CMP_VALIDATION_DEFAULTS__`, null = ticked); the `.cmp-dv` elements hide when the set is empty.
+  The Explorer keeps a compound that is also in the validated list; the tab does not (no such compound in the
+  2026-11-12 build). The search
+  `#cmp-search` (150 ms debounce; every word, split on space, comma or `;`, must be in `mbid + " " + gene`). The
+  count shows the rows that pass and the rows that the boxes hide.
+- **Sort**: a text column (`mbid`, `gene`) uses `ctTextOrder(k)`: natural order (digit runs padded to 10) with
+  the other text column second, computed once per column (about 0.5 s on the full data) and cached; a second
+  click walks it backwards. A status column partitions the passing rows (ticks first, a second click: last),
+  so the order stays inside each part.
+- **Pages** of `__COMPOUND_TABLE__.page` rows (config `COMPOUND_TABLE_PAGE_SIZE`, default 100). `ctRender()`
+  computes the passing rows (`ctVisible`, cached in `ctLast`) and goes to page 1; `ctRender(true)` (◀ ▶) only
+  changes the page. **Open** (the `.fp-caret` arrow): `ctToggle` adds a `tr.cmp-detail` with a search bar and
+  the volcanoes of the compound for the gene on the ticked plate kinds (`ctDetailHtml`: `volcanoHtml` with the
+  rows of `t[3]` that `isValidationPlate` puts in a ticked kind; so "validation" alone has no primary-screen lead
+  cell, unlike the Explorer). A stacked (non-stem) label marks a ride-along row "not significant". `ctOpen` keeps
+  the open rows across pages, searches, sorts and box changes (a render draws them again).
+- **Structure popup** `#cmp-img`: a `mouseover` on `td.cmp-mb` shows `ctImgHtml(r.cmp)` (`ctThumb`; path mode
+  `__THUMB_DIR__/<key>.png`, else base64; "(no structure)" without an image) right of the cell, kept inside
+  the window, at most 320 x 240 px. A `mouseout`, a scroll of `#cmp-scroll` and a render hide it.
+- **From the Explorer**: on `showTab("compound")`, a compound that is click-pinned (`volPinIdx`) sets the
+  search to its id and the pinned gene, and opens their rows, once per (compound, gene) (`ctCarry`). The boxes
+  do not change, so a row that they hide shows in the "hidden" count.
+- The Comment column is empty until its database table exists; the "in process" status will also come
+  from the database (user decision 2026-11-12).
 
 ### Feature blocks (all piggyback on `applyRanges`)
 
@@ -415,6 +481,8 @@ stems whose earliest plate date it is; `validation` = all validation plates (202
 the default plates stay and `#sess-note` names the misses. A key that the hash does not name keeps its
 state (pins stay when only `Plate=` changes). A `hashchange` listener applies a new hash in an open
 tab; the Link button writes the hash with `history.replaceState`, so it does not re-apply.
+`tab=compound` (2026-11-12) opens the Compound tab (`tabFromHash`, outside `parseHash`; the Link button does
+not write it).
 `other=false|true` (2026-10-27; `off`/`0`/`no` also hide) sets `valCatShown.rest` through `setOtherHook`
 (range block): the V-mode "other" genes hide or show, and the "other" legend key dims, as on a legend
 click. It acts in V mode only (the mask skips `valCatShown` in D). The Link button writes `other=false`
@@ -490,6 +558,13 @@ while `valCatShown.rest` is false. The `.iface` session does not save `valCatSho
 - **`VOLCANO_GENE_SEARCH`** — `true`/absent: the build writes the volcano gene-search files (`gpos/`, about
   250 MB on real data) and `__VPOS__ = {id, genes, axrect, xlim}`; `false`: `__VPOS__ = null` and no search
   bar. `build_interface` passes it as `plot_3d_interface(volcano_gene_search=)`.
+- **`COMPOUND_TABLE_COLUMNS`** (2026-11-12) — the status columns of the Compound tab, in order (default
+  `[Primary, WT, KO, MLN, BIND, UBI]`). `Primary` = the primary screen; each other name = a validation plate
+  suffix. Add a new suffix (e.g. UBI) also to `VALIDATION_PLATE_SUFFIXES` when its plates exist; else the
+  plates count as primary-screen plates. `build_interface` passes it as
+  `plot_3d_interface(compound_table_columns=)`, with `compound_table=` (the rows), into `__COMPOUND_TABLE__`.
+- **`COMPOUND_TABLE_PAGE_SIZE`** (2026-11-12) — rows per page of the Compound tab (default 100). `build_interface`
+  passes it as `plot_3d_interface(compound_table_page_size=)`, into `__COMPOUND_TABLE__.page`.
 - **`PUBLISH_DEV_URL`** (2026-11-09) — the dev site. `build_interface` passes its URL path as
   `plot_3d_interface(dev_path=)`, which injects `__DEV_PATH__` (`""` when absent). At `DOMContentLoaded`, if
   `location.pathname` starts with it, the page adds "DEV - " to the tab title and a fixed `#ifx-dev` tag at the

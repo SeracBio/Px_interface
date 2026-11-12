@@ -33,4 +33,5 @@ GENE_SIZE_BUCKETS:
 GENE_RING_PX: 5
 Z_FIT_PAD: 0.08
 PUBLISH_DEV_URL: https://host.example/dev/Px_interface/
+COMPOUND_TABLE_PAGE_SIZE: 50
 SRB_PNG_DIR: tmp_valonly/srb_png

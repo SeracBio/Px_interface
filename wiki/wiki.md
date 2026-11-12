@@ -30,8 +30,76 @@ _Durable, aggregate memory of this repo — read at session start. Aggregate onl
   main table only); (3) the per-row rule keeps old rows whose (gene, pg) the new run lacks (did not occur in
   the 336 past re-uploads: every row had its pair); (4) the plate date stays the `PX_DATES` date. Offered to
   the user: fix (2) with the formula on the glues rows; fix (3) after a count-only check of how a redo arrives.
-- **Dev site on the same EC2 (user decision 2026-11-09: "yes to all", procedure A). Code done; WAITING for the
-  `terraform apply` (the user picks the time).** `https://advantedge.seracbio.com/dev/Px_interface/` from S3
+- **Tabs "Explorer" | "Compound" (2026-11-12, STE): step 1 (tested targets) published by the user and checked
+  ("works great"); step 2 (significant pairs, filter area, pages) checked by the user ("works fantastically");
+  step 3 (Plates boxes primary / validation, devalidated box, structure popup) built and tested, NOT yet
+  published.**
+  Both stay in one page under `/dev/Px_interface/` (a separate `/dev/Px_compound/` needs a new nginx location,
+  S3 prefix, boot pull and publish target, and each tab click would parse the 108 MB `_data.js` again).
+  - User decisions: rows = the tested targets of the validation reports, one per (Molecule-Batch ID, gene);
+    columns Molecule-Batch ID, gene, Primary, WT, KO, MLN, BIND, UBI, Comment (config `COMPOUND_TABLE_COLUMNS`);
+    status = a green tick or a red cross only (the "in process" hourglass will come from an RDS table later);
+    Comment empty for now; tab names Explorer | Compound. Defaults (Claude, stated to the user): the table
+    ignores the Explorer filters; an open row shows all volcanoes of the compound for the gene (all batches).
+  - Facts (page data, counts only, 2026-11-12): 385,085 (gene, compound) hit pairs; 4,070 with a
+    validation-plate row (146 compounds, 2,295 genes, mostly off-target genes); plates 254 primary, 23 WT, 28 KO,
+    1 MLN, 5 BIND, 0 UBI; of 3,526 validation pairs with a primary row, 57 used another batch for the primary.
+  - Build: `px.tested_target_pairs(rep on the validation plates, contrast -> batch id from compounds_df)` ->
+    `IFACE_DIR/compound_table.parquet` (a fifth render input) -> `__COMPOUND_TABLE__ = {cols, rows}`. The page
+    computes the status from the panel rows (Primary = `pl[10]`, any batch; a suffix = a validation plate, same
+    batch), so a tick always has its volcano in the open row. Shared volcano code: `volcanoHtml`,
+    `wireVolcanoes`, `wireVolSearch` (one per bar, shared `volPins`), `placeRings` / `refreshStems` over the page,
+    `data-g` on each `.vwrap`; CSS `:is(#hover-img, #cmp-view)`. Tab bar `--tabh` 32 px moves the Explorer down;
+    the DEV tag sits in the bar. Carry-over: a click-pinned compound opens in the tab (search + its rows for
+    the pinned gene). `#Tab=Compound` opens the tab.
+  - Checks: 152 tests OK (`test_compound_table`, `_checkpoint`, `_page`, `TestTestedTargetPairs`); headless on
+    the `tmp_vdir` fixture (6 rows, 3 batches x 2 targets): carry-over (4 rows, 2 open), status 111000, 12
+    volcanoes with rings, PNG icons and 2 search bars, a pin shows in all 3 bars and on all 12 volcanoes,
+    search/sort/open/close, Escape keeps the Explorer pin, the link, production path without DEV; no JS error.
+  - Step 2 (user request 2026-11-12): a filter area (Activity), all significant pairs, 100 rows per page. User
+    choices: no batch-id change (a row without a batch id shows the compound id: 1,377 of 7,139 hit contrasts,
+    287,772 hit plate rows; the FBX `srbnumber` holds it, shape SRB-9999999-999, but the build does not use it);
+    Activity boxes start as in the Explorer (`ACTIVITY_DEFAULTS`); Rows boxes "tested targets" / "significant
+    pairs" (replaced in step 3), tested targets first; significant = down only (the panel hits). Claude: Primary
+    = any row on a primary-screen plate (any batch), else a primary-screen hit shows a cross; a row with no
+    activity level in its data always shows (step 3: only the hits count).
+  - Step 2 build: no new data; the page builds the rows from `__GENE_COMPOUNDS__` (batch key `pl[5] || t[0]`,
+    a hit = `!pl[6]`) with bit masks; config `COMPOUND_TABLE_PAGE_SIZE: 100` -> `__COMPOUND_TABLE__.page`.
+    Real data (local test page from the last build, timings/counts only, removed after): 373,970 rows; Low +
+    Single 18,987 rows (190 pages); first open 0.9 s, +80 MB heap; a box, page or search change 16-40 ms; a
+    first text sort 0.4-0.5 s, then about 30 ms; no JS error. Synthetic (`tmp_vdir`, page size 50): 1,143
+    rows = a separate count; pages, Rows boxes, all/none, natural sort both ways, an open significant row,
+    carry-over search "compound gene" with both batches open; 152 tests OK.
+  - Row groups (user question 2026-11-12; `node` over the real `_data.js`, counts only): the Rows boxes are OR
+    groups, and a status tick shows an experiment of the batch for the gene, not the group. Of 81 tested
+    targets, 54 are also significant (46 on a validation plate, 8 on primary only), so "tested targets" off
+    hides only 27. 3,993 other significant rows have a validation tick, each from a hit on a validation plate
+    of that batch (KO+WT 2,765, KO 606, KO+MLN+WT 515, with BIND 104); the stem completion adds the sibling
+    ticks. They come from 143 batches; 80 have no tested-target row (all have a batch id, none has a target on
+    another batch: most likely an empty `target` in their reports, not checked). Claude proposed separate groups
+    and a target mark; the user chose step 3 instead.
+  - Step 3 (user decision 2026-11-12): Plates boxes `#cmp-prim` / `#cmp-val` (two boxes, not the Explorer
+    Plates tree), both ticked at load; status columns unchanged; the structure image on hover over the
+    Molecule-Batch ID (`#cmp-img`, the Explorer PNG, at most 320 x 240). Rules: a row is primary / validation
+    when the batch has a hit on that plate kind; a tested target is always validation (also the 27 negative
+    results, as the Explorer shows them). Activity counts only hits and tested-target experiments (`aP` / `aV`,
+    `CT_NOLVL` = no level), not ride-along rows, as in `visPlates`. An open row shows only the plate rows of the
+    ticked kinds: "validation" alone has no primary-screen lead (the Explorer adds it; the user asked for none).
+    Real data (counts/timings only, test page removed): Low + Single both 17,919 (step 2 rule: 18,987), primary
+    16,475, validation 1,501; all levels 373,970 / 370,194 / 4,074; no level 971; first open 0.9 s; a box
+    change 37 ms; popup image 240 x 240; no JS error. Synthetic: page counts = a separate count (948 / 216 / 743;
+    1,143 / 424 / 743; 11); open row both = primary lead + WT/MLN/KO, primary = 1 stacked, validation = WT/MLN/KO;
+    152 tests OK.
+  - Devalidated box (user request 2026-11-12): "Compounds: devalidated" (`#cmp-dv`), ticked at load (as the
+    Explorer "FBXO31 independent" box); unticked hides the rows of the compounds in `__DEVALIDATED_COMPOUNDS__`
+    (serac_df `Px_Ligase_dependent(yes/no)` = 0 with a target of interest). Real (counts only): 423 compounds,
+    126,798 rows, 0 tested targets, 0 compounds also in the validated list; Low + Single both 17,919 -> 16,609;
+    all levels 247,172 (primary 244,193, validation 3,269). Synthetic: page = a separate count (875; 1,048 /
+    385 / 687); with an empty list the box does not show; no JS error; 152 tests OK.
+  - Next for the user: rebuild (the build cell is enough: only the page code changed), publish to dev, check,
+    promote.
+- **Dev site on the same EC2 (user decision 2026-11-09: "yes to all", procedure A). LIVE: the user ran the
+  `terraform apply`; seen 2026-11-12: production and dev both answer 401 without the password.** `https://advantedge.seracbio.com/dev/Px_interface/` from S3
   `dev/interfaces/` into `/var/www/webapp/dev/Px_interface/` (config `PUBLISH_DEV_URL/_S3_PREFIX/_WEBROOT`).
   - Publish (CLI `--output_dir <PUBLISH_DEV_URL>`, notebook cell `5b1e9c4a`) goes to dev only;
     `--output_dir <PUBLISH_URL>` stops the CLI. `publish_interface(..., promote=True)` (CLI `--promote`, notebook
@@ -48,8 +116,8 @@ _Durable, aggregate memory of this repo — read at session start. Aggregate onl
     headless synthetic: title + 1 tag under `/dev/Px_interface/`, none under `/Px_interface/`; the new nginx
     block passes `nginx -t` on the live EC2 (temp folder, no change); live now: prod 401, dev 404; disk 2.9 of
     30 GB used, prod folder 751 MB. `terraform plan`: only `aws_instance.main` replaced (user_data), 1 add, 1 destroy.
-  - After the apply: check prod and dev answer 401, then the first dev publish (uploads the full build to
-    `dev/interfaces/`), check the page, then promote.
+  - After the apply (prod and dev 401: seen 2026-11-12): the first dev publish (uploads the full build to
+    `dev/interfaces/`), check the page, then promote. Claude did not check the dev publish or the promote.
 - **One "validation" dropdown in the Plates filter (2026-11-04, STE): built and published; the user checked
   it ("works").** User request: no dates for validation plates. All stems (real build: 28 stems, 57
   plates, before in 3 date blocks 2026-06-01 / 08-17 / 10-06) sit in one block, in plate-number order (user
@@ -169,9 +237,8 @@ _Durable, aggregate memory of this repo — read at session start. Aggregate onl
   registry, it is on the VPN path (resolves and reaches the box), and the S3 policy blocks only object reads
   from outside the VPC, so an upload from the cluster is allowed.
 - **OPEN TO-DO (2026-10-05): security batch B on the AWS box** — step 3 (new login, bcrypt cost 05) done 2026-10-09;
-  step 4 is in the template since 2026-11-09 (`fetch_param` runs `install -m 0600 /dev/null "$2"` first) and goes
-  live with the dev-site EC2 replacement; left: optional `limit_req` (5) and per-person logins (6). Step 4
-  replaces the EC2, so do it at a quiet time. Details: log entry "Signals agent handoff: SSM and password
+  step 4 is in the template since 2026-11-09 (`fetch_param` runs `install -m 0600 /dev/null "$2"` first) and went
+  live with the dev-site EC2 replacement (seen 2026-11-12); left: optional `limit_req` (5) and per-person logins (6). Details: log entry "Signals agent handoff: SSM and password
   hardening for Px" (2026-10-05).
 - **CANCELLED (user decision, 2026-10-26): S3 item 3, the move to SSO + MFA** (plan: 2026-09-23 entry). The user:
   the shared 1Password password plus the VPN into the VPC is enough. Items 1 + 2 (old versions expire after 7

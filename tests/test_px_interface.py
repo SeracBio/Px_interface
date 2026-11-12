@@ -550,6 +550,90 @@ class TestValidationDir(unittest.TestCase):
         # the gene-visibility rule
         self.assertIn('if (pl[6] && !pl[11]) continue;', html)
 
+    def test_compound_table(self):
+        """Compound tab (2026-11-12). Input: validation exports whose reports name G_00000;G_00001, for compound 7
+        (batch 001) and compound 8 (batch 001 on Pw21VD, batch 002 on Pw22VD). Expected: one row per (Molecule-Batch
+        ID, target gene): 3 batches x 2 genes. Rationale: the tab lists the tested targets, one row per batch."""
+        c7, c8 = make_synthetic.COMPOUNDS[7], make_synthetic.COMPOUNDS[8]
+        want = [(f'{c}-{b}', g, c) for c, b in ((c7, '001'), (c8, '001'), (c8, '002')) for g in make_synthetic.GENES[:2]]
+        # the rows, in Molecule-Batch ID then gene order
+        self.assertEqual([tuple(r) for r in self.out.compound_table.itertuples(index=False)], want)
+
+    def test_compound_table_checkpoint(self):
+        """Input: a second get_iface with IFACE_OVERWRITE=False. Expected: it loads compound_table.parquet, equal to
+        the built table. Rationale: a build from the checkpoint must keep the Compound tab."""
+        params = px.PARAMS('tmp_vdir/config.yaml').load_params()
+        params.IFACE_OVERWRITE = False
+        out = px.OUTPUT()
+        out.get_iface(px.DATA(), params)
+        # the loaded table is the built one
+        pd.testing.assert_frame_equal(out.compound_table, self.out.compound_table)
+
+    def test_compound_table_page(self):
+        """Input: the rendered fixture. Expected: data.js holds __COMPOUND_TABLE__ (the config default columns, the 6
+        tested-target rows, the page size of the fixture config); the page holds the two tabs, the Plates and
+        Activity boxes, the table, the structure popup, and the rules that build and filter the rows. Rationale: the
+        page builds the significant rows and the status columns from the panel rows, so a ticked status always has
+        its volcano in the open row."""
+        import re
+        with open('tmp_vdir/out_test/interfaces/Serac_Px_interface_data.js') as f:
+            m = re.search(r'window\.__COMPOUND_TABLE__ = JSON\.parse\((".*?")\);', f.read())
+        ct = json.loads(json.loads(m.group(1)))
+        # the status columns: Primary, then the validation suffixes and UBI
+        self.assertEqual(ct['cols'], ['Primary', 'WT', 'KO', 'MLN', 'BIND', 'UBI'])
+        # the tested-target rows are the table rows
+        self.assertEqual([tuple(r) for r in ct['rows']], [tuple(r) for r in self.out.compound_table.itertuples(index=False)])
+        # the rows per page come from config COMPOUND_TABLE_PAGE_SIZE (50 in the fixture, 100 by default)
+        self.assertEqual(ct['page'], 50)
+        with open('tmp_vdir/out_test/interfaces/Serac_Px_interface.html') as f:
+            html = f.read()
+        # the two tabs, the boxes of the filter area and the table
+        self.assertIn('<div class="tab on" data-tab="explorer">Explorer</div>', html)
+        self.assertIn('data-tab="compound"', html)
+        self.assertIn('<input type="checkbox" id="cmp-prim" checked>primary', html)
+        self.assertIn('<input type="checkbox" id="cmp-val" checked>validation', html)
+        self.assertIn('<input type="checkbox" id="cmp-dv" checked>devalidated', html)
+        self.assertIn('<span id="cmp-acts"></span>', html)
+        self.assertIn('<table id="cmp-table">', html)
+        # the structure popup of the Molecule-Batch ID cell
+        self.assertIn('<div id="cmp-img"></div>', html)
+        self.assertIn('<td class="cmp-mb">', html)
+        # one row per batch (the compound id without one); a row needs a hit (not a completion row)
+        self.assertIn('var k = pl[5] || t[0], b = by[k] || (by[k] = {st: 0, aP: 0, aV: 0, hit: 0})', html)
+        self.assertIn('if (!b.hit) return;', html)
+        # a hit counts for its plate kind; a tested-target experiment counts for validation
+        self.assertIn('if (!pl[6]) { b.hit = 1; if (v) b.aV |= ctLevelBit(pl[3]); else b.aP |= ctLevelBit(pl[3]); }', html)
+        self.assertIn('else if (pl[11] && v) b.aV |= ctLevelBit(pl[3]);', html)
+        # Primary = a primary-screen plate (any batch); a suffix = a validation plate of the same batch
+        self.assertIn('if (!v) { if (prim >= 0) pbit = 1 << prim; }', html)
+        self.assertIn('else if (sx in suf) b.st |= 1 << suf[sx];', html)
+        # a row passes when a ticked plate kind has a hit with a ticked activity level (or no level), and the
+        # devalidated box is ticked or its compound is not in the devalidated list
+        self.assertIn('if (((r.aP & mP) || (r.aV & mV)) && (wD || !r.dv)) out.push(r); else hidden++;', html)
+        self.assertIn('r.dv = cmpDevalidatedSet[r.cmp] ? 1 : 0;', html)
+        # the Activity and devalidated boxes start as in the Explorer
+        self.assertIn('ctLevels.forEach(function(a) { ctTicked[a] = !def || def.indexOf(a) >= 0; });', html)
+        self.assertIn('cmpDv.checked = !cmpValDefaults || cmpValDefaults.indexOf(cmpValLabelNo) >= 0;', html)
+        # an open row shows the plate rows of the ticked kinds only
+        self.assertIn('return isValidationPlate(pl[0]) ? wV : wP;', html)
+        self.assertIn('volcanoHtml(r.t, vps, r.gene, r.cmp)', html)
+
+
+class TestTestedTargetPairs(unittest.TestCase):
+    """tested_target_pairs (2026-11-12): the Compound tab rows, one per (Molecule-Batch ID, gene) that a
+    validation report names as a target."""
+
+    def test_pairs(self):
+        """Input: u1 names 'G1; G2' (split + strip) for batch C1-001, u2 names G1 for batch C1-002, u3 names no
+        target, u4 has no batch id, u5 repeats G1 for C1-001. Expected: (C1-001, G1), (C1-001, G2), (C1-002, G1)."""
+        rep = pd.DataFrame({'uniquecontrast': ['u1', 'u2', 'u3', 'u4', 'u5'], 'compound': ['C1', 'C1', 'C2', 'C3', 'C1'],
+                            'target': ['G1; G2', 'G1', None, 'G3', 'G1 ']})
+        mbid = pd.Series({'u1': 'C1-001', 'u2': 'C1-002', 'u3': 'C2-001', 'u5': 'C1-001'})
+        out = px.tested_target_pairs(rep, mbid)
+        # one row per batch and gene, sorted; no row without a target or without a batch id
+        self.assertEqual([tuple(r) for r in out.itertuples(index=False)],
+                         [('C1-001', 'G1', 'C1'), ('C1-001', 'G2', 'C1'), ('C1-002', 'G1', 'C1')])
+
 
 class TestValidationTargetRows(unittest.TestCase):
     """validation_target_rows: the REPORT `target` (';'-separated) gives one panel row per (target gene,
