@@ -1160,6 +1160,19 @@ class TestRender(unittest.TestCase):
         # a legend toggle redraws only when the z range changed
         self.assertIn('if (fitZ()) Plotly.redraw(gd);', html)
 
+    def test_dev_tag(self):
+        """The dev site (2026-11-09): the URL path of config PUBLISH_DEV_URL reaches the client as __DEV_PATH__,
+        and the page shows the DEV tag only under that path. Rationale: the promote pushes the same build to
+        production, so the build cannot hold the tag itself."""
+        js = open(os.path.join(self.out_dir, 'interfaces', 'Serac_Px_interface_data.js')).read()
+        # the path of the config dev URL reached the client
+        self.assertIn('window.__DEV_PATH__ = "/dev/Px_interface/";', js)
+        html = open(os.path.join(self.out_dir, 'interfaces', 'Serac_Px_interface.html')).read()
+        # the tag shows only when the page URL starts with the dev path
+        self.assertIn('if (!p || location.pathname.indexOf(p) !== 0) return;', html)
+        # the tab title starts with DEV
+        self.assertIn('document.title = "DEV - "', html)
+
     def test_volcano_gene_search_files(self):
         """The volcano gene search (2026-11-04): data.js carries __VPOS__ (index id, genes, axes rect, x range),
         every volcano image of the panels has its position file gpos/<hash>.<id>.js, and the page carries the
@@ -1741,23 +1754,25 @@ class TestValidationExperimentScores(unittest.TestCase):
 
 
 class TestResolveOutputDir(unittest.TestCase):
-    """--output_dir: a local path is the build dir; the config PUBLISH_URL builds in PUBLISH_STAGE_DIR
-    and then publishes; any other URL stops the CLI before the build."""
+    """--output_dir: a local path is the build dir; the config PUBLISH_DEV_URL builds in PUBLISH_STAGE_DIR
+    and then publishes to the dev site; the production URL and any other URL stop the CLI before the build."""
 
     def test_resolve_output_dir(self):
-        """Input: a local path, the PUBLISH_URL with and without its last slash, another URL.
-        Expected: (path, False), (stage dir, True) twice, then SystemExit. Rationale: a typo in the URL
-        must not start a long build."""
+        """Input: a local path, the PUBLISH_DEV_URL with and without its last slash, the production URL,
+        another URL. Expected: (path, False), (stage dir, True) twice, then SystemExit twice. Rationale: a typo
+        in the URL must not start a long build, and production gets a build only through --promote."""
         from types import SimpleNamespace
-        p = SimpleNamespace(PUBLISH_URL='https://host.example/Px_interface/', PUBLISH_STAGE_DIR='stage')
+        p = SimpleNamespace(PUBLISH_URL='https://host.example/Px_interface/', PUBLISH_STAGE_DIR='stage',
+                            PUBLISH_DEV_URL='https://host.example/dev/Px_interface/')
         # a local path is the build dir, with no publish
         self.assertEqual(px.resolve_output_dir('tmp/out', p), ('tmp/out', False))
-        # the PUBLISH_URL, with or without its last slash -> the stage dir, and a publish
-        self.assertEqual(px.resolve_output_dir('https://host.example/Px_interface/', p), ('stage', True))
-        self.assertEqual(px.resolve_output_dir('https://host.example/Px_interface', p), ('stage', True))
-        # another URL stops the CLI
-        with self.assertRaises(SystemExit):
-            px.resolve_output_dir('https://other.example/', p)
+        # the PUBLISH_DEV_URL, with or without its last slash -> the stage dir, and a publish
+        self.assertEqual(px.resolve_output_dir('https://host.example/dev/Px_interface/', p), ('stage', True))
+        self.assertEqual(px.resolve_output_dir('https://host.example/dev/Px_interface', p), ('stage', True))
+        # the production URL and another URL stop the CLI
+        for url in ('https://host.example/Px_interface/', 'https://other.example/'):
+            with self.assertRaises(SystemExit, msg=url):
+                px.resolve_output_dir(url, p)
 
 
 class TestPublish(unittest.TestCase):
@@ -1770,6 +1785,9 @@ class TestPublish(unittest.TestCase):
         return SimpleNamespace(PUBLISH_PROJECT='proj', PUBLISH_REGION='eu-north-1', PUBLISH_S3_PREFIX='interfaces/',
                                PUBLISH_WEBROOT='/var/www/webapp/Px_interface/',
                                PUBLISH_URL='https://host.example/Px_interface/',
+                               PUBLISH_DEV_S3_PREFIX='dev/interfaces/',
+                               PUBLISH_DEV_WEBROOT='/var/www/webapp/dev/Px_interface/',
+                               PUBLISH_DEV_URL='https://host.example/dev/Px_interface/',
                                PUBLISH_EXCLUDE=['*_2dtest.html', 'volcanoes_px/*.json'])
 
     def _session(self, n_instances=1, ping='Online', status='Success'):
@@ -1786,21 +1804,25 @@ class TestPublish(unittest.TestCase):
         session.client.side_effect = lambda name: c[name]
         return session, c
 
-    def _publish(self, status):
-        """Run publish_interface on a temp interfaces/ folder; return (aws CLI argv, SSM command lines, dir)."""
+    def _publish(self, status, promote=False, dry_out=''):
+        """Run publish_interface on a temp interfaces/ folder; return (the aws CLI argv of each call, SSM command
+        lines, dir). `dry_out` is the stdout of each aws call (the promote dry run reads it). self.aws and
+        self.ssm keep the mocks, for a test that expects a SystemExit."""
         import tempfile
         from unittest import mock
         session, c = self._session(status=status)
+        self.ssm = c['ssm']
         with tempfile.TemporaryDirectory() as d:
             for f in ('Serac_Px_interface.html', 'Serac_Px_interface_data.js', 'Serac_Px_interface_2dtest.html',
                       'volcanoes_px/a.svg', 'volcanoes_px/positions.json'):
                 os.makedirs(os.path.dirname(os.path.join(d, 'interfaces', f)), exist_ok=True)
                 with open(os.path.join(d, 'interfaces', f), 'w') as fh:
                     fh.write('x')
-            with mock.patch.object(px.subprocess, 'run', return_value=mock.Mock(returncode=0)) as run, \
+            with mock.patch.object(px.subprocess, 'run', return_value=mock.Mock(returncode=0, stdout=dry_out)) as self.aws, \
                  mock.patch.object(px.time, 'sleep'):
-                px.publish_interface(d, self._params(), (session, 'b', 'i-0'))
-        return run.call_args.args[0], c['ssm'].send_command.call_args.kwargs['Parameters']['commands'], d
+                px.publish_interface(d, self._params(), (session, 'b', 'i-0'), promote=promote)
+        return ([k.args[0] for k in self.aws.call_args_list],
+                c['ssm'].send_command.call_args.kwargs['Parameters']['commands'], d)
 
     def test_targets(self):
         """Input: one running EC2, SSM Online. Expected: bucket proj-interface-<account> and that EC2.
@@ -1827,26 +1849,61 @@ class TestPublish(unittest.TestCase):
                     px.aws_publish_targets(self._params())
 
     def test_publish_interface(self):
-        """Input: an interfaces/ folder with 2 build-only files. Expected: the S3 push excludes them and
-        shows errors only; the EC2 stops at the first error, copies all but the HTML, then the HTML,
-        then sets the nginx owner. Rationale: no page loads before its data, and no file name shows."""
-        cmd, lines, d = self._publish('Success')
-        # the S3 push: interfaces/ -> s3://b/interfaces/, errors only
-        self.assertEqual(cmd[:5], ['aws', 's3', 'sync', os.path.join(d, 'interfaces'), 's3://b/interfaces/'])
+        """Input: an interfaces/ folder with 2 build-only files. Expected: one S3 push, to the dev prefix, that
+        excludes them and shows errors only; the EC2 stops at the first error, stops if nginx does not ask for
+        the password at the dev path, copies all but the HTML, then the HTML, then sets the nginx owner.
+        Rationale: a publish never goes to production, no page loads before its data, and no file name shows."""
+        calls, lines, d = self._publish('Success')
+        # one aws call: the S3 push interfaces/ -> s3://b/dev/interfaces/, errors only
+        self.assertEqual(len(calls), 1)
+        cmd = calls[0]
+        self.assertEqual(cmd[:5], ['aws', 's3', 'sync', os.path.join(d, 'interfaces'), 's3://b/dev/interfaces/'])
         self.assertIn('--only-show-errors', cmd)
         # both build-only patterns are excluded
         self.assertEqual([cmd[i + 1] for i, a in enumerate(cmd) if a == '--exclude'],
                          ['*_2dtest.html', 'volcanoes_px/*.json'])
         # the EC2 stops at the first error
         self.assertEqual(lines[0], 'set -e')
+        # the EC2 copies nothing if the dev path answers without the password (not 401)
+        self.assertIn("-w '%{http_code}' https://127.0.0.1/dev/Px_interface/)\" = 401 ||", lines[1])
         # the first copy skips the HTML, and the second copy (no exclude) brings it last
-        self.assertIn("--exclude '*.html'", lines[1])
-        self.assertTrue(lines[2].startswith('aws s3 sync s3://b/interfaces/ /var/www/webapp/Px_interface/'))
-        self.assertNotIn('--exclude', lines[2])
+        self.assertIn("--exclude '*.html'", lines[2])
+        self.assertTrue(lines[3].startswith('aws s3 sync s3://b/dev/interfaces/ /var/www/webapp/dev/Px_interface/'))
+        self.assertNotIn('--exclude', lines[3])
         # both EC2 copies compare exact dates: a new HTML of the same size must not be skipped
-        self.assertTrue(all('--exact-timestamps' in l for l in lines[1:3]))
+        self.assertTrue(all('--exact-timestamps' in l for l in lines[2:4]))
         # nginx owns the copied files
-        self.assertEqual(lines[3], 'chown -R root:nginx /var/www/webapp/Px_interface/')
+        self.assertEqual(lines[4], 'chown -R root:nginx /var/www/webapp/dev/Px_interface/')
+
+    def test_promote(self):
+        """Input: promote=True, and a dry run against the dev site that lists no file. Expected: the dry run
+        (dev prefix, same excludes), then the S3 push to the production prefix, then the EC2 copy into the
+        production folder after the password check at the production path. Rationale: production gets the
+        build that the dev site shows, with no rebuild."""
+        calls, lines, d = self._publish('Success', promote=True)
+        # first the dry run against the dev prefix, with the same excludes
+        self.assertEqual(calls[0][:5], ['aws', 's3', 'sync', os.path.join(d, 'interfaces'), 's3://b/dev/interfaces/'])
+        self.assertIn('--dryrun', calls[0])
+        self.assertEqual([calls[0][i + 1] for i, a in enumerate(calls[0]) if a == '--exclude'],
+                         ['*_2dtest.html', 'volcanoes_px/*.json'])
+        # then the push to the production prefix (no dry run)
+        self.assertEqual(calls[1][:5], ['aws', 's3', 'sync', os.path.join(d, 'interfaces'), 's3://b/interfaces/'])
+        self.assertNotIn('--dryrun', calls[1])
+        # the EC2 checks the password at the production path, then copies into the production folder
+        self.assertIn('https://127.0.0.1/Px_interface/)', lines[1])
+        self.assertTrue(lines[3].startswith('aws s3 sync s3://b/interfaces/ /var/www/webapp/Px_interface/'))
+
+    def test_promote_refuses_changed_build(self):
+        """Input: promote=True, and a dry run that lists 2 files (a build after the dev publish). Expected:
+        SystemExit after the dry run, with no S3 push and no EC2 command. Rationale: production must get only
+        the build that the user checked on the dev site."""
+        # the promote stops
+        with self.assertRaises(SystemExit):
+            self._publish('Success', promote=True, dry_out='(dryrun) upload: a to s3://b/x\n(dryrun) upload: c to s3://b/y\n')
+        # the dry run was the only aws call
+        self.assertEqual(self.aws.call_count, 1)
+        # the EC2 got no command
+        self.assertFalse(self.ssm.send_command.called)
 
     def test_publish_interface_ec2_failure(self):
         """Input: the SSM command ends Failed. Expected: SystemExit. Rationale: a failed EC2 copy must

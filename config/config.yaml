@@ -123,7 +123,7 @@ GENE_RESEARCH: data/20260623_10Kgenes_research.json
 CHEMLIB_OVERWRITE: false         # true -> fetch newest data from CDD (compound structures)
 UPDATE_PNGS: false               # true -> fetch new/missing PNGs before building (resume-safe: skips existing)
 DFRAW_OVERWRITE: false           # true -> rebuild df_raw + MS from the 3 old proteomics exports, overwrite DFRAW_PATH + MS_PATH
-IFACE_OVERWRITE: false           # true  -> rebuild + save the interface inputs; false -> load them from IFACE_DIR + free RAM
+IFACE_OVERWRITE: true           # true  -> rebuild + save the interface inputs; false -> load them from IFACE_DIR + free RAM
 
 # Parallelism: workers for the volcano render (joblib base render + threaded SVG writes).
 # 0 (or blank/<0) -> auto = max(1, CPU count - 2); a positive int -> exactly that many workers.
@@ -144,13 +144,17 @@ FREE_UPSTREAM: true
 EXPORT_COMBINED: false
 PX_PARQUET_DIR: /mnt/c/Users/gtamo/Serac Biosciences Dropbox/Serac_team/4_Data_Sciences/15_ML/Daniela/Px_parquet_from_GT
 
-# Publish to AWS (the Px interface only; user decision 2026-10-01). `--output_dir <PUBLISH_URL>` builds in
-# PUBLISH_STAGE_DIR, pushes its interfaces/ folder to the S3 bucket, then makes the EC2 copy it from S3.
+# Publish to AWS (the Px interface only; user decision 2026-10-01). `--output_dir <PUBLISH_DEV_URL>` builds in
+# PUBLISH_STAGE_DIR, pushes its interfaces/ folder to the S3 bucket, then makes the EC2 copy it from S3: the dev
+# site (2026-11-09). `--promote` pushes the same build to production, only if the dev site shows that build.
 # The CLI finds the bucket (from the AWS account) and the EC2 (by its Name tag) at run time, so git holds no IDs.
-PUBLISH_URL: https://advantedge.seracbio.com/Px_interface/   # this --output_dir value starts a publish
+PUBLISH_URL: https://advantedge.seracbio.com/Px_interface/   # production; only --promote writes here
+PUBLISH_DEV_URL: https://advantedge.seracbio.com/dev/Px_interface/   # this --output_dir value starts a publish; the page shows a DEV tag here
 PUBLISH_STAGE_DIR: output             # local build folder; keep it the same, so the volcano cache stays
 PUBLISH_PROJECT: vpn-project          # project_name in aws-vpn/: bucket <project>-interface-<account>, EC2 <project>-instance
 PUBLISH_REGION: eu-north-1            # region of the VPN VPC, the bucket and the EC2
-PUBLISH_S3_PREFIX: interfaces/        # must match the boot pull in aws-vpn/user_data.sh.tftpl
+PUBLISH_S3_PREFIX: interfaces/        # production; must match the boot pull in aws-vpn/user_data.sh.tftpl
+PUBLISH_DEV_S3_PREFIX: dev/interfaces/   # dev site; must match the boot pull in aws-vpn/user_data.sh.tftpl
 PUBLISH_WEBROOT: /var/www/webapp/Px_interface/   # nginx folder on the EC2 (location /Px_interface/)
+PUBLISH_DEV_WEBROOT: /var/www/webapp/dev/Px_interface/   # nginx folder on the EC2 (location /dev/Px_interface/)
 PUBLISH_EXCLUDE: ['*_2dtest.html', 'volcanoes_px/*.json']   # build-only files that the page does not use

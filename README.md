@@ -40,7 +40,8 @@ python python/Px_interface.py
 | Flag | Default | Purpose |
 |---|---|---|
 | `--config` | `config/config.yaml` | path to the YAML config |
-| `--output_dir` | `output` | base dir for the HTML + volcanoes (`interfaces/` is created under it), or the config `PUBLISH_URL` to build and publish to AWS (see "Publish the interface") |
+| `--output_dir` | `output` | base dir for the HTML + volcanoes (`interfaces/` is created under it), or the config `PUBLISH_DEV_URL` to build and publish to the dev site on AWS (see "Publish the interface") |
+| `--promote` | off | no build: push the `PUBLISH_STAGE_DIR` build to production (`PUBLISH_URL`); stops if the dev site does not show that build |
 | `--show_plate` | config `SHOW_PLATE` | Plates that start ticked, comma-separated: a date (`YYYYMMDD`), `validation` (all validation plates) or `validation YYYYMMDD` |
 
 Four config flags set what the CLI rebuilds (the notebook uses the same flags):
@@ -222,26 +223,53 @@ aws ssm get-command-invocation --region eu-north-1 \
 ```
 
 Useful on-box diagnostics: `systemctl status provision-webapp`,
-`journalctl -u provision-webapp`, `ls /var/www/webapp/Px_interface/`.
+`journalctl -u provision-webapp`, `ls /var/www/webapp/Px_interface/ /var/www/webapp/dev/Px_interface/`.
 
 ### Publish the interface (AWS or Dropbox)
 
-**AWS (one command).** Build the interface and push it to the box in one run. Real Px interface data can go
-on this box (see the note under "Browse the interface").
+**AWS: the dev site, then production (2026-11-09).** Real Px interface data can go on this box (see the note
+under "Browse the interface"). One EC2 serves two sites, with the same password:
 
-```bash
-python python/Px_interface.py --config config/config.yaml \
-  --output_dir "https://advantedge.seracbio.com/Px_interface/"
-```
+| Site | URL | S3 prefix | EC2 folder |
+|---|---|---|---|
+| dev | `https://advantedge.seracbio.com/dev/Px_interface/` | `dev/interfaces/` | `/var/www/webapp/dev/Px_interface/` |
+| production | `https://advantedge.seracbio.com/Px_interface/` | `interfaces/` | `/var/www/webapp/Px_interface/` |
 
-**AWS from the notebook** (2026-11-03). In `vignettes/MS_Interface.ipynb`, the publish cell after the build cell
-calls the same `publish_interface`. It pushes `OUTPUT_DIR/interfaces`, so keep `OUTPUT_DIR` equal to
-`PUBLISH_STAGE_DIR`. The kernel keeps the data:
+A publish goes to the dev site. Production gets a build only through the promote step:
+
+1. Build the interface and publish it to the dev site:
+
+   ```bash
+   python python/Px_interface.py --config config/config.yaml \
+     --output_dir "https://advantedge.seracbio.com/dev/Px_interface/"
+   ```
+
+2. Check the dev site. The page shows a "DEV" tag at the top and "DEV - " in the tab title.
+3. Push the same build to production (no build):
+
+   ```bash
+   python python/Px_interface.py --config config/config.yaml --promote
+   ```
+
+The promote first runs a dry-run `aws s3 sync` of the local build against the dev prefix. If a file is new or
+changed after the dev publish, the promote stops. Then publish to the dev site and check it again. Thus
+production gets only the build that you checked. The promote cannot copy the files inside S3, because the
+bucket refuses object reads from outside the VPC. Thus it uploads the changed files from the local build, as
+the publish does. `--output_dir` with the production URL stops the CLI.
+
+The page finds the dev path (from `PUBLISH_DEV_URL`) when it loads, so the same build shows the tag only on
+the dev site.
+
+**AWS from the notebook** (2026-11-03; dev site 2026-11-09). In `vignettes/MS_Interface.ipynb`, the publish cell
+after the build cell calls the same `publish_interface` and goes to the dev site. The next cell promotes to
+production. Both push `OUTPUT_DIR/interfaces`, so keep `OUTPUT_DIR` equal to `PUBLISH_STAGE_DIR`. The kernel
+keeps the data:
 
 - After a change to the page code only, run the build cell and the publish cell again.
 - After a change to the data code (for example the MS score rule), run the data and output cells again first.
+- To promote, set `PROMOTE = True` in the promote cell, run the cell, then set it back to `False`.
 
-"Run All" also runs the publish cell.
+"Run All" also runs the publish cell (to the dev site). With `PROMOTE = False`, it does not promote.
 
 **Dropbox ML folder (two commands).** The cluster has no Dropbox folder to write into. Build into the local
 `output` folder, then copy `output/interfaces` to Dropbox with rclone (quote the path: it contains spaces):
@@ -269,11 +297,14 @@ the gene-search position files in `volcanoes_px/gpos/` (2026-11-04). The publish
 page works, remove the old files with `python/prune_volcanoes.py`:
 
 ```bash
-python python/prune_volcanoes.py output/interfaces --s3            # dry run: counts only
-python python/prune_volcanoes.py output/interfaces --s3 --apply    # delete: the local folder, S3, then the box
+python python/prune_volcanoes.py output/interfaces --s3 --target dev             # dry run: counts only
+python python/prune_volcanoes.py output/interfaces --s3 --target dev --apply     # delete: the local folder, S3, then the box
+python python/prune_volcanoes.py output/interfaces --s3 --target prod --apply    # after the promote
 ```
 
-Without `--s3`, it changes only the local folder. The script finds the image names in the page (HTML and
+Without `--s3`, it changes only the local folder. `--target` selects the site (default `dev`). Prune production
+only after the promote. Before the promote, production uses the old files, and the script stops because the
+production `data.js` is different. The script finds the image names in the page (HTML and
 `data.js`) and deletes only the `volcanoes_px` SVGs that the page does not use. It uses the publish targets
 (`aws_publish_targets`) and deletes on S3 with `delete_objects`. Then it makes the box remove the same files
 with an `aws s3 sync --delete` of `volcanoes_px/` only. It stops before any delete in these conditions:
@@ -286,17 +317,19 @@ The bucket keeps a deleted file as an old version for `interface_noncurrent_days
 
 > **CAUTION:** `--apply` deletes files. Run the dry run first, and check the new page before you delete.
 
-When `--output_dir` is the config `PUBLISH_URL`, the CLI:
+When `--output_dir` is the config `PUBLISH_DEV_URL`, the CLI:
 
 1. Finds the bucket (from the AWS account) and the EC2 (by its `Name` tag), and checks that SSM is
    Online. It does this before the build, so a problem stops it in seconds.
 2. Builds in `PUBLISH_STAGE_DIR` (default `output`), as a normal build does.
-3. Runs `aws s3 sync` from `interfaces/` to `s3://<bucket>/interfaces/`. The sync sends only the
+3. Runs `aws s3 sync` from `interfaces/` to `s3://<bucket>/dev/interfaces/`. The sync sends only the
    changed files, and it skips the build-only files in `PUBLISH_EXCLUDE`.
-4. Sends one SSM command. The EC2 copies the files into `/var/www/webapp/Px_interface/`, the HTML
-   last, and then sets the nginx owner and the file modes.
+4. Sends one SSM command. The EC2 first makes sure that nginx asks for the password at the site path
+   (HTTP 401 without it). If not, it stops and copies nothing. Then it copies the files into
+   `/var/www/webapp/dev/Px_interface/`, the HTML last, and sets the nginx owner and the file modes.
 
-The CLI prints counts only, because the file names hold compound IDs. It needs AWS credentials that
+`--promote` does steps 1, 3 and 4 for production (`interfaces/`, `/var/www/webapp/Px_interface/`), after the
+dry-run check. The CLI prints counts only, because the file names hold compound IDs. It needs AWS credentials that
 can write to the bucket and send SSM commands. It does not need the VPN. The `PUBLISH_*` keys in
 `config/config.yaml` hold the settings.
 

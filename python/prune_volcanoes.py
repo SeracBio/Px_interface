@@ -1,9 +1,10 @@
 """Delete the volcano SVGs that the page does not use (2026-10-23: the names carry a data hash, so each data change
 leaves the old files), and the gene-search position files of the volcano gene search that it does not use
 (volcanoes_px/gpos/<image hash>.<index id>.js, 2026-11-04: the page uses the file of each image it uses, with the
-index id of __VPOS__). The local folder; with --s3 also the published copies: S3 (<PUBLISH_S3_PREFIX>volcanoes_px/)
-and the box web folder. Dry run unless --apply. Prints counts only.
-Usage: python python/prune_volcanoes.py output/interfaces [--s3] [--apply] [--config config/config.yaml]
+index id of __VPOS__). The local folder; with --s3 also the published copies of one site (--target, 2026-11-09):
+S3 (<PUBLISH_DEV_S3_PREFIX or PUBLISH_S3_PREFIX>volcanoes_px/) and the box web folder. Dry run unless --apply.
+Prints counts only.
+Usage: python python/prune_volcanoes.py output/interfaces [--s3 [--target dev|prod]] [--apply] [--config config/config.yaml]
 Stops if the page is older than python/functions.py (built before the data-keyed names), if the page uses a file
 that the local folder or S3 lacks, or if S3 or the box holds another data.js (the published page is not this one)."""
 import argparse, json, os, re, sys
@@ -12,6 +13,8 @@ ap = argparse.ArgumentParser(description='Delete the volcano SVGs that the page 
 ap.add_argument('interfaces', help='the build folder that holds the page, e.g. output/interfaces')
 ap.add_argument('--s3', action='store_true', help='also the published copies: S3 and the box (the publish targets)')
 ap.add_argument('--apply', action='store_true', help='delete; without it, a dry run')
+ap.add_argument('--target', choices=('dev', 'prod'), default='dev',
+                help='with --s3: the site whose copies to prune (dev: PUBLISH_DEV_*, prod: PUBLISH_*)')
 ap.add_argument('--config', default='config/config.yaml', help='the YAML config (PUBLISH_* keys), for --s3')
 args = ap.parse_args()
 d = os.path.abspath(args.interfaces)
@@ -59,7 +62,9 @@ sys.path.insert(0, repo)
 import python.Px_interface as px
 p = px.PARAMS(cfg).load_params()
 session, bucket, iid = px.aws_publish_targets(p)
-s3, prefix, web = session.client('s3'), p.PUBLISH_S3_PREFIX, p.PUBLISH_WEBROOT
+site = 'PUBLISH_DEV_' if args.target == 'dev' else 'PUBLISH_'
+s3, prefix, web = session.client('s3'), getattr(p, site + 'S3_PREFIX'), getattr(p, site + 'WEBROOT')
+print(f'site: {args.target} ({prefix})')
 size = os.path.getsize(page[1])
 key = prefix + os.path.basename(page[1])   # the size from a listing: the bucket allows no object read outside the VPC
 if next((o['Size'] for o in s3.list_objects_v2(Bucket=bucket, Prefix=key).get('Contents', []) if o['Key'] == key), None) != size:

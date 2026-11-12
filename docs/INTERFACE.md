@@ -490,6 +490,11 @@ while `valCatShown.rest` is false. The `.iface` session does not save `valCatSho
 - **`VOLCANO_GENE_SEARCH`** — `true`/absent: the build writes the volcano gene-search files (`gpos/`, about
   250 MB on real data) and `__VPOS__ = {id, genes, axrect, xlim}`; `false`: `__VPOS__ = null` and no search
   bar. `build_interface` passes it as `plot_3d_interface(volcano_gene_search=)`.
+- **`PUBLISH_DEV_URL`** (2026-11-09) — the dev site. `build_interface` passes its URL path as
+  `plot_3d_interface(dev_path=)`, which injects `__DEV_PATH__` (`""` when absent). At `DOMContentLoaded`, if
+  `location.pathname` starts with it, the page adds "DEV - " to the tab title and a fixed `#ifx-dev` tag at the
+  top. The build itself holds no tag, so the promote pushes the same files to production. The publish and
+  promote steps are in the README ("Publish the interface").
 - **`CONTROLS_ON`** — the state of the "control" compound tickbox (Activity panel) when the page opens.
   `true`/absent shows the `CONTROLS` compounds (since 2026-10-26; before, the build hid them). `false` hides
   them until the box is ticked. `build_interface` passes it as `plot_3d_interface(control_default_on=)`, which

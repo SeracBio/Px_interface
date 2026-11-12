@@ -132,7 +132,10 @@ Configure both tunnels — AWS uses one as active, one as standby for redundancy
 ## Step 6 — Upload the Serac Px Interface (via S3)
 
 The instance **auto-pulls** the interface from the S3 artifacts bucket at boot into
-`/var/www/webapp/Px_interface/` — so you just place the files in the bucket (no SSH, no manual `cp`). Upload
+`/var/www/webapp/Px_interface/` (production, prefix `interfaces/`) and `/var/www/webapp/dev/Px_interface/` (the
+dev site, prefix `dev/interfaces/`, 2026-11-09). nginx asks for the password on the full site. The normal path is
+the publish and promote steps in the README ("Publish the interface"). The steps below are the manual path
+(no SSH, no manual `cp`). Upload
 **before** Step 4's apply and a fresh box serves it immediately; upload after and refresh with one command.
 
 Render (SYNTHETIC — real data waits for M365 SSO) and upload from your workstation:
@@ -215,7 +218,7 @@ On-prem / VPN                         AWS VPC (172.20.0.0/16)
       |                                        |
       |                               EC2 t3.micro @ 172.20.2.10
       |                               nginx HTTPS + Basic Auth
-      |                               serves /Px_interface/  (auto-pulled from S3 at boot)
+      |                               serves /Px_interface/ + /dev/Px_interface/  (auto-pulled from S3 at boot)
       |                                        |
       |                        (SSM + S3 + DNS via VPC endpoints — no NAT, no public IP)
 ```

@@ -30,6 +30,26 @@ _Durable, aggregate memory of this repo — read at session start. Aggregate onl
   main table only); (3) the per-row rule keeps old rows whose (gene, pg) the new run lacks (did not occur in
   the 336 past re-uploads: every row had its pair); (4) the plate date stays the `PX_DATES` date. Offered to
   the user: fix (2) with the formula on the glues rows; fix (3) after a count-only check of how a redo arrives.
+- **Dev site on the same EC2 (user decision 2026-11-09: "yes to all", procedure A). Code done; WAITING for the
+  `terraform apply` (the user picks the time).** `https://advantedge.seracbio.com/dev/Px_interface/` from S3
+  `dev/interfaces/` into `/var/www/webapp/dev/Px_interface/` (config `PUBLISH_DEV_URL/_S3_PREFIX/_WEBROOT`).
+  - Publish (CLI `--output_dir <PUBLISH_DEV_URL>`, notebook cell `5b1e9c4a`) goes to dev only;
+    `--output_dir <PUBLISH_URL>` stops the CLI. `publish_interface(..., promote=True)` (CLI `--promote`, notebook
+    cell `c4e8a1d7` with `PROMOTE = False` so "Run All" never promotes) runs a dry-run `aws s3 sync` of the local
+    build against the dev prefix, stops if it lists a file, then pushes to `interfaces/` and the prod folder.
+    Reason: an S3-to-S3 copy from the cluster fails (object reads only through the VPC endpoint).
+  - The EC2 sync first runs `curl https://127.0.0.1<path>` and stops unless it gets 401 (no password -> no copy).
+  - **nginx before this change asked for the password only in `location /Px_interface/`: a file in another
+    folder of `/var/www/webapp` showed without it.** The template now has `auth_basic` (and `index`) in the
+    server block, plus `location /dev/Px_interface/` and a boot pull of `dev/interfaces/`.
+  - DEV tag: `__DEV_PATH__` (the path of `PUBLISH_DEV_URL`); at `DOMContentLoaded` the page adds "DEV - " to the
+    title and a fixed `#ifx-dev` tag, only under that path. `prune_volcanoes.py --target dev|prod` (default dev).
+  - Checks: 148 tests OK (`test_dev_tag`, `test_promote`, `test_promote_refuses_changed_build`, new dev asserts);
+    headless synthetic: title + 1 tag under `/dev/Px_interface/`, none under `/Px_interface/`; the new nginx
+    block passes `nginx -t` on the live EC2 (temp folder, no change); live now: prod 401, dev 404; disk 2.9 of
+    30 GB used, prod folder 751 MB. `terraform plan`: only `aws_instance.main` replaced (user_data), 1 add, 1 destroy.
+  - After the apply: check prod and dev answer 401, then the first dev publish (uploads the full build to
+    `dev/interfaces/`), check the page, then promote.
 - **One "validation" dropdown in the Plates filter (2026-11-04, STE): built and published; the user checked
   it ("works").** User request: no dates for validation plates. All stems (real build: 28 stems, 57
   plates, before in 3 date blocks 2026-06-01 / 08-17 / 10-06) sit in one block, in plate-number order (user
@@ -149,7 +169,8 @@ _Durable, aggregate memory of this repo — read at session start. Aggregate onl
   registry, it is on the VPN path (resolves and reaches the box), and the S3 policy blocks only object reads
   from outside the VPC, so an upload from the cluster is allowed.
 - **OPEN TO-DO (2026-10-05): security batch B on the AWS box** — step 3 (new login, bcrypt cost 05) done 2026-10-09;
-  left: secret files at 0600 from the start (step 4), optional `limit_req` (5) and per-person logins (6). Step 4
+  step 4 is in the template since 2026-11-09 (`fetch_param` runs `install -m 0600 /dev/null "$2"` first) and goes
+  live with the dev-site EC2 replacement; left: optional `limit_req` (5) and per-person logins (6). Step 4
   replaces the EC2, so do it at a quiet time. Details: log entry "Signals agent handoff: SSM and password
   hardening for Px" (2026-10-05).
 - **CANCELLED (user decision, 2026-10-26): S3 item 3, the move to SSO + MFA** (plan: 2026-09-23 entry). The user:

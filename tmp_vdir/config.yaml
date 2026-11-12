@@ -32,5 +32,6 @@ GENE_SIZE_BUCKETS:
 - 16
 GENE_RING_PX: 5
 Z_FIT_PAD: 0.08
+PUBLISH_DEV_URL: https://host.example/dev/Px_interface/
 SRB_PNG_DIR: tmp_vdir/srb_png
 VALIDATION_DIR: tmp_vdir/validation

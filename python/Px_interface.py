@@ -214,15 +214,20 @@ def resolve_plate_defaults(plate2date, show_plate=None, validation_suffixes=()):
 def resolve_output_dir(output_dir, params):
     """
     CLI --output_dir -> (local build dir, publish flag). A local path is the build dir, as before.
-    The URL in config PUBLISH_URL builds in PUBLISH_STAGE_DIR, and then the CLI publishes to AWS.
+    The URL in config PUBLISH_DEV_URL builds in PUBLISH_STAGE_DIR, and then the CLI publishes to the dev
+    site. The production URL (PUBLISH_URL) stops the CLI: production gets a build only through --promote.
     param str output_dir: CLI --output_dir (a local path or a URL)
-    param class params: PARAMS instance (PUBLISH_URL, PUBLISH_STAGE_DIR)
+    param class params: PARAMS instance (PUBLISH_DEV_URL, PUBLISH_URL, PUBLISH_STAGE_DIR)
     return tuple: (local build dir, True if the CLI must publish)
     """
     if not re.match(r'https?://', output_dir):
         return output_dir, False
-    if output_dir.rstrip('/') != str(getattr(params, 'PUBLISH_URL', '')).rstrip('/'):
-        sys.exit(f'--output_dir {output_dir} is a URL, but it is not PUBLISH_URL in the config')
+    url = output_dir.rstrip('/')
+    if url == str(getattr(params, 'PUBLISH_URL', '')).rstrip('/'):
+        sys.exit(f'--output_dir {output_dir} is production: publish to PUBLISH_DEV_URL, check the dev site, '
+                 'then run --promote')
+    if url != str(getattr(params, 'PUBLISH_DEV_URL', '')).rstrip('/'):
+        sys.exit(f'--output_dir {output_dir} is a URL, but it is not PUBLISH_DEV_URL in the config')
     return params.PUBLISH_STAGE_DIR, True
 
 
@@ -271,37 +276,54 @@ def ssm_run(session, iid, commands):
             return inv
 
 
-def publish_interface(local_dir, params, targets):
+def publish_interface(local_dir, params, targets, promote=False):
     """
     Push <local_dir>/interfaces/ to S3, then make the EC2 copy it into the nginx folder. The EC2
     copies the HTML last, so a page never loads before its data. Prints counts only, because the
-    file names hold compound IDs.
+    file names hold compound IDs. The publish goes to the dev site (PUBLISH_DEV_*). promote=True pushes
+    the same build to production (PUBLISH_*), and stops if a file of the build is not on the dev site
+    (a build after the dev publish). The EC2 stops if nginx does not ask for the password at the URL.
     param str local_dir: build dir (PUBLISH_STAGE_DIR) that holds interfaces/
     param class params: PARAMS instance (PUBLISH_* keys)
     param tuple targets: (boto3 session, bucket name, EC2 instance ID) from aws_publish_targets
+    param bool promote: False -> the dev site; True -> production, with the build that the dev site shows
     return None:
     """
     session, bucket, iid = targets
-    src, s3_uri, web = os.path.join(local_dir, 'interfaces'), f's3://{bucket}/{params.PUBLISH_S3_PREFIX}', params.PUBLISH_WEBROOT
+    url, prefix, web = (getattr(params, ('PUBLISH_' if promote else 'PUBLISH_DEV_') + k) for k in ('URL', 'S3_PREFIX', 'WEBROOT'))
+    src = os.path.join(local_dir, 'interfaces')
     excl = list(getattr(params, 'PUBLISH_EXCLUDE', []))
     files = [os.path.relpath(os.path.join(d, f), src) for d, _, fs in os.walk(src) for f in fs]
     files = [f for f in files if not any(fnmatch.fnmatch(f, p) for p in excl)]
+    opts = ['--region', params.PUBLISH_REGION] + [a for p in excl for a in ('--exclude', p)]
+    if promote:
+        # a dry-run sync to the dev site lists each file that is new or changed since the dev publish
+        dry = subprocess.run(['aws', 's3', 'sync', src, f's3://{bucket}/{params.PUBLISH_DEV_S3_PREFIX}', '--dryrun'] + opts,
+                             stdout=subprocess.PIPE, text=True)
+        if dry.returncode:
+            sys.exit('promote: the dry run against the dev site failed (see the errors above)')
+        n = sum(line.startswith('(dryrun)') for line in dry.stdout.splitlines())
+        if n:
+            sys.exit(f'promote: {n} files of the local build are not on the dev site; publish to dev and check it first')
     t0 = time.time()
-    cmd = ['aws', 's3', 'sync', src, s3_uri, '--region', params.PUBLISH_REGION, '--only-show-errors']
-    if subprocess.run(cmd + [a for p in excl for a in ('--exclude', p)]).returncode:
+    if subprocess.run(['aws', 's3', 'sync', src, f's3://{bucket}/{prefix}', '--only-show-errors'] + opts).returncode:
         sys.exit('publish: aws s3 sync to S3 failed (see the errors above)')
     print(f'> publish: {len(files)} files ({sum(os.path.getsize(os.path.join(src, f)) for f in files) / 1e6:.0f} MB) '
           f'in S3 after {time.time() - t0:.0f}s')
     # --exact-timestamps: else an S3->disk sync skips a same-size file (each new HTML) unless the disk copy is newer
-    sync = f'aws s3 sync {s3_uri} {web} --region {params.PUBLISH_REGION} --only-show-errors --exact-timestamps'
+    sync = f'aws s3 sync s3://{bucket}/{prefix} {web} --region {params.PUBLISH_REGION} --only-show-errors --exact-timestamps'
+    path = re.sub(r'^https?://[^/]+', '', url)
     t0 = time.time()
     inv = ssm_run(session, iid, [
-        'set -e', f"{sync} --exclude '*.html'", sync, f'chown -R root:nginx {web}',
+        'set -e',
+        f"""test "$(curl -sk -o /dev/null -w '%{{http_code}}' https://127.0.0.1{path})" = 401 || """
+        f"""{{ echo 'nginx does not ask for the password at {path}: apply aws-vpn first' >&2; exit 1; }}""",
+        f"{sync} --exclude '*.html'", sync, f'chown -R root:nginx {web}',
         f'find {web} -type f -exec chmod 644 {{}} +', f'find {web} -type d -exec chmod 755 {{}} +',
         f'echo files=$(find {web} -type f | wc -l)'])
     if inv['Status'] != 'Success':
         sys.exit(f"publish: the EC2 sync ended {inv['Status']}: {inv['StandardErrorContent'][-500:]}")
-    print(f"> publish: EC2 synced after {time.time() - t0:.0f}s ({inv['StandardOutputContent'].strip()}) -> {params.PUBLISH_URL}")
+    print(f"> publish: EC2 synced after {time.time() - t0:.0f}s ({inv['StandardOutputContent'].strip()}) -> {url}")
 
 
 class PARAMS():
@@ -1157,6 +1179,7 @@ class OUTPUT():
             size_buckets=getattr(params, 'GENE_SIZE_BUCKETS', [6, 8, 10, 12, 15, 20]),  # dot px by #significant-compounds (1,2,3,4,5,>5)
             ring_px=getattr(params, 'GENE_RING_PX', 4),   # thickness (px) of the dark ring drawn around each gene dot
             z_fit_pad=getattr(params, 'Z_FIT_PAD', 0.05),  # MS axis top = the highest shown gene + this part of the span (config Z_FIT_PAD)
+            dev_path=re.sub(r'^https?://[^/]+', '', getattr(params, 'PUBLISH_DEV_URL', '') or '') or None,  # DEV tag under this URL path
             html_path=os.path.join(output_dir, 'interfaces', 'Serac_Px_interface.html'), # 20260612_3d_interface_PX_R2_assoc_ms.html
         )
 
@@ -1232,7 +1255,10 @@ if __name__ == "__main__":
     ap.add_argument('--config', default='config/config.yaml', help="path to the YAML config")
     ap.add_argument('--output_dir', default='output',
                     help="base dir for the HTML + volcanoes (interfaces/ is created under it), or the config "
-                         "PUBLISH_URL: build in PUBLISH_STAGE_DIR, then publish to AWS (S3, then the EC2)")
+                         "PUBLISH_DEV_URL: build in PUBLISH_STAGE_DIR, then publish to the dev site (S3, then the EC2)")
+    ap.add_argument('--promote', action='store_true',
+                    help="no build: push the PUBLISH_STAGE_DIR build to production (PUBLISH_URL); "
+                         "stops if the dev site does not show that build")
     ap.add_argument('--show_plate', default=None,
                     help='comma-separated Plates-filter blocks to default-tick: YYYYMMDD dates or '
                          '"validation YYYYMMDD", overriding config SHOW_PLATE; e.g. "20260812, validation 20261006". '
@@ -1244,6 +1270,9 @@ if __name__ == "__main__":
     params.load_params()
     if args.show_plate is not None:   # CLI overrides config SHOW_PLATE
         params.SHOW_PLATE = [s.strip() for s in args.show_plate.split(',') if s.strip()]
+    if args.promote:
+        publish_interface(params.PUBLISH_STAGE_DIR, params, aws_publish_targets(params), promote=True)
+        sys.exit()
     local_dir, publish = resolve_output_dir(args.output_dir, params)
     targets = aws_publish_targets(params) if publish else None   # check AWS access before the long build
 

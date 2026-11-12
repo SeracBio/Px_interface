@@ -938,6 +938,9 @@ _INTERFACE_INJECT = '''
                user-select: text; }
   #hover-img.pinned { border-color: #1D3557; border-width: 2px; padding: 5px;
                       box-shadow: 0 4px 14px rgba(0,0,0,0.25); }
+  #ifx-dev { position: fixed; top: 6px; left: 50%; transform: translateX(-50%); z-index: 9998;
+             background: #d9480f; color: white; font: bold 12px sans-serif; letter-spacing: 1px;
+             padding: 2px 10px; border-radius: 4px; pointer-events: none; }
   /* The panel is fixed to the right edge and grows to the left when volcanoes open: keep the row at its own
      width on the right, so the compound cells stay under the pointer (2026-10-23). */
   #hover-img .row { display: flex; flex-direction: row; gap: 6px;
@@ -3744,6 +3747,16 @@ _INTERFACE_INJECT = '''
     })();
   });
 
+  // Dev site (config PUBLISH_DEV_URL): the tab title and a tag show DEV; the same build shows no tag in production.
+  document.addEventListener("DOMContentLoaded", function() {
+    var p = window.__DEV_PATH__;
+    if (!p || location.pathname.indexOf(p) !== 0) return;
+    document.title = "DEV - " + (document.title || "Serac Px interface");
+    var t = document.createElement("div");
+    t.id = "ifx-dev"; t.textContent = "DEV"; t.title = "Dev site: not the production interface";
+    document.body.appendChild(t);
+  });
+
   // Loading screen (_LOADING_INJECT): remove it when the page has loaded and Plotly has drawn nothing
   // for 300 ms (the start-up redraws are done). On "load", so a start-up error cannot keep it shown.
   window.addEventListener("load", function() {
@@ -3811,6 +3824,7 @@ def plot_3d_interface(
     range_sliders=False,
     range_defaults=None,
     z_fit_pad=None,   # with range_sliders: z axis top = the highest shown gene + this part of the z span; None -> all genes
+    dev_path=None,    # URL path of the dev site (e.g. '/dev/Px_interface/'): the page shows a DEV tag there only
     activity_defaults=None,
     control_genes=(),
     control_compounds=(),
@@ -5230,6 +5244,7 @@ def plot_3d_interface(
             'window.__VOLCANO_BASE__ = ' + _json.dumps(_volcano_base) + ';\n'
             'window.__STEM_TRACE__ = ' + _jsp(stem_trace) + ';\n'   # {vk: {gene: [fx,fy,aspect,isHit]}} for the hover trace (http + file://)
             'window.__VPOS__ = ' + (_jsp(vpos) if vpos else 'null') + ';\n'   # volcano gene search: {id, genes, axrect, xlim}
+            'window.__DEV_PATH__ = ' + _json.dumps(dev_path or '') + ';\n'   # the same build shows a DEV tag under this path
             'window.__THUMB_MODE__ = ' + _json.dumps('path' if _thumb_ext else 'b64') + ';\n'
             'window.__THUMB_DIR__ = ' + _json.dumps(_thumb_rel) + ';\n'
             'window.__GENE_RESEARCH__ = ' + _jsp(gene_research or {}) + ';\n'

@@ -15,7 +15,8 @@ BUCKET="${bucket}"
 
 log() { echo "[provision-webapp] $*"; }
 
-fetch_param() { # $1 = SSM param name, $2 = destination file
+fetch_param() { # $1 = SSM param name, $2 = destination file (mode 0600 before the secret goes in)
+  install -m 0600 /dev/null "$2" &&
   aws ssm get-parameter --region "$REGION" --name "$1" \
     --with-decryption --query Parameter.Value --output text > "$2"
 }
@@ -26,7 +27,7 @@ attempt() {
   command -v nginx >/dev/null 2>&1 || dnf install -y nginx || return 1
   command -v aws   >/dev/null 2>&1 || dnf install -y awscli || return 1
 
-  mkdir -p /etc/nginx/ssl /var/www/webapp/Px_interface || return 1
+  mkdir -p /etc/nginx/ssl /var/www/webapp/Px_interface /var/www/webapp/dev/Px_interface || return 1
 
   fetch_param "/$PROJECT/tls/cert"      /etc/nginx/ssl/webapp.crt || return 1
   fetch_param "/$PROJECT/tls/key"       /etc/nginx/ssl/webapp.key || return 1
@@ -73,24 +74,32 @@ server {
     gzip_vary on;
 
     root /var/www/webapp;
+    index Serac_Px_interface.html;
 
-    # Interface served under /Px_interface/ ; bare / redirects there.
+    # The password guards the full site, so a file in a new folder never shows without it.
+    auth_basic           "Serac Px Interface";
+    auth_basic_user_file /etc/nginx/.htpasswd;
+
+    # Production under /Px_interface/, the dev site under /dev/Px_interface/; bare / redirects to production.
     location = / {
         return 301 /Px_interface/;
     }
 
     location /Px_interface/ {
-        index Serac_Px_interface.html;
-        auth_basic           "Serac Px Interface";
-        auth_basic_user_file /etc/nginx/.htpasswd;
+        try_files $uri $uri/ =404;
+    }
+
+    location /dev/Px_interface/ {
         try_files $uri $uri/ =404;
     }
 }
 NGINX
 
-  # Pull the rendered interface from S3. A reachable-but-empty bucket returns 0 (falls through
+  # Pull the rendered interface from S3: production, then the dev site (config PUBLISH_*_S3_PREFIX).
+  # A reachable-but-empty bucket returns 0 (falls through
   # to the placeholder); a network error returns non-zero so the whole pass retries.
   aws s3 sync "s3://$BUCKET/interfaces/" /var/www/webapp/Px_interface/ --region "$REGION" || return 1
+  aws s3 sync "s3://$BUCKET/dev/interfaces/" /var/www/webapp/dev/Px_interface/ --region "$REGION" || return 1
   if [ ! -s /var/www/webapp/Px_interface/Serac_Px_interface.html ]; then
     cat > /var/www/webapp/Px_interface/Serac_Px_interface.html <<'HTML'
 <!DOCTYPE html>

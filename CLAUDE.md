@@ -102,7 +102,7 @@ Obey these rules:
 
 **The project's data, SMILES, labels, screening results, and any derived features must never leave this machine.** This is a hard rule, not a preference.
 
-**Exception (user decision, 2026-10-01): the Px interface on AWS.** The Px interface build output (the HTML, `_data.js`, the volcano SVGs and the thumbnails) can go to the private interface S3 bucket and to the EC2 that serves `https://advantedge.seracbio.com/Px_interface/`. The VPN, the Basic-Auth password (in 1Password) and TLS protect it. `px.publish_interface` makes this push, from the CLI (`python python/Px_interface.py --output_dir <PUBLISH_URL>`) or from the publish cell of `vignettes/MS_Interface.ipynb` (user decision, 2026-11-03). Nothing else leaves the machine, and the rules for the assistant below do not change: the assistant still never reads real data.
+**Exception (user decision, 2026-10-01): the Px interface on AWS.** The Px interface build output (the HTML, `_data.js`, the volcano SVGs and the thumbnails) can go to the private interface S3 bucket and to the EC2 that serves `https://advantedge.seracbio.com/Px_interface/` (production) and `https://advantedge.seracbio.com/dev/Px_interface/` (the dev site, user decision 2026-11-09). The VPN, the Basic-Auth password (in 1Password) and TLS protect both. `px.publish_interface` makes this push: to the dev site from the CLI (`python python/Px_interface.py --output_dir <PUBLISH_DEV_URL>`) or from the publish cell of `vignettes/MS_Interface.ipynb` (user decision, 2026-11-03), and to production only through the promote step (`--promote`, or the promote cell). Nothing else leaves the machine, and the rules for the assistant below do not change: the assistant still never reads real data.
 
 ### Do
 
