@@ -178,6 +178,10 @@ def make_sources_config(out, out_rel, rng):
     # pharma patent / BMS pipeline gene lists (subsets of GENES) -> disease_area pharma/BMS tags
     pd.DataFrame({'gene': GENES[:10]}).to_csv(os.path.join(out, 'pharma_patent.csv'), index=False)
     pd.DataFrame({'hgnc_symbol': GENES[10:18]}).to_csv(os.path.join(out, 'bms_genes.csv'), index=False)
+    # hot targets, the real columns: one lower-case name, one gene outside the panel
+    pd.DataFrame({'genes_ori': ['G0', GENES[20], GENES[21], 'g_00030', 'G_99999'],
+                  'genes': [GENES[0], GENES[20], GENES[21], 'g_00030', 'G_99999']}
+                 ).to_csv(os.path.join(out, 'hot_targets.csv'), index=False)
 
     rel = lambda f: os.path.join(out_rel, f)
     # minimal config: only the keys Px_interface reads, all paths relative to repo root
@@ -197,6 +201,7 @@ def make_sources_config(out, out_rel, rng):
         'OT_CACHE': rel('ot_cache.parquet'),
         'PHARMA_PATENT_CSV': rel('pharma_patent.csv'),
         'BMS_GENES': rel('bms_genes.csv'),
+        'HOT_TARGETS': rel('hot_targets.csv'),         # Compound tab Targets toggle
         'PHARMA_R2_CUTOFF': 0.08,
         'IFACE_DIR': rel('interface'),
         'IFACE_OVERWRITE': True,

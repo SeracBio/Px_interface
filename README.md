@@ -514,9 +514,13 @@ The filter area above the table:
   "validation", the experiments of a tested target also count. As in Explorer, a condition where the gene is not
   significant does not count. A hit with no activity level always passes. "all" and "none" tick or clear all
   boxes.
+- **Targets**: a toggle with two positions. "all" shows every gene (no filter). "🔥" shows only the rows of the
+  hot targets: the genes of the CSV in config `HOT_TARGETS` (column `genes`, any case), with their compounds. The
+  toggle starts on "all". It does not show when no hot target is in the page.
+- A thin `|` divides the sections of the filter line, as in the Explorer Display row.
 - **Search**: the table keeps the rows that hold each word, for example `-002 BTK` (batch 002, gene BTK).
 - **Pages**: 100 rows per page (config `COMPOUND_TABLE_PAGE_SIZE`), with ◀ and ▶. The count shows the rows that
-  pass, and the rows that the boxes hide.
+  pass, and the rows that the filters hide.
 
 - Click a column title to sort the table. Click it again to reverse the order. The first sort of a text column
   takes about 0.5 s on the full table.

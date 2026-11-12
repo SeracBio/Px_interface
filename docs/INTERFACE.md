@@ -344,9 +344,13 @@ rounded to step multiples, so round handle values land **exactly** — MS step =
   Explorer set from `__DEVALIDATED_COMPOUNDS__`; user request 2026-11-12). `#cmp-dv` starts as the Explorer
   "No" box (`__CMP_VALIDATION_DEFAULTS__`, null = ticked); the `.cmp-dv` elements hide when the set is empty.
   The Explorer keeps a compound that is also in the validated list; the tab does not (no such compound in the
-  2026-11-12 build). The search
+  2026-11-12 build). The Targets toggle `#cmp-hot` (user request 2026-11-12) adds `!ctHotOn || r.hot`: `r.hot` = the
+  gene is in `ctHotSet` (from `__HOT_TARGETS__`); "all" (`data-hot="0"`, the start) sets `ctHotOn` false, "🔥"
+  (`data-hot="1"`) true, and a click on the border flips it (as the Explorer `.disp-toggle`). The `.cmp-hot`
+  elements hide when the set is empty. The toggle and the `|` dividers (`.disp-sep`) use the Explorer Display CSS,
+  which the `#cmp-view` selectors share. The search
   `#cmp-search` (150 ms debounce; every word, split on space, comma or `;`, must be in `mbid + " " + gene`). The
-  count shows the rows that pass and the rows that the boxes hide.
+  count shows the rows that pass and the rows that the filters hide.
 - **Sort**: a text column (`mbid`, `gene`) uses `ctTextOrder(k)`: natural order (digit runs padded to 10) with
   the other text column second, computed once per column (about 0.5 s on the full data) and cached; a second
   click walks it backwards. A status column partitions the passing rows (ticks first, a second click: last),
@@ -565,6 +569,11 @@ while `valCatShown.rest` is false. The `.iface` session does not save `valCatSho
   `plot_3d_interface(compound_table_columns=)`, with `compound_table=` (the rows), into `__COMPOUND_TABLE__`.
 - **`COMPOUND_TABLE_PAGE_SIZE`** (2026-11-12) — rows per page of the Compound tab (default 100). `build_interface`
   passes it as `plot_3d_interface(compound_table_page_size=)`, into `__COMPOUND_TABLE__.page`.
+- **`HOT_TARGETS`** (2026-11-12) — a CSV of hot-target genes (column `genes`; the real file also has
+  `genes_ori`, which the build does not read). `build_interface` reads it and passes the genes as
+  `plot_3d_interface(hot_targets=)`. The build keeps the genes that the page holds (`__GENE_COMPOUNDS__` keys and
+  the Compound table genes), matched in any case and written in the page spelling, into `__HOT_TARGETS__`, and
+  prints `[hot_targets] N of M hot targets are in the page`. Empty or absent: no list and no Targets toggle.
 - **`PUBLISH_DEV_URL`** (2026-11-09) — the dev site. `build_interface` passes its URL path as
   `plot_3d_interface(dev_path=)`, which injects `__DEV_PATH__` (`""` when absent). At `DOMContentLoaded`, if
   `location.pathname` starts with it, the page adds "DEV - " to the tab title and a fixed `#ifx-dev` tag at the

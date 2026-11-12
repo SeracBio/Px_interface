@@ -18,6 +18,7 @@ GENE_RESEARCH: tmp_dup/gene_research.json
 OT_CACHE: tmp_dup/ot_cache.parquet
 PHARMA_PATENT_CSV: tmp_dup/pharma_patent.csv
 BMS_GENES: tmp_dup/bms_genes.csv
+HOT_TARGETS: tmp_dup/hot_targets.csv
 PHARMA_R2_CUTOFF: 0.08
 IFACE_DIR: tmp_dup/interface
 IFACE_OVERWRITE: true

@@ -607,9 +607,9 @@ class TestValidationDir(unittest.TestCase):
         # Primary = a primary-screen plate (any batch); a suffix = a validation plate of the same batch
         self.assertIn('if (!v) { if (prim >= 0) pbit = 1 << prim; }', html)
         self.assertIn('else if (sx in suf) b.st |= 1 << suf[sx];', html)
-        # a row passes when a ticked plate kind has a hit with a ticked activity level (or no level), and the
-        # devalidated box is ticked or its compound is not in the devalidated list
-        self.assertIn('if (((r.aP & mP) || (r.aV & mV)) && (wD || !r.dv)) out.push(r); else hidden++;', html)
+        # a row passes when a ticked plate kind has a hit with a ticked activity level (or no level), the devalidated
+        # box is ticked or its compound is not in the devalidated list, and the Targets toggle is off or its gene is hot
+        self.assertIn('if (((r.aP & mP) || (r.aV & mV)) && (wD || !r.dv) && (!ctHotOn || r.hot)) out.push(r); else hidden++;', html)
         self.assertIn('r.dv = cmpDevalidatedSet[r.cmp] ? 1 : 0;', html)
         # the Activity and devalidated boxes start as in the Explorer
         self.assertIn('ctLevels.forEach(function(a) { ctTicked[a] = !def || def.indexOf(a) >= 0; });', html)
@@ -617,6 +617,28 @@ class TestValidationDir(unittest.TestCase):
         # an open row shows the plate rows of the ticked kinds only
         self.assertIn('return isValidationPlate(pl[0]) ? wV : wP;', html)
         self.assertIn('volcanoHtml(r.t, vps, r.gene, r.cmp)', html)
+
+    def test_hot_targets(self):
+        """Input: the fixture HOT_TARGETS CSV (G_00000, G_00020, G_00021, g_00030 in lower case, and G_99999 outside the
+        panel). Expected: data.js holds __HOT_TARGETS__ = the four genes of the page, in the page spelling; the filter
+        line holds the dividers and the Targets toggle, which starts on "all"; each row carries a hot flag. Rationale:
+        user request 2026-11-12, the toggle shows only the rows of the hot targets."""
+        import re
+        with open('tmp_vdir/out_test/interfaces/Serac_Px_interface_data.js') as f:
+            m = re.search(r'window\.__HOT_TARGETS__ = JSON\.parse\((".*?")\);', f.read())
+        # the genes of the page only, matched in any case, sorted
+        self.assertEqual(json.loads(json.loads(m.group(1))), ['G_00000', 'G_00020', 'G_00021', 'G_00030'])
+        with open('tmp_vdir/out_test/interfaces/Serac_Px_interface.html') as f:
+            html = f.read()
+        # a divider before a section; the divider of a hidden section hides with it
+        self.assertIn('<span class="disp-sep cmp-dv">|</span>', html)
+        self.assertIn('<span class="disp-sep cmp-hot">|</span>', html)
+        # the toggle starts on "all"
+        self.assertIn('<span class="seg active" data-hot="0">all</span><span class="seg" data-hot="1">&#x1F525;</span>', html)
+        # the hot flag of a row
+        self.assertIn('r.hot = ctHotSet[r.gene] ? 1 : 0;', html)
+        # no hot target in the page: no toggle
+        self.assertIn('document.querySelectorAll("#cmp-view .cmp-hot")', html)
 
 
 class TestTestedTargetPairs(unittest.TestCase):

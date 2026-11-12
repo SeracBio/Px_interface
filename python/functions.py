@@ -960,8 +960,7 @@ _INTERFACE_INJECT = '''
   #cmp-view .cmp-filters { font-size: 11px; }
   #cmp-view .cmp-filters label { cursor: pointer; white-space: nowrap; }
   #cmp-view .cmp-filters input { margin: 0 4px 0 0; vertical-align: -2px; }
-  #cmp-view .cmp-flab { font-weight: 700; color: #1D3557; margin-left: 6px; }
-  #cmp-view .cmp-flab:first-child { margin-left: 0; }
+  #cmp-view .cmp-flab { font-weight: 700; color: #1D3557; }
   #cmp-view .cmp-an span { color: #1D3557; cursor: pointer; font-size: 10px; }
   #cmp-view .cmp-an span:hover { text-decoration: underline; }
   #cmp-acts { display: inline-flex; gap: 10px; flex-wrap: wrap; }
@@ -1145,14 +1144,14 @@ _INTERFACE_INJECT = '''
   /* Display section: 2D / 3D pill toggle */
   #filter-panel .disp-row { display: flex; align-items: center; gap: 10px; padding: 2px 0 4px; }
   #filter-panel .disp-label { font-weight: 600; color: #1D3557; }
-  #filter-panel .disp-toggle { display: inline-flex; cursor: pointer; user-select: none;
+  #filter-panel .disp-toggle, #cmp-view .disp-toggle { display: inline-flex; cursor: pointer; user-select: none;
                                border: 1px solid #bbb; border-radius: 999px; overflow: hidden;
                                font-weight: 700; font-size: 10px; }
-  #filter-panel .disp-toggle .seg { padding: 2px 11px; color: #888; background: #f0f0f0;
+  #filter-panel .disp-toggle .seg, #cmp-view .disp-toggle .seg { padding: 2px 11px; color: #888; background: #f0f0f0;
                                     transition: background .12s, color .12s; }
-  #filter-panel .disp-toggle .seg.active { color: #fff; background: #1D3557; }
-  /* thin divider between the Axes and Color toggles on the shared Display row */
-  #filter-panel .disp-sep { color: #ccc; margin: 0 2px; }
+  #filter-panel .disp-toggle .seg.active, #cmp-view .disp-toggle .seg.active { color: #fff; background: #1D3557; }
+  /* thin divider between the sections of the Display row and of the Compound filter line */
+  #filter-panel .disp-sep, #cmp-view .disp-sep { color: #ccc; margin: 0 2px; }
   /* Labels eye toggle: click to hide/show the 'other' (non-FBXO31-dependent) gene labels */
   #filter-panel .disp-eye { display: inline-flex; align-items: center; cursor: pointer;
                             user-select: none; color: #1D3557; }
@@ -1347,11 +1346,16 @@ _INTERFACE_INJECT = '''
       <span class="cmp-flab">Plates</span>
       <label title="the rows whose gene went down significantly in a primary-screen experiment of the batch; an open row shows the primary-screen volcanoes"><input type="checkbox" id="cmp-prim" checked>primary</label>
       <label title="the rows whose gene went down significantly in a validation experiment (WT, KO, MLN, BIND) of the batch, and the tested targets; an open row shows these volcanoes"><input type="checkbox" id="cmp-val" checked>validation</label>
+      <span class="disp-sep cmp-dv">|</span>
       <span class="cmp-flab cmp-dv">Compounds</span>
       <label class="cmp-dv" title="the compounds of the devalidated list (the Explorer Validation filter); untick to hide their rows"><input type="checkbox" id="cmp-dv" checked>devalidated</label>
+      <span class="disp-sep">|</span>
       <span class="cmp-flab" title="the number of genes that an experiment significantly down-modulated, in buckets; a row shows when one of its hits (or tested-target experiments) on a ticked plate kind has a ticked level">Activity</span>
       <span class="cmp-an"><span data-a="all">all</span> / <span data-a="none">none</span></span>
       <span id="cmp-acts"></span>
+      <span class="disp-sep cmp-hot">|</span>
+      <span class="cmp-flab cmp-hot">Targets</span>
+      <span class="disp-toggle cmp-hot" id="cmp-hot" role="switch" aria-checked="false" title="all: every gene; &#x1F525;: only the hot targets (config HOT_TARGETS) and their compounds"><span class="seg active" data-hot="0">all</span><span class="seg" data-hot="1">&#x1F525;</span></span>
     </div>
   </div>
   <div id="cmp-scroll"><table id="cmp-table"><thead></thead><tbody></tbody></table></div>
@@ -2636,10 +2640,14 @@ _INTERFACE_INJECT = '''
         cmpPage = document.getElementById("cmp-page"), cmpPrev = document.getElementById("cmp-prev"),
         cmpNext = document.getElementById("cmp-next"), cmpActs = document.getElementById("cmp-acts"),
         cmpPrim = document.getElementById("cmp-prim"), cmpVal = document.getElementById("cmp-val"),
-        cmpDv = document.getElementById("cmp-dv"),
+        cmpDv = document.getElementById("cmp-dv"), cmpHot = document.getElementById("cmp-hot"),
         cmpScroll = document.getElementById("cmp-scroll"), cmpImg = document.getElementById("cmp-img");
     if (!Object.keys(cmpDevalidatedSet).length)   // no devalidated compound in the page: no box
       document.querySelectorAll("#cmp-view .cmp-dv").forEach(function(el) { el.style.display = "none"; });
+    var ctHotSet = {}, ctHotOn = false;   // the Targets toggle: the hot targets of the page; on = only their rows
+    (window.__HOT_TARGETS__ || []).forEach(function(g) { ctHotSet[g] = 1; });
+    if (!Object.keys(ctHotSet).length)   // no hot target in the page: no toggle
+      document.querySelectorAll("#cmp-view .cmp-hot").forEach(function(el) { el.style.display = "none"; });
     var ctRows = null, ctOrderDef = null, ctKeys = {}, ctLast = null, ctSort = {k: null, dir: 1}, ctOpen = {}, ctCarry = "",
         ctDrawn = false, ctPage = 0, ctSpan = CT.cols.length + 4, ctSize = Math.max(1, CT.page || 100), ctTimer = null,
         ctThumb = {};
@@ -2684,6 +2692,7 @@ _INTERFACE_INJECT = '''
         r.i = i; r.txt = (r.mbid + " " + r.gene).toUpperCase();
         if (r.tgt && !r.aV) r.aV = CT_NOLVL;
         r.dv = cmpDevalidatedSet[r.cmp] ? 1 : 0;
+        r.hot = ctHotSet[r.gene] ? 1 : 0;
       });
       var key = ctRows.map(function(r) { return r.mbid + "|" + r.gene; }), rest = [];
       for (var i = CT.rows.length; i < ctRows.length; i++) rest.push(i);
@@ -2716,7 +2725,7 @@ _INTERFACE_INJECT = '''
         var r = ctRows[txt && ctSort.dir < 0 ? order[order.length - 1 - n] : order[n]], ok = true;
         for (var w = 0; w < words.length && ok; w++) ok = r.txt.indexOf(words[w]) >= 0;
         if (!ok) continue;
-        if (((r.aP & mP) || (r.aV & mV)) && (wD || !r.dv)) out.push(r); else hidden++;
+        if (((r.aP & mP) || (r.aV & mV)) && (wD || !r.dv) && (!ctHotOn || r.hot)) out.push(r); else hidden++;
       }
       if (k !== null && !txt && k !== "comment") {   // a status column: the ticks first (a second click: last)
         var bit = 1 << +k, y = out.filter(function(r) { return r.st & bit; }), x = out.filter(function(r) { return !(r.st & bit); });
@@ -2760,9 +2769,9 @@ _INTERFACE_INJECT = '''
               + (ctOpen[r.i] ? ctDetailHtml(r) : '');
       });
       cmpBody.innerHTML = html || '<tr><td colspan="' + ctSpan + '" class="cmp-none">'
-        + (ctRows.length ? 'no row passes the search and the boxes' : 'no rows in this build') + '</td></tr>';
+        + (ctRows.length ? 'no row passes the search and the filters' : 'no rows in this build') + '</td></tr>';
       cmpCount.textContent = rows.length.toLocaleString() + ' rows'
-        + (ctLast.hidden ? ' · ' + ctLast.hidden.toLocaleString() + ' hidden by the boxes' : '');
+        + (ctLast.hidden ? ' · ' + ctLast.hidden.toLocaleString() + ' hidden by the filters' : '');
       cmpPage.textContent = 'page ' + (ctPage + 1).toLocaleString() + ' / ' + pages.toLocaleString();
       cmpPrev.classList.toggle("disabled", ctPage === 0);
       cmpNext.classList.toggle("disabled", ctPage >= pages - 1);
@@ -2821,6 +2830,13 @@ _INTERFACE_INJECT = '''
       ctRender();
     });
     [cmpPrim, cmpVal, cmpDv].forEach(function(b) { b.addEventListener("change", function() { ctRender(); }); });
+    cmpHot.addEventListener("click", function(e) {   // a click on a segment picks it; a click on the border flips
+      var seg = e.target.closest(".seg");
+      ctHotOn = seg ? seg.getAttribute("data-hot") === "1" : !ctHotOn;
+      cmpHot.querySelectorAll(".seg").forEach(function(s) { s.classList.toggle("active", (s.getAttribute("data-hot") === "1") === ctHotOn); });
+      cmpHot.setAttribute("aria-checked", ctHotOn ? "true" : "false");
+      ctRender();
+    });
     cmpPrev.addEventListener("click", function() { if (ctPage > 0) { ctPage--; ctRender(true); } });
     cmpNext.addEventListener("click", function() { ctPage++; ctRender(true); });
     // Tabs: the Compound view covers the Explorer, which keeps its state. A compound click-pinned in the Explorer
@@ -4161,6 +4177,7 @@ def plot_3d_interface(
     compound_table=None,   # Compound tab rows: df (molecule_batch_id, gene, compound); None -> an empty table
     compound_table_columns=('Primary', 'WT', 'KO', 'MLN', 'BIND', 'UBI'),   # Compound tab status columns, in order
     compound_table_page_size=100,   # Compound tab: rows per page
+    hot_targets=None,   # Compound tab Targets toggle: the hot-target genes (any case); none in the page -> no toggle
     activity_defaults=None,
     control_genes=(),
     control_compounds=(),
@@ -5550,6 +5567,11 @@ def plot_3d_interface(
         # Compound tab: [Molecule-Batch ID, gene, compound] per tested target; the page computes the status columns
         _ct_rows = ([] if compound_table is None else
                     compound_table[['molecule_batch_id', 'gene', 'compound']].astype(str).values.tolist())
+        # Compound tab Targets toggle: the hot targets that the page holds, in the page spelling
+        _page_genes = {str(g).upper(): str(g) for g in set(custom if have_compounds else {}) | {r[1] for r in _ct_rows}}
+        hot_set = sorted({_page_genes[k] for k in (str(g).strip().upper() for g in (hot_targets or [])) if k in _page_genes})
+        if hot_targets:
+            print(f'  [hot_targets] {len(hot_set)} of {len(set(hot_targets))} hot targets are in the page')
         data_js = (
             'window.__GENE_COMPOUNDS__ = ' + _jsp(custom if have_compounds else {}) + ';\n'
             'window.__PAGE_SIZE__ = ' + str(int(page_size)) + ';\n'
@@ -5586,6 +5608,7 @@ def plot_3d_interface(
             'window.__DEV_PATH__ = ' + _json.dumps(dev_path or '') + ';\n'   # the same build shows a DEV tag under this path
             'window.__COMPOUND_TABLE__ = ' + _jsp({'cols': [str(c) for c in compound_table_columns], 'rows': _ct_rows,
                                                    'page': int(compound_table_page_size)}) + ';\n'
+            'window.__HOT_TARGETS__ = ' + _jsp(hot_set) + ';\n'
             'window.__THUMB_MODE__ = ' + _json.dumps('path' if _thumb_ext else 'b64') + ';\n'
             'window.__THUMB_DIR__ = ' + _json.dumps(_thumb_rel) + ';\n'
             'window.__GENE_RESEARCH__ = ' + _jsp(gene_research or {}) + ';\n'

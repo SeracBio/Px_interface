@@ -1119,7 +1119,7 @@ class OUTPUT():
         Render the per-gene 3D interface HTML (+ external volcanoes / thumbnails) from the four
         render inputs on self. Dots = one per gene: x=R2 (SAR), y=association (OpenTargets), z=ms_score.
         param class data: DATA instance (control_compounds, contaminants, gene_research)
-        param class params: PARAMS instance (ACTIVE_C, SRB_PNG_DIR, IFACE_DIR, IFACE_OVERWRITE)
+        param class params: PARAMS instance (ACTIVE_C, SRB_PNG_DIR, IFACE_DIR, IFACE_OVERWRITE, HOT_TARGETS)
         param str output_dir: base dir (CLI --output_dir) for interfaces/ (HTML) + volcanoes_px/
         return None:
         """
@@ -1212,6 +1212,8 @@ class OUTPUT():
             compound_table=self.compound_table,  # Compound tab rows: the tested targets of the validation reports
             compound_table_columns=getattr(params, 'COMPOUND_TABLE_COLUMNS', ['Primary', 'WT', 'KO', 'MLN', 'BIND', 'UBI']),
             compound_table_page_size=getattr(params, 'COMPOUND_TABLE_PAGE_SIZE', 100),   # Compound tab rows per page
+            hot_targets=(pd.read_csv(params.HOT_TARGETS)['genes'].tolist()
+                         if getattr(params, 'HOT_TARGETS', None) else None),   # Compound tab Targets toggle (config HOT_TARGETS)
             html_path=os.path.join(output_dir, 'interfaces', 'Serac_Px_interface.html'), # 20260612_3d_interface_PX_R2_assoc_ms.html
         )
 

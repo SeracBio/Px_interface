@@ -32,8 +32,8 @@ _Durable, aggregate memory of this repo — read at session start. Aggregate onl
   the user: fix (2) with the formula on the glues rows; fix (3) after a count-only check of how a redo arrives.
 - **Tabs "Explorer" | "Compound" (2026-11-12, STE): step 1 (tested targets) published by the user and checked
   ("works great"); step 2 (significant pairs, filter area, pages) checked by the user ("works fantastically");
-  step 3 (Plates boxes primary / validation, devalidated box, structure popup) built and tested, NOT yet
-  published.**
+  step 3 (Plates boxes primary / validation, devalidated box, structure popup) and the Targets 🔥 toggle built
+  and tested, NOT yet published.**
   Both stay in one page under `/dev/Px_interface/` (a separate `/dev/Px_compound/` needs a new nginx location,
   S3 prefix, boot pull and publish target, and each tab click would parse the 108 MB `_data.js` again).
   - User decisions: rows = the tested targets of the validation reports, one per (Molecule-Batch ID, gene);
@@ -96,8 +96,20 @@ _Durable, aggregate memory of this repo — read at session start. Aggregate onl
     126,798 rows, 0 tested targets, 0 compounds also in the validated list; Low + Single both 17,919 -> 16,609;
     all levels 247,172 (primary 244,193, validation 3,269). Synthetic: page = a separate count (875; 1,048 /
     385 / 687); with an empty list the box does not show; no JS error; 152 tests OK.
-  - Next for the user: rebuild (the build cell is enough: only the page code changed), publish to dev, check,
-    promote.
+  - Targets toggle (user request 2026-11-12): "Targets [all | 🔥]" at the end of the filter line, in the Explorer
+    Display pill style (`.disp-toggle`, CSS shared with `#cmp-view`), with `|` dividers (`.disp-sep`) between the
+    sections. "all" (the start) = no filter; "🔥" = only the rows whose gene is a hot target, so the hot targets
+    and their compounds. Source: config `HOT_TARGETS` (the user added it), a CSV with `genes_ori` and `genes`;
+    the build reads `genes` (89 genes, all upper case; 18 differ from `genes_ori`; 70 in the page against 54 for
+    `genes_ori`), matches in any case (109 page genes hold lower case) and keeps the page genes ->
+    `__HOT_TARGETS__`. Real (counts only, last build): 70 of 89 in the page, 69 with Compound rows, 0 tested
+    targets; Low + Single 17,919 -> 204 rows (196 batches); all levels 3,941 rows (1,056 batches; primary 3,910,
+    validation 38). Synthetic fixture CSV (`tests/make_synthetic.py`, with one lower-case name and one gene
+    outside the panel): page = a separate count (948 -> 17; all levels 21 / 8 / 14, without devalidated 20);
+    with an empty list the toggle and its divider do not show; no JS error; 153 tests OK. The count text now says
+    "hidden by the filters".
+  - Next for the user: re-run the params cell `056e1d60` (it reads the new `HOT_TARGETS` key), then the build
+    cell `dad5785b` (no data reload: the build reads the CSV), publish to dev, check, promote.
 - **Dev site on the same EC2 (user decision 2026-11-09: "yes to all", procedure A). LIVE: the user ran the
   `terraform apply`; seen 2026-11-12: production and dev both answer 401 without the password.** `https://advantedge.seracbio.com/dev/Px_interface/` from S3
   `dev/interfaces/` into `/var/www/webapp/dev/Px_interface/` (config `PUBLISH_DEV_URL/_S3_PREFIX/_WEBROOT`).
